@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-from typing import Set, Dict, Any
+import time
+from typing import Set, Dict, Tuple
 
 from telegram.ext import ContextTypes
 
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "subscribers.json")
 
-_last_signal: Dict[str, str] = {}
+_last_sent: Dict[str, Tuple[str, float]] = {}
+
+RESEND_AFTER_SECONDS = 55 * 60
 
 
 def _load() -> Set[int]:
@@ -56,47 +59,71 @@ def subscriber_count() -> int:
     return len(_load())
 
 
+def _should_send(tf: str, signal_key: str) -> bool:
+    if tf not in _last_sent:
+        return True
+    last_key, last_ts = _last_sent[tf]
+    age = time.time() - last_ts
+    if last_key != signal_key:
+        return True
+    if age >= RESEND_AFTER_SECONDS:
+        return True
+    remaining = int((RESEND_AFTER_SECONDS - age) / 60)
+    logger.info(f"Alert suppressed — same signal already sent {int(age/60)}m ago. Next in ~{remaining}m.")
+    return False
+
+
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     subs = _load()
     if not subs:
+        logger.info("Alert scan: no subscribers.")
         return
-
-    from telegram.ext import Application
-    app: Application = context.application
 
     tf = "H1"
     try:
         a = await analyze(tf)
     except Exception as e:
-        logger.error(f"Alert scan failed: {e}")
+        logger.error(f"Alert scan — analysis failed: {e}")
         return
+
+    logger.info(
+        f"Alert scan: action={a.action} confidence={a.confidence}% "
+        f"rr={a.rr_ratio} buy_votes={a.buy_votes} sell_votes={a.sell_votes}"
+    )
 
     if a.action not in ("BUY", "SELL"):
+        logger.info(f"Alert scan: no signal to send (action={a.action}, reason={a.wait_reason})")
         return
 
-    signal_key = f"{a.action}:{a.timeframe}:{round(a.entry, 1)}"
-    if _last_signal.get(tf) == signal_key:
+    signal_key = f"{a.action}:{tf}:{round(a.entry, 0)}"
+
+    if not _should_send(tf, signal_key):
         return
 
-    _last_signal[tf] = signal_key
     text = alert_card(a)
+    sent = 0
+    dead: Set[int] = set()
 
-    dead = set()
     for chat_id in list(subs):
         try:
-            await app.bot.send_message(
+            await context.application.bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 parse_mode="HTML",
             )
+            sent += 1
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
                 dead.add(chat_id)
+                logger.warning(f"Removing unreachable subscriber {chat_id}")
             else:
                 logger.warning(f"Alert send failed for {chat_id}: {e}")
+
+    if sent > 0:
+        _last_sent[tf] = (signal_key, time.time())
+        logger.info(f"Alert sent to {sent} subscriber(s): {a.action} @ {a.entry}")
 
     if dead:
         subs -= dead
         _save(subs)
-        logger.info(f"Removed {len(dead)} unreachable subscriber(s)")

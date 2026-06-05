@@ -43,7 +43,7 @@ def main() -> None:
     app.job_queue.run_repeating(
         check_and_alert,
         interval=ALERT_INTERVAL_SECONDS,
-        first=30,
+        first=10,
         name="alert_scanner",
     )
     logger.info(f"Alert scanner scheduled every {ALERT_INTERVAL_SECONDS}s.")
