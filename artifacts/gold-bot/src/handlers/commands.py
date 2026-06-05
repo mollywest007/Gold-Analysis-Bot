@@ -3,11 +3,12 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
 from src.analysis import analyze
+from src.alerts import is_subscribed, subscribe, unsubscribe, subscriber_count
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,22 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text("Outlook generation failed. Please try again.")
 
 
+async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    subscribed = is_subscribed(chat_id)
+    status = "ON" if subscribed else "OFF"
+    text = (
+        "<b>Alerts</b>\n\n"
+        f"Status: <b>{status}</b>\n\n"
+        "When alerts are ON, you will receive automatic notifications whenever "
+        "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
+        "Checks run every 5 minutes. Alerts only fire when all conditions are met."
+    )
+    await update.message.reply_text(
+        text, parse_mode="HTML", reply_markup=alerts_keyboard(subscribed)
+    )
+
+
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tf = _get_tf(context)
     text = (
@@ -114,4 +131,5 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("trend", cmd_trend))
     app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("outlook", cmd_outlook))
+    app.add_handler(CommandHandler("alerts", cmd_alerts))
     app.add_handler(CommandHandler("settings", cmd_settings))

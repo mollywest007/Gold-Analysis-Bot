@@ -3,11 +3,12 @@ from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters, Application
 
 from src.analysis import analyze
+from src.alerts import is_subscribed, subscribe, unsubscribe
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error(f"msg outlook error: {e}")
             await msg.edit_text("Outlook generation failed. Please try again.")
+
+    elif text == "alerts":
+        chat_id = update.effective_chat.id
+        subscribed = is_subscribed(chat_id)
+        status = "ON" if subscribed else "OFF"
+        text_out = (
+            "<b>Alerts</b>\n\n"
+            f"Status: <b>{status}</b>\n\n"
+            "When alerts are ON, you will receive automatic notifications whenever "
+            "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
+            "Checks run every 5 minutes. Alerts only fire when all conditions are met."
+        )
+        await update.message.reply_text(
+            text_out, parse_mode="HTML", reply_markup=alerts_keyboard(subscribed)
+        )
 
     elif text == "settings":
         tf = _get_tf(context)

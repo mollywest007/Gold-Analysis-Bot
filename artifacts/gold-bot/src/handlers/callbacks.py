@@ -3,11 +3,12 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, Application
 
 from src.analysis import analyze
+from src.alerts import is_subscribed, subscribe, unsubscribe
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
 )
-from src.utils.keyboards import settings_keyboard
+from src.utils.keyboards import settings_keyboard, alerts_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     data = query.data or ""
+
+    if data == "alerts:on":
+        chat_id = update.effective_chat.id
+        subscribe(chat_id)
+        text = (
+            "<b>Alerts</b>\n\n"
+            "Status: <b>ON</b>\n\n"
+            "You will now receive automatic notifications whenever "
+            "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
+            "Checks run every 5 minutes."
+        )
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(True))
+        return
+
+    if data == "alerts:off":
+        chat_id = update.effective_chat.id
+        unsubscribe(chat_id)
+        text = (
+            "<b>Alerts</b>\n\n"
+            "Status: <b>OFF</b>\n\n"
+            "Automatic notifications disabled. "
+            "You will not receive any alerts until you turn them back on."
+        )
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(False))
+        return
 
     if data.startswith("set_tf:"):
         tf = data.split(":")[1]

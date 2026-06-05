@@ -31,9 +31,9 @@ def recommend_card(a: MarketAnalysis) -> str:
     consensus_bar = ("+" * buy_blocks) + ("-" * sell_blocks) + ("." * max(neut_blocks, 0))
 
     if a.action in ("BUY", "SELL"):
-        verdict_line = f"VERDICT:  >>>  {a.action}  <<<"
+        verdict_line = f"VERDICT:   [ {a.action} ]"
     else:
-        verdict_line = "VERDICT:  >>>  WAIT  <<<"
+        verdict_line = "VERDICT:   [ WAIT ]"
 
     lines = [
         "XAU/USD  RECOMMENDATION",
@@ -45,7 +45,7 @@ def recommend_card(a: MarketAnalysis) -> str:
         "─" * 28,
         "INDICATOR CONSENSUS",
         f"[{consensus_bar}]",
-        f"BUY {buy_pct}%   SELL {sell_pct}%   NEUTRAL {100-buy_pct-sell_pct}%",
+        f"BUY {buy_pct}%  SELL {sell_pct}%  NEUTRAL {100 - buy_pct - sell_pct}%",
         "─" * 28,
         _indicator_bar(a.indicators),
         "─" * 28,
@@ -74,6 +74,34 @@ def recommend_card(a: MarketAnalysis) -> str:
             "No trade. Monitor for clearer setup.",
         ]
 
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
+def alert_card(a: MarketAnalysis) -> str:
+    lines = [
+        "SIGNAL ALERT  |  XAU/USD",
+        "=" * 28,
+        f"Action:  {a.action}",
+        "=" * 28,
+        f"Timeframe:  {a.timeframe}",
+        f"Price:      {fmt_price(a.price)}",
+        "─" * 28,
+        f"Entry:      {fmt_price(a.entry)}",
+        f"SL:         {fmt_price(a.stop_loss)}",
+        f"TP1:        {fmt_price(a.tp1)}",
+        f"TP2:        {fmt_price(a.tp2)}",
+        f"R:R         1:{a.rr_ratio}",
+        "─" * 28,
+        f"Confidence: {a.confidence}%",
+        f"Bias:       {a.bias}",
+        f"Strength:   {a.strength}",
+    ]
+    if a.verdict_reason:
+        lines.append(f"Reason: {a.verdict_reason[:48]}")
+    lines += [
+        "─" * 28,
+        "Use /recommend for full breakdown.",
+    ]
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
@@ -215,6 +243,7 @@ def help_text() -> str:
         ("/trend",     "Current trend direction"),
         ("/levels",    "Support and resistance levels"),
         ("/outlook",   "Market outlook report"),
+        ("/alerts",    "Toggle automatic entry notifications"),
         ("/settings",  "Bot settings"),
         ("/help",      "This message"),
     ]
