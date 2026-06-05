@@ -5,9 +5,9 @@ from telegram.ext import ContextTypes, CommandHandler, Application
 from src.analysis import analyze
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
-    trend_card, levels_card, outlook_card
+    trend_card, levels_card, outlook_card, recommend_card
 )
-from src.utils.keyboards import main_menu_keyboard, timeframe_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(help_text(), parse_mode="HTML")
+
+
+async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = await update.message.reply_text("Scanning indicators...")
+    try:
+        tf = _get_tf(context)
+        a = await analyze(tf)
+        await msg.edit_text(recommend_card(a), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"recommend error: {e}")
+        await msg.edit_text("Recommendation failed. Please try again.")
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -85,7 +96,6 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from src.utils.keyboards import settings_keyboard
     tf = _get_tf(context)
     text = (
         "<b>Settings</b>\n\n"
@@ -98,6 +108,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("recommend", cmd_recommend))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
     app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("trend", cmd_trend))

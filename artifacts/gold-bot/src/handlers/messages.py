@@ -3,19 +3,13 @@ from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters, Application
 
 from src.analysis import analyze
-from src.utils.formatting import analysis_card, signal_card, trend_card, levels_card, outlook_card
-from src.utils.keyboards import main_menu_keyboard, timeframe_keyboard
+from src.utils.formatting import (
+    analysis_card, signal_card, trend_card, levels_card,
+    outlook_card, recommend_card
+)
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard
 
 logger = logging.getLogger(__name__)
-
-MENU_MAP = {
-    "analyze": "analyze",
-    "signal": "signal",
-    "trend": "trend",
-    "levels": "levels",
-    "outlook": "outlook",
-    "settings": "settings",
-}
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -25,7 +19,17 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip().lower()
 
-    if text == "analyze":
+    if text == "recommend":
+        msg = await update.message.reply_text("Scanning indicators...")
+        try:
+            tf = _get_tf(context)
+            a = await analyze(tf)
+            await msg.edit_text(recommend_card(a), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"msg recommend error: {e}")
+            await msg.edit_text("Recommendation failed. Please try again.")
+
+    elif text == "analyze":
         msg = await update.message.reply_text("Analyzing XAU/USD...")
         try:
             tf = _get_tf(context)
@@ -76,7 +80,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await msg.edit_text("Outlook generation failed. Please try again.")
 
     elif text == "settings":
-        from src.utils.keyboards import settings_keyboard
         tf = _get_tf(context)
         text_out = (
             "<b>Settings</b>\n\n"

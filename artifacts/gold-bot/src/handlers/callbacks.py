@@ -3,8 +3,11 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, Application
 
 from src.analysis import analyze
-from src.utils.formatting import analysis_card, signal_card, trend_card, levels_card, outlook_card
-from src.utils.keyboards import timeframe_keyboard, settings_keyboard, main_menu_keyboard
+from src.utils.formatting import (
+    analysis_card, signal_card, trend_card, levels_card,
+    outlook_card, recommend_card
+)
+from src.utils.keyboards import settings_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Select a timeframe to update your default analysis window."
         )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
+        return
+
+    if data.startswith("recommend:"):
+        tf = data.split(":")[1]
+        context.user_data["timeframe"] = tf
+        await query.edit_message_text("Scanning indicators...")
+        try:
+            a = await analyze(tf)
+            await query.edit_message_text(recommend_card(a), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"callback recommend error: {e}")
+            await query.edit_message_text("Recommendation failed. Please try again.")
         return
 
     if data.startswith("analyze:"):
@@ -92,11 +107,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data in ("settings:tf_header",):
         return
 
-    if data == "settings:back" or data == "back:main":
-        await query.edit_message_text(
-            "Use the menu below to navigate.",
-            reply_markup=None,
-        )
+    if data in ("settings:back", "back:main"):
+        await query.edit_message_text("Use the menu below to navigate.")
         return
 
 

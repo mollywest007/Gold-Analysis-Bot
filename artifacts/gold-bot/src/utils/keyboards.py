@@ -3,9 +3,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        ["Analyze", "Signal"],
-        ["Trend", "Levels"],
-        ["Outlook", "Settings"],
+        ["Recommend", "Analyze"],
+        ["Signal", "Trend"],
+        ["Levels", "Outlook"],
+        ["Settings"],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 

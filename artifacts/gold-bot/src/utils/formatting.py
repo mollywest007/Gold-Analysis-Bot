@@ -1,8 +1,80 @@
-from src.analysis.engine import MarketAnalysis
+from src.analysis.engine import MarketAnalysis, Indicator
 
 
 def fmt_price(p: float) -> str:
     return f"{p:.2f}"
+
+
+def _indicator_bar(indicators) -> str:
+    lines = []
+    for ind in indicators:
+        arrow = "^" if ind.signal == "BUY" else ("v" if ind.signal == "SELL" else "-")
+        if ind.name == "EMA Cross":
+            val_str = f"{ind.value:+.4f}"
+        elif ind.name == "MACD":
+            val_str = f"{ind.value:+.3f}"
+        else:
+            val_str = f"{ind.value:.1f}"
+        lines.append(f"{ind.name:<12} {val_str:>8}   [{arrow}] {ind.signal}")
+    return "\n".join(lines)
+
+
+def recommend_card(a: MarketAnalysis) -> str:
+    total = a.buy_votes + a.sell_votes + a.wait_votes
+    buy_pct = int((a.buy_votes / total) * 100) if total else 0
+    sell_pct = int((a.sell_votes / total) * 100) if total else 0
+
+    bar_len = 20
+    buy_blocks = round((a.buy_votes / max(total, 1)) * bar_len)
+    sell_blocks = round((a.sell_votes / max(total, 1)) * bar_len)
+    neut_blocks = bar_len - buy_blocks - sell_blocks
+    consensus_bar = ("+" * buy_blocks) + ("-" * sell_blocks) + ("." * max(neut_blocks, 0))
+
+    if a.action in ("BUY", "SELL"):
+        verdict_line = f"VERDICT:  >>>  {a.action}  <<<"
+    else:
+        verdict_line = "VERDICT:  >>>  WAIT  <<<"
+
+    lines = [
+        "XAU/USD  RECOMMENDATION",
+        "=" * 28,
+        verdict_line,
+        "=" * 28,
+        f"Price:    {fmt_price(a.price)}",
+        f"Timeframe:{a.timeframe}",
+        "─" * 28,
+        "INDICATOR CONSENSUS",
+        f"[{consensus_bar}]",
+        f"BUY {buy_pct}%   SELL {sell_pct}%   NEUTRAL {100-buy_pct-sell_pct}%",
+        "─" * 28,
+        _indicator_bar(a.indicators),
+        "─" * 28,
+    ]
+
+    if a.action in ("BUY", "SELL"):
+        lines += [
+            f"Entry:    {fmt_price(a.entry)}",
+            f"SL:       {fmt_price(a.stop_loss)}",
+            f"TP1:      {fmt_price(a.tp1)}",
+            f"TP2:      {fmt_price(a.tp2)}",
+            f"R:R       1:{a.rr_ratio}",
+            "─" * 28,
+            f"Confidence: {a.confidence}%",
+            f"Reason: {a.verdict_reason[:48]}",
+        ]
+        if a.breakout:
+            lines.append("Pattern:  Breakout confirmed")
+        if a.reversal:
+            lines.append("Pattern:  Reversal signal")
+    else:
+        lines += [
+            f"Confidence: {a.confidence}%",
+            f"Reason: {(a.wait_reason or a.verdict_reason)[:48]}",
+            "─" * 28,
+            "No trade. Monitor for clearer setup.",
+        ]
+
+    return "<pre>" + "\n".join(lines) + "</pre>"
 
 
 def analysis_card(a: MarketAnalysis) -> str:
@@ -137,13 +209,14 @@ def welcome_text(name: str) -> str:
 
 def help_text() -> str:
     cmds = [
-        ("/analyze", "Full XAU/USD market analysis"),
-        ("/signal", "Trade setup if conditions are met"),
-        ("/trend", "Current trend direction"),
-        ("/levels", "Support and resistance levels"),
-        ("/outlook", "Market outlook report"),
-        ("/settings", "Bot settings"),
-        ("/help", "This message"),
+        ("/recommend", "BUY / SELL verdict with indicator breakdown"),
+        ("/analyze",   "Full XAU/USD market analysis"),
+        ("/signal",    "Trade setup if conditions are met"),
+        ("/trend",     "Current trend direction"),
+        ("/levels",    "Support and resistance levels"),
+        ("/outlook",   "Market outlook report"),
+        ("/settings",  "Bot settings"),
+        ("/help",      "This message"),
     ]
     lines = ["<b>Available Commands</b>\n"]
     for cmd, desc in cmds:
