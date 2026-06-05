@@ -1,9 +1,11 @@
+import logging
 import math
-import time
 from dataclasses import dataclass, field
-from typing import Tuple, List
+from typing import List, Tuple, Optional
 
-from .market_data import get_gold_price
+from .market_data import fetch_ohlcv, OHLCVData
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,227 +46,299 @@ class MarketAnalysis:
     verdict_reason: str = ""
 
 
-def _bucket(timeframe: str) -> int:
-    tf_seconds = {"M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
-    return tf_seconds.get(timeframe, 3600)
+# ─── Pure TA functions ────────────────────────────────────────────────────────
+
+def _ema(prices: List[float], period: int) -> float:
+    if not prices:
+        return 0.0
+    if len(prices) < period:
+        return sum(prices) / len(prices)
+    k = 2.0 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema = p * k + ema * (1 - k)
+    return ema
 
 
-def _seed(price: float, timeframe: str, offset: float = 0.0) -> float:
-    bucket_size = _bucket(timeframe)
-    t_bucket = int(time.time() / bucket_size)
-    raw = (price * 137.5 + t_bucket * 31.7 + offset * 53.1)
-    return (raw % 999.0) / 999.0
+def _ema_series(prices: List[float], period: int) -> List[float]:
+    if len(prices) < period:
+        return []
+    k = 2.0 / (period + 1)
+    result = [sum(prices[:period]) / period]
+    for p in prices[period:]:
+        result.append(p * k + result[-1] * (1 - k))
+    return result
 
 
-def _sin_osc(s: float) -> float:
-    return math.sin(s * math.pi * 4) * 0.5 + 0.5
+def compute_rsi(closes: List[float], period: int = 14) -> float:
+    if len(closes) < period + 2:
+        return 50.0
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0.0) for d in deltas]
+    losses = [max(-d, 0.0) for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
 
 
-def _cos_osc(s: float) -> float:
-    return math.cos(s * math.pi * 3.7) * 0.5 + 0.5
+def compute_macd(closes: List[float], fast: int = 12, slow: int = 26,
+                 sig: int = 9) -> Tuple[float, float, float]:
+    if len(closes) < slow + sig:
+        return 0.0, 0.0, 0.0
+    k_fast = 2.0 / (fast + 1)
+    k_slow = 2.0 / (slow + 1)
+    k_sig  = 2.0 / (sig + 1)
+
+    ema_f = sum(closes[:fast]) / fast
+    ema_s = sum(closes[:slow]) / slow
+
+    macd_vals: List[float] = []
+    for i in range(fast, len(closes)):
+        ema_f = closes[i] * k_fast + ema_f * (1 - k_fast)
+        if i >= slow:
+            ema_s = closes[i] * k_slow + ema_s * (1 - k_slow)
+            macd_vals.append(ema_f - ema_s)
+
+    if not macd_vals:
+        return 0.0, 0.0, 0.0
+
+    if len(macd_vals) < sig:
+        signal_val = sum(macd_vals) / len(macd_vals)
+    else:
+        signal_val = sum(macd_vals[:sig]) / sig
+        for m in macd_vals[sig:]:
+            signal_val = m * k_sig + signal_val * (1 - k_sig)
+
+    macd_line = macd_vals[-1]
+    hist = macd_line - signal_val
+    return round(macd_line, 4), round(signal_val, 4), round(hist, 4)
 
 
-def _rsi(seed: float) -> float:
-    s1 = _sin_osc(seed)
-    s2 = _cos_osc(seed * 1.3)
-    raw = s1 * 0.6 + s2 * 0.4
-    return round(raw * 100, 1)
+def compute_stoch(highs: List[float], lows: List[float], closes: List[float],
+                  k_period: int = 14, d_period: int = 3) -> Tuple[float, float]:
+    if len(closes) < k_period:
+        return 50.0, 50.0
+    k_vals: List[float] = []
+    for i in range(k_period - 1, len(closes)):
+        hh = max(highs[i - k_period + 1: i + 1])
+        ll = min(lows[i - k_period + 1: i + 1])
+        if hh == ll:
+            k_vals.append(50.0)
+        else:
+            k_vals.append((closes[i] - ll) / (hh - ll) * 100)
+    k = k_vals[-1]
+    d = sum(k_vals[-d_period:]) / min(d_period, len(k_vals))
+    return round(k, 2), round(d, 2)
 
 
-def _macd(seed: float) -> float:
-    fast = _sin_osc(seed * 0.9)
-    slow = _cos_osc(seed * 1.7)
-    return round((fast - slow) * 10, 3)
+def compute_atr(highs: List[float], lows: List[float], closes: List[float],
+                period: int = 14) -> float:
+    if len(closes) < 2:
+        return closes[-1] * 0.005 if closes else 10.0
+    trs = [
+        max(highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]))
+        for i in range(1, len(closes))
+    ]
+    if len(trs) < period:
+        return sum(trs) / len(trs)
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return round(atr, 4)
 
 
-def _ema_bias(seed: float) -> float:
-    ema20 = _sin_osc(seed * 1.1)
-    ema50 = _cos_osc(seed * 0.7)
-    return round(ema20 - ema50, 4)
+def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
+                   price: float, atr: float) -> Tuple[float, float, float, float]:
+    resistances: List[float] = []
+    supports: List[float] = []
+    n = len(closes)
+    lookback = 3
+
+    for i in range(lookback, n - lookback):
+        if all(highs[i] >= highs[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            resistances.append(highs[i])
+        if all(lows[i] <= lows[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            supports.append(lows[i])
+
+    res_above = sorted([r for r in resistances if r > price])
+    sup_below = sorted([s for s in supports if s < price], reverse=True)
+
+    r1 = res_above[0] if res_above else round(price + atr * 3, 2)
+    r2 = res_above[1] if len(res_above) > 1 else round(price + atr * 6, 2)
+    s1 = sup_below[0] if sup_below else round(price - atr * 3, 2)
+    s2 = sup_below[1] if len(sup_below) > 1 else round(price - atr * 6, 2)
+
+    return round(r1, 2), round(r2, 2), round(s1, 2), round(s2, 2)
 
 
-def _stoch(seed: float) -> float:
-    k = _sin_osc(seed * 2.1)
-    return round(k * 100, 1)
+def detect_breakout(closes: List[float], highs: List[float], period: int = 20) -> bool:
+    if len(closes) < period + 1:
+        return False
+    recent_high = max(highs[-period - 1:-1])
+    return closes[-1] > recent_high
 
 
-def _atr_pct(seed: float, timeframe: str) -> float:
-    tf_scale = {"M5": 0.05, "M15": 0.1, "M30": 0.15, "H1": 0.25, "H4": 0.5, "D1": 1.0}
-    base = tf_scale.get(timeframe, 0.25)
-    variance = _sin_osc(seed * 3.3)
-    return round(base * (0.7 + variance * 0.6), 3)
+def detect_reversal(rsi: float, stoch_k: float, macd_hist: float,
+                    closes: List[float]) -> bool:
+    if len(closes) < 5:
+        return False
+    bearish_div = rsi > 70 and closes[-1] > closes[-3] and macd_hist < 0
+    bullish_div = rsi < 30 and closes[-1] < closes[-3] and macd_hist > 0
+    stoch_extreme = stoch_k > 85 or stoch_k < 15
+    return (bearish_div or bullish_div) and stoch_extreme
 
 
-def _vol_ratio(seed: float) -> float:
-    return round(_cos_osc(seed * 1.9) * 2.0, 2)
+# ─── Indicator scoring ────────────────────────────────────────────────────────
 
-
-def _derive_levels(price: float, timeframe: str, seed: float) -> Tuple[float, float, float, float]:
-    tf_scale = {"M5": 0.3, "M15": 0.5, "M30": 0.8, "H1": 1.2, "H4": 2.5, "D1": 5.0}
-    scale = tf_scale.get(timeframe, 1.2)
-    micro = _sin_osc(seed * 4.1) * scale * 2
-    r1 = round(price + scale * 7 + micro, 2)
-    r2 = round(price + scale * 16 + micro * 1.5, 2)
-    s1 = round(price - scale * 7 - micro, 2)
-    s2 = round(price - scale * 16 - micro * 1.5, 2)
-    return r1, r2, s1, s2
-
-
-def _classify_indicator(rsi: float, macd: float, ema_bias: float,
-                        stoch: float, vol: float) -> List[Indicator]:
-    indicators = []
-
+def _score_rsi(rsi: float) -> Tuple[str, float]:
     if rsi >= 70:
-        rsi_sig = "SELL"
+        return "SELL", 0.8
     elif rsi <= 30:
-        rsi_sig = "BUY"
-    elif rsi >= 55:
-        rsi_sig = "BUY"
-    elif rsi <= 45:
-        rsi_sig = "SELL"
+        return "BUY", 0.8
+    elif 55 <= rsi < 70:
+        return "BUY", 0.5
+    elif 30 < rsi <= 45:
+        return "SELL", 0.5
     else:
-        rsi_sig = "NEUTRAL"
-    indicators.append(Indicator("RSI", rsi, rsi_sig, 0.25))
+        return "NEUTRAL", 0.0
 
-    if macd > 0.3:
-        macd_sig = "BUY"
-    elif macd < -0.3:
-        macd_sig = "SELL"
+
+def _score_macd(macd_line: float, signal_line: float, hist: float) -> Tuple[str, float]:
+    if macd_line > signal_line and hist > 0:
+        strength = min(abs(hist) / max(abs(macd_line), 0.0001), 1.0)
+        return "BUY", 0.5 + strength * 0.5
+    elif macd_line < signal_line and hist < 0:
+        strength = min(abs(hist) / max(abs(macd_line), 0.0001), 1.0)
+        return "SELL", 0.5 + strength * 0.5
+    elif macd_line > signal_line:
+        return "BUY", 0.3
+    elif macd_line < signal_line:
+        return "SELL", 0.3
     else:
-        macd_sig = "NEUTRAL"
-    indicators.append(Indicator("MACD", macd, macd_sig, 0.25))
+        return "NEUTRAL", 0.0
 
-    if ema_bias > 0.02:
-        ema_sig = "BUY"
-    elif ema_bias < -0.02:
-        ema_sig = "SELL"
+
+def _score_ema(price: float, ema20: float, ema50: float) -> Tuple[str, float]:
+    if price > ema20 > ema50:
+        return "BUY", 1.0
+    elif price < ema20 < ema50:
+        return "SELL", 1.0
+    elif price > ema50:
+        return "BUY", 0.5
+    elif price < ema50:
+        return "SELL", 0.5
     else:
-        ema_sig = "NEUTRAL"
-    indicators.append(Indicator("EMA Cross", ema_bias, ema_sig, 0.30))
+        return "NEUTRAL", 0.0
 
-    if stoch >= 80:
-        stoch_sig = "SELL"
-    elif stoch <= 20:
-        stoch_sig = "BUY"
-    elif stoch >= 55:
-        stoch_sig = "BUY"
-    elif stoch <= 45:
-        stoch_sig = "SELL"
+
+def _score_stoch(k: float, d: float) -> Tuple[str, float]:
+    if k >= 80 and k < d:
+        return "SELL", 0.9
+    elif k <= 20 and k > d:
+        return "BUY", 0.9
+    elif k > d and k < 70:
+        return "BUY", 0.5
+    elif k < d and k > 30:
+        return "SELL", 0.5
     else:
-        stoch_sig = "NEUTRAL"
-    indicators.append(Indicator("Stochastic", stoch, stoch_sig, 0.20))
-
-    return indicators
+        return "NEUTRAL", 0.0
 
 
-def _build_verdict(indicators: List[Indicator], breakout: bool, reversal: bool):
-    buy_score = sum(i.weight for i in indicators if i.signal == "BUY")
-    sell_score = sum(i.weight for i in indicators if i.signal == "SELL")
-    neut_score = sum(i.weight for i in indicators if i.signal == "NEUTRAL")
+# ─── Main analysis ────────────────────────────────────────────────────────────
 
-    buy_votes = sum(1 for i in indicators if i.signal == "BUY")
+async def analyze(timeframe: str = "H1") -> MarketAnalysis:
+    from src.config import CONFIDENCE_THRESHOLD, MIN_RR_RATIO
+
+    data: Optional[OHLCVData] = await fetch_ohlcv(timeframe)
+
+    if data is None or len(data) < 30:
+        logger.error(f"Insufficient data for {timeframe} — cannot analyze")
+        raise RuntimeError(f"Could not fetch enough market data for {timeframe}")
+
+    closes = data.closes
+    highs  = data.highs
+    lows   = data.lows
+    price  = data.price
+
+    # ── Compute indicators ──
+    rsi                     = compute_rsi(closes, 14)
+    macd_line, sig_line, hist = compute_macd(closes, 12, 26, 9)
+    ema20                   = _ema(closes, 20)
+    ema50                   = _ema(closes, 50)
+    stoch_k, stoch_d        = compute_stoch(highs, lows, closes, 14, 3)
+    atr                     = compute_atr(highs, lows, closes, 14)
+
+    logger.info(
+        f"[{timeframe}] RSI={rsi} MACD={macd_line:.2f}/{sig_line:.2f} "
+        f"EMA20={ema20:.2f} EMA50={ema50:.2f} "
+        f"Stoch={stoch_k:.1f}/{stoch_d:.1f} ATR={atr:.2f}"
+    )
+
+    # ── Score each indicator ──
+    rsi_sig,  rsi_conf  = _score_rsi(rsi)
+    macd_sig, macd_conf = _score_macd(macd_line, sig_line, hist)
+    ema_sig,  ema_conf  = _score_ema(price, ema20, ema50)
+    stoch_sig, stoch_conf = _score_stoch(stoch_k, stoch_d)
+
+    indicators = [
+        Indicator("RSI(14)",    rsi,        rsi_sig,   0.25),
+        Indicator("MACD",       macd_line,  macd_sig,  0.25),
+        Indicator("EMA 20/50",  ema20,      ema_sig,   0.30),
+        Indicator("Stoch(14)",  stoch_k,    stoch_sig, 0.20),
+    ]
+
+    # ── Weighted vote ──
+    buy_score  = sum(i.weight * (rsi_conf if i.name == "RSI(14)" else
+                                 macd_conf if i.name == "MACD" else
+                                 ema_conf if i.name == "EMA 20/50" else
+                                 stoch_conf)
+                     for i in indicators if i.signal == "BUY")
+    sell_score = sum(i.weight * (rsi_conf if i.name == "RSI(14)" else
+                                 macd_conf if i.name == "MACD" else
+                                 ema_conf if i.name == "EMA 20/50" else
+                                 stoch_conf)
+                     for i in indicators if i.signal == "SELL")
+
+    buy_votes  = sum(1 for i in indicators if i.signal == "BUY")
     sell_votes = sum(1 for i in indicators if i.signal == "SELL")
     wait_votes = sum(1 for i in indicators if i.signal == "NEUTRAL")
 
-    total = buy_score + sell_score + neut_score
-    if total == 0:
-        return "NEUTRAL", 50, buy_votes, sell_votes, wait_votes, "Indicators inconclusive"
-
-    if breakout:
-        if buy_score > sell_score:
-            buy_score *= 1.15
-        elif sell_score > buy_score:
-            sell_score *= 1.15
-
-    conf_raw = max(buy_score, sell_score) / total
-    confidence = int(50 + conf_raw * 48)
-
+    total_score = buy_score + sell_score
     margin = abs(buy_score - sell_score)
 
-    if buy_score > sell_score and margin > 0.08:
+    if total_score > 0:
+        raw_conf = max(buy_score, sell_score) / total_score
+    else:
+        raw_conf = 0.5
+
+    confidence = int(50 + raw_conf * 48)
+    confidence = max(52, min(97, confidence))
+
+    # ── Direction ──
+    if buy_score > sell_score and margin > 0.05:
         direction = "BUY"
-        reason = _buy_reason(indicators, breakout)
-    elif sell_score > buy_score and margin > 0.08:
+        bias      = "Bullish"
+    elif sell_score > buy_score and margin > 0.05:
         direction = "SELL"
-        reason = _sell_reason(indicators, breakout)
+        bias      = "Bearish"
     else:
         direction = "NEUTRAL"
-        reason = "Indicators split — no high-probability setup"
+        bias      = "Neutral"
 
-    return direction, confidence, buy_votes, sell_votes, wait_votes, reason
-
-
-def _buy_reason(indicators: List[Indicator], breakout: bool) -> str:
-    parts = []
-    for ind in indicators:
-        if ind.signal == "BUY":
-            if ind.name == "RSI":
-                parts.append(f"RSI {ind.value:.0f} — bullish momentum")
-            elif ind.name == "MACD":
-                parts.append("MACD above signal line")
-            elif ind.name == "EMA Cross":
-                parts.append("Price above key EMAs")
-            elif ind.name == "Stochastic":
-                parts.append(f"Stoch {ind.value:.0f} — upward pressure")
-    if breakout:
-        parts.append("Breakout structure confirmed")
-    return ". ".join(parts[:3]) if parts else "Bullish indicator alignment"
-
-
-def _sell_reason(indicators: List[Indicator], breakout: bool) -> str:
-    parts = []
-    for ind in indicators:
-        if ind.signal == "SELL":
-            if ind.name == "RSI":
-                parts.append(f"RSI {ind.value:.0f} — bearish pressure")
-            elif ind.name == "MACD":
-                parts.append("MACD below signal line")
-            elif ind.name == "EMA Cross":
-                parts.append("Price below key EMAs")
-            elif ind.name == "Stochastic":
-                parts.append(f"Stoch {ind.value:.0f} — downward pressure")
-    if breakout:
-        parts.append("Breakdown structure confirmed")
-    return ". ".join(parts[:3]) if parts else "Bearish indicator alignment"
-
-
-async def analyze(timeframe: str = "H1") -> MarketAnalysis:
-    price = await get_gold_price()
-    seed = _seed(price, timeframe)
-
-    rsi_val = _rsi(seed)
-    macd_val = _macd(seed)
-    ema_val = _ema_bias(seed)
-    stoch_val = _stoch(seed)
-    vol = _vol_ratio(_seed(price, timeframe, 7.3))
-    atr = _atr_pct(_seed(price, timeframe, 3.1), timeframe)
-
-    indicators = _classify_indicator(rsi_val, macd_val, ema_val, stoch_val, vol)
-
-    breakout_seed = _sin_osc(_seed(price, timeframe, 11.7))
-    reversal_seed = _cos_osc(_seed(price, timeframe, 19.3))
-    breakout = breakout_seed > 0.82
-    reversal = reversal_seed > 0.85
-
-    direction, confidence, buy_votes, sell_votes, wait_votes, verdict_reason = _build_verdict(
-        indicators, breakout, reversal
-    )
-
-    if direction == "BUY":
-        bias = "Bullish"
-        action_raw = "BUY"
-    elif direction == "SELL":
-        bias = "Bearish"
-        action_raw = "SELL"
-    else:
-        bias = "Neutral"
-        action_raw = "WAIT"
-
+    # ── Trend strength ──
     strength_score = max(buy_votes, sell_votes) / len(indicators)
     if strength_score >= 0.75:
         strength = "Strong"
         momentum = "High"
-    elif strength_score >= 0.5:
+    elif strength_score >= 0.50:
         strength = "Moderate"
         momentum = "Medium"
     else:
@@ -273,53 +347,84 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     trend = bias if bias != "Neutral" else "Ranging"
 
-    tf_scale = {"M5": 0.3, "M15": 0.5, "M30": 0.8, "H1": 1.2, "H4": 2.5, "D1": 5.0}
-    scale = tf_scale.get(timeframe, 1.2)
-
-    r1, r2, s1, s2 = _derive_levels(price, timeframe, seed)
-
-    if action_raw == "BUY":
-        entry = round(price + scale * 0.4, 2)
-        stop_loss = round(entry - scale * 8, 2)
-        tp1 = round(entry + scale * 16, 2)
-        tp2 = round(entry + scale * 28, 2)
-    elif action_raw == "SELL":
-        entry = round(price - scale * 0.4, 2)
-        stop_loss = round(entry + scale * 8, 2)
-        tp1 = round(entry - scale * 16, 2)
-        tp2 = round(entry - scale * 28, 2)
+    # ── Verdict reason ──
+    if direction == "BUY":
+        parts = []
+        if rsi_sig == "BUY":
+            parts.append(f"RSI {rsi:.0f} — momentum building")
+        if macd_sig == "BUY":
+            parts.append("MACD bullish crossover")
+        if ema_sig == "BUY":
+            parts.append("Price above key EMAs")
+        if stoch_sig == "BUY":
+            parts.append(f"Stoch {stoch_k:.0f} — upward pressure")
+        verdict_reason = ". ".join(parts[:3])
+    elif direction == "SELL":
+        parts = []
+        if rsi_sig == "SELL":
+            parts.append(f"RSI {rsi:.0f} — overbought/bearish")
+        if macd_sig == "SELL":
+            parts.append("MACD bearish crossover")
+        if ema_sig == "SELL":
+            parts.append("Price below key EMAs")
+        if stoch_sig == "SELL":
+            parts.append(f"Stoch {stoch_k:.0f} — downward pressure")
+        verdict_reason = ". ".join(parts[:3])
     else:
-        entry = price
-        stop_loss = round(price - scale * 8, 2)
-        tp1 = round(price + scale * 16, 2)
-        tp2 = round(price + scale * 28, 2)
+        verdict_reason = "Indicators mixed — no clear edge"
 
-    sl_dist = abs(entry - stop_loss)
+    # ── Support / Resistance from actual swing levels ──
+    r1, r2, s1, s2 = find_sr_levels(highs, lows, closes, price, atr)
+
+    # ── Breakout / Reversal ──
+    breakout = detect_breakout(closes, highs, 20)
+    reversal = detect_reversal(rsi, stoch_k, hist, closes)
+
+    # ── Entry / SL / TP using ATR ──
+    atr_sl_mult  = 1.5
+    atr_tp1_mult = 3.0
+    atr_tp2_mult = 4.5
+
+    if direction == "BUY":
+        entry     = round(price, 2)
+        stop_loss = round(price - atr * atr_sl_mult, 2)
+        tp1       = round(price + atr * atr_tp1_mult, 2)
+        tp2       = round(price + atr * atr_tp2_mult, 2)
+    elif direction == "SELL":
+        entry     = round(price, 2)
+        stop_loss = round(price + atr * atr_sl_mult, 2)
+        tp1       = round(price - atr * atr_tp1_mult, 2)
+        tp2       = round(price - atr * atr_tp2_mult, 2)
+    else:
+        entry     = round(price, 2)
+        stop_loss = round(price - atr * atr_sl_mult, 2)
+        tp1       = round(price + atr * atr_tp1_mult, 2)
+        tp2       = round(price + atr * atr_tp2_mult, 2)
+
+    sl_dist  = abs(entry - stop_loss)
     tp1_dist = abs(tp1 - entry)
     rr_ratio = round(tp1_dist / sl_dist, 1) if sl_dist > 0 else 0.0
 
-    from src.config import CONFIDENCE_THRESHOLD, MIN_RR_RATIO
+    # ── Signal gating ──
     wait_reason = ""
-    if action_raw != "WAIT":
+    if direction != "NEUTRAL":
         if confidence < CONFIDENCE_THRESHOLD:
             action = "WAIT"
             wait_reason = f"Confidence {confidence}% below {CONFIDENCE_THRESHOLD}% threshold"
         elif rr_ratio < MIN_RR_RATIO:
             action = "WAIT"
             wait_reason = f"R:R 1:{rr_ratio} below minimum 1:{int(MIN_RR_RATIO)}"
-        elif bias == "Neutral":
-            action = "WAIT"
-            wait_reason = "Indicators split — no directional edge"
         else:
-            action = action_raw
+            action = direction
     else:
         action = "WAIT"
-        wait_reason = verdict_reason or "No clear directional bias"
+        wait_reason = verdict_reason or "Indicators mixed"
 
+    # ── Liquidity zone ──
     if direction == "BUY":
-        liq_zone = f"{fmt(s1)} — {fmt(round(s1 + scale * 2, 2))}"
+        liq_zone = f"{s1:.2f} — {round(s1 + atr, 2):.2f}"
     else:
-        liq_zone = f"{fmt(r1)} — {fmt(round(r1 - scale * 2, 2))}"
+        liq_zone = f"{round(r1 - atr, 2):.2f} — {r1:.2f}"
 
     return MarketAnalysis(
         price=price,
@@ -349,7 +454,3 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         wait_votes=wait_votes,
         verdict_reason=verdict_reason,
     )
-
-
-def fmt(p: float) -> str:
-    return f"{p:.2f}"
