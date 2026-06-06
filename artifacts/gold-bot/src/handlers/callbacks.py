@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes, CallbackQueryHandler, Application
 
 from src.analysis import analyze
 from src.alerts import is_subscribed, subscribe, unsubscribe
+from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
@@ -17,36 +18,58 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     return context.user_data.get("timeframe", "H1")
 
 
+def _closed_text() -> str:
+    ms = market_status()
+    lines = [
+        "MARKET CLOSED",
+        "=" * 28,
+        f"Status:  {ms['status_text']}",
+        f"Info:    {ms['note']}",
+        "=" * 28,
+        "Analysis is only available",
+        "when the market is open.",
+        "─" * 28,
+        "Gold futures trade:",
+        "Sun 6 PM  to  Fri 5 PM ET",
+        "Daily break: 5-6 PM ET",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
+def _is_open() -> bool:
+    return market_status()["is_open"]
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     data = query.data or ""
 
+    # ── Alert toggles (always available) ──────────────────────────────────────
     if data == "alerts:on":
-        chat_id = update.effective_chat.id
-        subscribe(chat_id)
+        subscribe(update.effective_chat.id)
+        ms  = market_status()
+        mkt = f"\nMarket is currently <b>{'OPEN' if ms['is_open'] else 'CLOSED'}</b> — {ms['note']}."
         text = (
             "<b>Alerts</b>\n\n"
-            "Status: <b>ON</b>\n\n"
-            "You will now receive automatic notifications whenever "
-            "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
-            "Checks run every 5 minutes."
+            f"Status: <b>ON</b>{mkt}\n\n"
+            "You will receive automatic notifications whenever a high-confidence "
+            "BUY or SELL is detected. Alerts only fire during market hours."
         )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(True))
         return
 
     if data == "alerts:off":
-        chat_id = update.effective_chat.id
-        unsubscribe(chat_id)
+        unsubscribe(update.effective_chat.id)
         text = (
             "<b>Alerts</b>\n\n"
             "Status: <b>OFF</b>\n\n"
-            "Automatic notifications disabled. "
-            "You will not receive any alerts until you turn them back on."
+            "Automatic notifications disabled."
         )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(False))
         return
 
+    # ── Timeframe settings (always available) ─────────────────────────────────
     if data.startswith("set_tf:"):
         tf = data.split(":")[1]
         context.user_data["timeframe"] = tf
@@ -58,84 +81,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
         return
 
+    if data in ("settings:tf_header", "settings:back", "back:main"):
+        return
+
+    # ── All analysis callbacks — blocked when market is closed ─────────────────
+    if not _is_open():
+        await query.edit_message_text(_closed_text(), parse_mode="HTML")
+        return
+
+    tf = data.split(":")[1] if ":" in data else _get_tf(context)
+    context.user_data["timeframe"] = tf
+
     if data.startswith("recommend:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
         await query.edit_message_text("Scanning indicators...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(recommend_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback recommend error: {e}")
+            logger.error(f"callback recommend: {e}")
             await query.edit_message_text("Recommendation failed. Please try again.")
-        return
 
-    if data.startswith("analyze:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
+    elif data.startswith("analyze:"):
         await query.edit_message_text("Analyzing XAU/USD...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(analysis_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback analyze error: {e}")
+            logger.error(f"callback analyze: {e}")
             await query.edit_message_text("Analysis failed. Please try again.")
-        return
 
-    if data.startswith("signal:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
+    elif data.startswith("signal:"):
         await query.edit_message_text("Scanning for trade setup...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(signal_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback signal error: {e}")
+            logger.error(f"callback signal: {e}")
             await query.edit_message_text("Signal scan failed. Please try again.")
-        return
 
-    if data.startswith("trend:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
+    elif data.startswith("trend:"):
         await query.edit_message_text("Reading trend...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(trend_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback trend error: {e}")
+            logger.error(f"callback trend: {e}")
             await query.edit_message_text("Trend read failed. Please try again.")
-        return
 
-    if data.startswith("levels:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
+    elif data.startswith("levels:"):
         await query.edit_message_text("Calculating levels...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(levels_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback levels error: {e}")
+            logger.error(f"callback levels: {e}")
             await query.edit_message_text("Level calculation failed. Please try again.")
-        return
 
-    if data.startswith("outlook:"):
-        tf = data.split(":")[1]
-        context.user_data["timeframe"] = tf
+    elif data.startswith("outlook:"):
         await query.edit_message_text("Generating outlook...")
         try:
             a = await analyze(tf)
             await query.edit_message_text(outlook_card(a), parse_mode="HTML")
         except Exception as e:
-            logger.error(f"callback outlook error: {e}")
+            logger.error(f"callback outlook: {e}")
             await query.edit_message_text("Outlook generation failed. Please try again.")
-        return
-
-    if data in ("settings:tf_header",):
-        return
-
-    if data in ("settings:back", "back:main"):
-        await query.edit_message_text("Use the menu below to navigate.")
-        return
 
 
 def register_callback_handlers(app: Application) -> None:

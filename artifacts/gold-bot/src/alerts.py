@@ -157,6 +157,12 @@ async def _send_result_image(
 
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src.market_hours import market_status
+    ms = market_status()
+    if not ms["is_open"]:
+        logger.info(f"Alert scan skipped — {ms['status_text']} ({ms['note']})")
+        return
+
     subs = _load()
     if not subs:
         logger.info("Alert scan: no subscribers.")
