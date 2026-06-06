@@ -1,0 +1,20 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "1ciAR_U4wvusT-UFkRihh"
+uri = "file://artifacts/gold-bot/trade_win_sample.png"
+type = "image"
+title = "TRADE WIN — All Targets Hit"
+
+[[outputs]]
+id = "6CXP10hRtHRpYldXN7_9q"
+uri = "file://artifacts/gold-bot/trade_win_tp1_sample.png"
+type = "image"
+title = "TRADE WIN — TP1 Hit (Partial)"
+
+[[outputs]]
+id = "rsHg8pIXFxBfeeapU2Sc3"
+uri = "file://artifacts/gold-bot/trade_loss_sample.png"
+type = "image"
+title = "TRADE LOSS — Stop Loss Hit"
