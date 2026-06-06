@@ -1,0 +1,34 @@
+{
+  "trades": [
+    {
+      "id": "1780751860",
+      "direction": "SELL",
+      "entry": 4465.6,
+      "sl": 4487.48,
+      "tp1": 4421.83,
+      "tp2": 4356.6,
+      "timeframe": "H1",
+      "confidence": 89,
+      "rr_ratio": 2.0,
+      "opened_at": 1780751860.146951,
+      "status": "tp2_hit",
+      "tp1_hit": true,
+      "tp2_hit": true
+    },
+    {
+      "id": "1780751886",
+      "direction": "SELL",
+      "entry": 4330.0,
+      "sl": 4357.46,
+      "tp1": 4275.08,
+      "tp2": 4233.9,
+      "timeframe": "H1",
+      "confidence": 91,
+      "rr_ratio": 2.0,
+      "opened_at": 1780751886.8412511,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false
+    }
+  ]
+}
