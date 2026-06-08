@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import time
-from typing import Set, Dict, Tuple
+from typing import Set, Dict, Tuple, Optional
 
 from telegram.ext import ContextTypes
 
@@ -18,6 +18,12 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "subscribers.j
 
 _last_sent: Dict[str, Tuple[str, float]] = {}
 RESEND_AFTER_SECONDS = 55 * 60
+
+# ── Market open/close transition tracking ─────────────────────────────────────
+_prev_market_open: Optional[bool] = None   # None = unknown (first scan)
+_open_notif_sent_at: float = 0.0           # timestamp of last opening notification
+_close_notif_sent_at: float = 0.0          # timestamp of last closing notification
+NOTIF_COOLDOWN = 30 * 60                   # don't re-fire within 30 min
 
 
 def _load() -> Set[int]:
@@ -74,6 +80,22 @@ def _should_send(tf: str, signal_key: str) -> bool:
     return False
 
 
+async def _broadcast(bot, subs: Set[int], text: str, parse_mode: str = "HTML") -> Set[int]:
+    """Send a text message to all subscribers. Returns set of dead chat IDs."""
+    dead: Set[int] = set()
+    for chat_id in list(subs):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        except Exception as e:
+            err = str(e).lower()
+            if "blocked" in err or "not found" in err or "deactivated" in err:
+                dead.add(chat_id)
+                logger.warning(f"Removing dead subscriber {chat_id}")
+            else:
+                logger.warning(f"Broadcast failed for {chat_id}: {e}")
+    return dead
+
+
 async def _send_result_image(
     bot,
     subs: Set[int],
@@ -81,7 +103,6 @@ async def _send_result_image(
     event: str,
     exit_price: float,
 ) -> None:
-    """Generate and send WIN or LOSS result image to all subscribers."""
     direction  = trade["direction"]
     entry      = trade["entry"]
     sl         = trade["sl"]
@@ -92,7 +113,7 @@ async def _send_result_image(
     rr_ratio   = trade.get("rr_ratio", 2.0)
 
     if event == "SL":
-        result = "LOSS"
+        result  = "LOSS"
         caption = (
             f"STOP LOSS HIT  |  XAU/USD\n"
             f"Direction: {direction}  |  Entry: {entry:,.2f}  |  Exit: {exit_price:,.2f}\n"
@@ -105,7 +126,7 @@ async def _send_result_image(
             f"Direction: {direction}  |  Entry: {entry:,.2f}  |  TP2: {tp2:,.2f}\n"
             f"Full profit: +{abs(entry - exit_price):,.2f} pts"
         )
-    else:  # TP1
+    else:
         result  = "WIN_TP1"
         caption = (
             f"TP1 HIT  |  XAU/USD\n"
@@ -115,16 +136,9 @@ async def _send_result_image(
 
     try:
         img_bytes = generate_result_image(
-            direction=direction,
-            entry=entry,
-            sl=sl,
-            tp1=tp1,
-            tp2=tp2,
-            exit_price=exit_price,
-            result=result,
-            confidence=confidence,
-            timeframe=timeframe,
-            rr_ratio=rr_ratio,
+            direction=direction, entry=entry, sl=sl, tp1=tp1, tp2=tp2,
+            exit_price=exit_price, result=result,
+            confidence=confidence, timeframe=timeframe, rr_ratio=rr_ratio,
         )
     except Exception as e:
         logger.error(f"Image generation failed: {e}")
@@ -141,7 +155,8 @@ async def _send_result_image(
                     caption=caption,
                 )
             else:
-                await bot.send_message(chat_id=chat_id, text=f"<pre>{caption}</pre>", parse_mode="HTML")
+                await bot.send_message(chat_id=chat_id,
+                                       text=f"<pre>{caption}</pre>", parse_mode="HTML")
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
@@ -153,24 +168,77 @@ async def _send_result_image(
         subs -= dead
         _save(subs)
 
-    logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs) - len(dead)} subscriber(s)")
+    logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)-len(dead)} sub(s)")
+
+
+async def _send_market_open_notification(bot, subs: Set[int]) -> None:
+    """Run fresh analysis and broadcast the weekly market-open card."""
+    from src.utils.formatting import market_open_card
+    logger.info("Sending market-open notification to subscribers...")
+    try:
+        a    = await analyze("H1")
+        text = market_open_card(a)
+        dead = await _broadcast(bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(f"Market-open notification sent to {len(subs)} subscriber(s).")
+    except Exception as e:
+        logger.error(f"Market-open notification failed: {e}")
+
+
+async def _send_market_close_notification(bot, subs: Set[int]) -> None:
+    """Broadcast a brief market-closed recap card."""
+    from src.utils.formatting import weekly_closed_recap_text
+    logger.info("Sending market-close notification...")
+    try:
+        text = weekly_closed_recap_text()
+        dead = await _broadcast(bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(f"Market-close notification sent to {len(subs)} subscriber(s).")
+    except Exception as e:
+        logger.error(f"Market-close notification failed: {e}")
 
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
+
     from src.market_hours import market_status
-    ms = market_status()
-    if not ms["is_open"]:
+    ms        = market_status()
+    now_open  = ms["is_open"]
+    bot       = context.application.bot
+    subs      = _load()
+    now_ts    = time.time()
+
+    # ── Detect market state transitions ───────────────────────────────────────
+    if _prev_market_open is not None and subs:
+
+        # Closed → Open: fire opening notification
+        if not _prev_market_open and now_open:
+            if (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN:
+                _open_notif_sent_at = now_ts
+                await _send_market_open_notification(bot, subs)
+
+        # Open → Closed: fire closing recap
+        elif _prev_market_open and not now_open:
+            if (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN:
+                _close_notif_sent_at = now_ts
+                await _send_market_close_notification(bot, subs)
+
+    _prev_market_open = now_open
+
+    # ── Skip rest of scan while market is closed ──────────────────────────────
+    if not now_open:
         logger.info(f"Alert scan skipped — {ms['status_text']} ({ms['note']})")
         return
 
-    subs = _load()
     if not subs:
         logger.info("Alert scan: no subscribers.")
         return
 
-    bot = context.application.bot
-
-    # ── 1. Check open trades for TP/SL hits ──────────────────────────────────
+    # ── 1. Check open trades for TP/SL hits ───────────────────────────────────
     try:
         current_price = await get_gold_price()
         if current_price > 0:
@@ -190,8 +258,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info(
         f"Alert scan: action={a.action} confidence={a.confidence}% "
-        f"rr={a.rr_ratio} adx={a.adx:.1f} "
-        f"buy={a.buy_votes} sell={a.sell_votes}"
+        f"rr={a.rr_ratio} adx={a.adx:.1f} buy={a.buy_votes} sell={a.sell_votes}"
     )
 
     if a.action not in ("BUY", "SELL"):
@@ -223,18 +290,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         _last_sent[tf] = (signal_key, time.time())
         logger.info(f"Alert sent to {sent} subscriber(s): {a.action} @ {a.entry:.2f}")
 
-        # ── 4. Register trade in tracker ─────────────────────────────────────
+        # ── 4. Register trade in tracker ──────────────────────────────────────
         try:
-            invalidate_cache(tf)   # expire cache so next scan gets fresh data
+            invalidate_cache(tf)
             trade_tracker.open_trade(
-                direction  = a.action,
-                entry      = a.entry,
-                sl         = a.stop_loss,
-                tp1        = a.tp1,
-                tp2        = a.tp2,
-                timeframe  = tf,
-                confidence = a.confidence,
-                rr_ratio   = a.rr_ratio,
+                direction=a.action, entry=a.entry, sl=a.stop_loss,
+                tp1=a.tp1, tp2=a.tp2, timeframe=tf,
+                confidence=a.confidence, rr_ratio=a.rr_ratio,
             )
         except Exception as e:
             logger.error(f"Trade open failed: {e}")

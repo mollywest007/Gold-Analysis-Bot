@@ -282,6 +282,63 @@ def outlook_card(a: MarketAnalysis) -> str:
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
+def market_open_card(a: MarketAnalysis) -> str:
+    """Weekly market-open notification card sent every Sunday when COMEX reopens."""
+    lines = [
+        "MARKET NOW OPEN  |  XAU/USD",
+        "=" * 30,
+        "New week. Fresh analysis.",
+        "=" * 30,
+        f"Price:      {fmt_price(a.price)}",
+        f"Bias:       {a.bias}",
+        f"Trend:      {a.trend}  ({a.strength})",
+        f"ADX:        {a.adx:.1f}   BB%B: {a.bb_pct:.1f}",
+        "─" * 30,
+        _verdict_block(a),
+        "─" * 30,
+    ]
+    if a.action in ("BUY", "SELL"):
+        lines += [
+            f"Entry:      {fmt_price(a.entry)}",
+            f"SL:         {fmt_price(a.stop_loss)}",
+            f"TP1:        {fmt_price(a.tp1)}",
+            f"TP2:        {fmt_price(a.tp2)}",
+            f"R:R         1:{a.rr_ratio}",
+            "─" * 30,
+            f"Reason: {a.verdict_reason[:48]}",
+        ]
+    else:
+        lines += [
+            f"Reason: {(a.wait_reason or a.verdict_reason)[:48]}",
+            "No immediate setup. Monitor price action.",
+        ]
+    lines += [
+        "─" * 30,
+        f"R1: {fmt_price(a.resistance1)}   R2: {fmt_price(a.resistance2)}",
+        f"S1: {fmt_price(a.support1)}   S2: {fmt_price(a.support2)}",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
+def weekly_closed_recap_text() -> str:
+    """Brief message sent when market closes Friday to recap the week."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%A %d %b %Y  %H:%M UTC")
+    lines = [
+        "MARKET CLOSED  |  XAU/USD",
+        "─" * 30,
+        f"Time:   {now}",
+        "─" * 30,
+        "Gold futures closed for the weekend.",
+        "Analysis resumes Sunday 6:00 PM ET.",
+        "─" * 30,
+        "Active trades remain tracked.",
+        "Win/loss images fire when market",
+        "reopens and price hits a level.",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 def welcome_text(name: str) -> str:
     ms  = market_status()
     mkt = ("Market is OPEN — live analysis available."
