@@ -31,16 +31,16 @@
       "tp2_hit": false
     },
     {
-      "id": "1780919459",
+      "id": "1780922159",
       "direction": "SELL",
-      "entry": 4324.8,
-      "sl": 4352.29,
-      "tp1": 4269.82,
-      "tp2": 4228.58,
+      "entry": 4329.5,
+      "sl": 4356.21,
+      "tp1": 4276.08,
+      "tp2": 4236.02,
       "timeframe": "H1",
-      "confidence": 85,
+      "confidence": 88,
       "rr_ratio": 2.0,
-      "opened_at": 1780919459.330559,
+      "opened_at": 1780922159.2246075,
       "status": "open",
       "tp1_hit": false,
       "tp2_hit": false
