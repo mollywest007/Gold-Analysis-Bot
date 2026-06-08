@@ -31,16 +31,16 @@
       "tp2_hit": false
     },
     {
-      "id": "1780923958",
+      "id": "1780952258",
       "direction": "SELL",
-      "entry": 4330.9,
-      "sl": 4358.04,
-      "tp1": 4276.62,
-      "tp2": 4235.91,
+      "entry": 4331.1,
+      "sl": 4358.66,
+      "tp1": 4275.98,
+      "tp2": 4234.64,
       "timeframe": "H1",
-      "confidence": 88,
+      "confidence": 90,
       "rr_ratio": 2.0,
-      "opened_at": 1780923958.6086798,
+      "opened_at": 1780952258.561766,
       "status": "open",
       "tp1_hit": false,
       "tp2_hit": false
