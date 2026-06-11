@@ -107,6 +107,9 @@ def recommend_card(a: MarketAnalysis) -> str:
 def alert_card(a: MarketAnalysis) -> str:
     ms  = market_status()
     mkt = f"[CLOSED] {ms['note']}" if not ms["is_open"] else ms["note"]
+    session_str = f"{a.session}" if a.session else ""
+    htf_str     = f"HTF: {a.htf_bias}" if a.htf_bias and a.htf_bias != "Neutral" else ""
+    context_line = "  |  ".join(filter(None, [session_str, htf_str])) or mkt
     lines = [
         "SIGNAL ALERT  |  XAU/USD",
         "=" * 30,
@@ -114,7 +117,7 @@ def alert_card(a: MarketAnalysis) -> str:
         "=" * 30,
         f"TF:         {a.timeframe}   ADX: {a.adx:.0f}",
         f"Price:      {fmt_price(a.price)}",
-        f"Market:     {mkt}",
+        f"Session:    {context_line}",
         "─" * 30,
         f"Entry:      {fmt_price(a.entry)}",
         f"SL:         {fmt_price(a.stop_loss)}",
@@ -124,12 +127,14 @@ def alert_card(a: MarketAnalysis) -> str:
         "─" * 30,
         f"Bias:       {a.bias}   Strength: {a.strength}",
     ]
+    if a.candle_pattern and a.candle_pattern != "None":
+        lines.append(f"Pattern:    {a.candle_pattern}")
     if a.verdict_reason:
-        lines.append(f"Reason: {a.verdict_reason[:48]}")
+        lines.append(f"Reason:     {a.verdict_reason[:46]}")
     lines += [
         "─" * 30,
-        "Trade tracking is active. Win/loss",
-        "result image sent on close.",
+        "Trade tracking active. Win/loss",
+        "image sent automatically on close.",
     ]
     return "<pre>" + "\n".join(lines) + "</pre>"
 
@@ -139,28 +144,33 @@ def analysis_card(a: MarketAnalysis) -> str:
     mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
     lines = [
         f"XAU/USD  |  {a.timeframe}",
-        "─" * 26,
+        "─" * 28,
         f"Price:   {fmt_price(a.price)}",
         f"Market:  {mkt}",
-        "─" * 26,
+        f"Session: {a.session or 'N/A'}",
+        "─" * 28,
         f"Bias:    {a.bias}",
+        f"HTF:     {a.htf_bias}",
         f"Trend:   {a.trend}   ({a.strength})",
         f"ADX:     {a.adx:.1f}   BB%B: {a.bb_pct:.1f}",
-        "─" * 26,
+        f"Votes:   BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+    ]
+    if a.candle_pattern and a.candle_pattern not in ("None", "Doji"):
+        lines.append(f"Candle:  {a.candle_pattern}")
+    lines += [
+        "─" * 28,
         f"Entry:   {fmt_price(a.entry)}",
         f"SL:      {fmt_price(a.stop_loss)}",
         f"TP1:     {fmt_price(a.tp1)}",
         f"TP2:     {fmt_price(a.tp2)}",
         f"R:R      1:{a.rr_ratio}",
-        "─" * 26,
+        "─" * 28,
         _verdict_block(a),
     ]
-    if a.action == "WAIT" and a.wait_reason:
-        pass  # already in verdict block
     if a.breakout:
-        lines.append("Pattern: Breakout detected")
+        lines.append("Note:    Breakout detected")
     if a.reversal:
-        lines.append("Pattern: Reversal signal")
+        lines.append("Note:    Reversal signal")
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
@@ -169,30 +179,36 @@ def signal_card(a: MarketAnalysis) -> str:
     if a.action == "WAIT":
         lines = [
             "TRADE SIGNAL  |  XAU/USD",
-            "─" * 26,
+            "─" * 28,
             "[ WAIT ]  No entry",
-            f"Reason:  {a.wait_reason or 'No clear setup'}",
-            "─" * 26,
-            f"Confidence: {a.confidence}%",
-            f"ADX:        {a.adx:.1f}",
+            f"Reason:  {(a.wait_reason or 'No clear setup')[:46]}",
+            "─" * 28,
+            f"Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            f"Session:    {a.session or 'N/A'}",
+            f"HTF Bias:   {a.htf_bias}",
+            f"Votes:      BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
         ]
         if not ms["is_open"]:
             lines.insert(2, f"! {ms['status_text']} — {ms['note']}")
     else:
         lines = [
             "TRADE SIGNAL  |  XAU/USD",
-            "─" * 26,
+            "─" * 28,
             f"[ {a.action} ]  {a.bias}  Confidence: {a.confidence}%",
-            "─" * 26,
+            "─" * 28,
             f"Entry:   {fmt_price(a.entry)}",
             f"SL:      {fmt_price(a.stop_loss)}",
             f"TP1:     {fmt_price(a.tp1)}",
             f"TP2:     {fmt_price(a.tp2)}",
             f"R:R      1:{a.rr_ratio}",
-            "─" * 26,
+            "─" * 28,
             f"ADX:     {a.adx:.1f}   TF: {a.timeframe}",
-            f"Reason:  {a.verdict_reason[:44]}",
+            f"Session: {a.session or 'N/A'}   HTF: {a.htf_bias}",
+            f"Votes:   BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
         ]
+        if a.candle_pattern and a.candle_pattern not in ("None", "Doji"):
+            lines.append(f"Pattern: {a.candle_pattern}")
+        lines.append(f"Reason:  {a.verdict_reason[:46]}")
         if not ms["is_open"]:
             lines.append(f"! {ms['status_text']} — {ms['note']}")
     return "<pre>" + "\n".join(lines) + "</pre>"
