@@ -265,6 +265,14 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"Alert scan: no signal (action={a.action})")
         return
 
+    # Session gate: don't broadcast during Asian session unless confidence is very high
+    if a.session == "Asian" and a.confidence < 82:
+        logger.info(
+            f"Alert scan: Asian session gate — conf={a.confidence}% < 82%. "
+            "Waiting for London open."
+        )
+        return
+
     signal_key = f"{a.action}:{tf}:{round(a.entry, 0)}"
     if not _should_send(tf, signal_key):
         return

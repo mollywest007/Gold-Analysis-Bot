@@ -655,12 +655,15 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     raw_conf    = max(buy_score, sell_score) / total_score if total_score > 0 else 0.5
     base_conf   = max(50, min(97, int(50 + raw_conf * 48)))
 
-    # Apply session multiplier
-    confidence  = max(50, min(97, int(base_conf * session_mult)))
+    # Session info is recorded but does NOT penalise confidence here.
+    # The alert scanner applies its own session gate before broadcasting.
+    confidence  = max(50, min(97, base_conf))
 
-    # ── Direction: require margin AND minimum 3/5 indicator votes ──
+    # ── Direction: require margin AND minimum indicator votes ──
+    # In a strong trend (ADX >= 30), 2/5 is enough — momentum is clearly established.
+    # In a weak/ranging market, require 3/5 for cleaner signals.
     margin       = abs(buy_score - sell_score)
-    min_votes    = 3   # at least 3 of 5 indicators must agree
+    min_votes    = 2 if adx >= 30 else 3
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
@@ -685,12 +688,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         htf_bullish = "Bullish" in htf_bias
         htf_bearish = "Bearish" in htf_bias
         if direction == "BUY" and htf_bearish:
-            # Counter-trend trade — reduce confidence by 15%, only allow if very strong
-            confidence = max(50, confidence - 15)
+            # "Slightly Bearish" = mild counter-trend (-8%), "Bearish" = strong (-15%)
+            cut = 8 if htf_bias.startswith("Slightly") else 15
+            confidence = max(50, confidence - cut)
             htf_align  = False
             htf_reason = f"Counter-trend: {htf} is {htf_bias}"
         elif direction == "SELL" and htf_bullish:
-            confidence = max(50, confidence - 15)
+            cut = 8 if htf_bias.startswith("Slightly") else 15
+            confidence = max(50, confidence - cut)
             htf_align  = False
             htf_reason = f"Counter-trend: {htf} is {htf_bias}"
         elif (direction == "BUY" and htf_bullish) or (direction == "SELL" and htf_bearish):

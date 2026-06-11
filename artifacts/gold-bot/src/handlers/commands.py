@@ -2,7 +2,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
-from src.analysis import analyze
+from src.analysis import get_analysis
 from src.alerts import is_subscribed, subscribe, unsubscribe, subscriber_count
 from src.market_hours import market_status
 from src.utils.formatting import (
@@ -40,6 +40,19 @@ def _is_market_open() -> bool:
     return market_status()["is_open"]
 
 
+def _age_note(tf: str) -> str:
+    """Return a one-line freshness note, e.g. 'Data: 45s ago' or '' if live fetch."""
+    from src.analysis import cache_age
+    age = cache_age(tf)
+    if age is None:
+        return ""
+    if age < 10:
+        return "Data: live"
+    if age < 60:
+        return f"Data: {age}s ago"
+    return f"Data: {age // 60}m ago"
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     name = update.effective_user.first_name or "Trader"
     await update.message.reply_text(
@@ -57,10 +70,11 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Scanning indicators...")
+    tf  = _get_tf(context)
+    note = _age_note(tf)
+    msg = await update.message.reply_text(f"Scanning...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(recommend_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"recommend error: {e}")
@@ -71,10 +85,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Analyzing XAU/USD...")
+    tf   = _get_tf(context)
+    note = _age_note(tf)
+    msg  = await update.message.reply_text(f"Analyzing...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(analysis_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"analyze error: {e}")
@@ -85,10 +100,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Scanning for trade setup...")
+    tf   = _get_tf(context)
+    note = _age_note(tf)
+    msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(signal_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"signal error: {e}")
@@ -99,10 +115,11 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Reading trend...")
+    tf   = _get_tf(context)
+    note = _age_note(tf)
+    msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(trend_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"trend error: {e}")
@@ -113,10 +130,11 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Calculating levels...")
+    tf   = _get_tf(context)
+    note = _age_note(tf)
+    msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(levels_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"levels error: {e}")
@@ -127,10 +145,11 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    msg = await update.message.reply_text("Generating outlook...")
+    tf   = _get_tf(context)
+    note = _age_note(tf)
+    msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
     try:
-        tf = _get_tf(context)
-        a  = await analyze(tf)
+        a = await get_analysis(tf)
         await msg.edit_text(outlook_card(a), parse_mode="HTML")
     except Exception as e:
         logger.error(f"outlook error: {e}")
