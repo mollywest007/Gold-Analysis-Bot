@@ -106,21 +106,6 @@
       "tp2_hit": false
     },
     {
-      "id": "1781218684",
-      "direction": "BUY",
-      "entry": 4233.2,
-      "sl": 4196.92,
-      "tp1": 4305.77,
-      "tp2": 4360.19,
-      "timeframe": "H1",
-      "confidence": 80,
-      "rr_ratio": 2.0,
-      "opened_at": 1781218684.0829308,
-      "status": "open",
-      "tp1_hit": false,
-      "tp2_hit": false
-    },
-    {
       "id": "1781219246",
       "direction": "SELL",
       "entry": 4227.4,
@@ -132,6 +117,21 @@
       "rr_ratio": 2.0,
       "opened_at": 1781219246.137053,
       "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false
+    },
+    {
+      "id": "1781224646",
+      "direction": "BUY",
+      "entry": 4228.3,
+      "sl": 4191.91,
+      "tp1": 4301.08,
+      "tp2": 4355.67,
+      "timeframe": "H1",
+      "confidence": 86,
+      "rr_ratio": 2.0,
+      "opened_at": 1781224646.5050366,
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false
     }
