@@ -149,6 +149,21 @@
       "status": "expired",
       "tp1_hit": false,
       "tp2_hit": false
+    },
+    {
+      "id": "1782220147",
+      "direction": "SELL",
+      "entry": 4111.4,
+      "sl": 4142.1,
+      "tp1": 4050.0,
+      "tp2": 4003.95,
+      "timeframe": "H1",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1782220147.0961263,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false
     }
   ]
 }
