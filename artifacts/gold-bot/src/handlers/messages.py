@@ -65,6 +65,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             tf = _get_tf(context)
             a = await analyze(tf)
             await msg.edit_text(analysis_card(a), parse_mode="HTML")
+            # Auto-follow with signal if there is an actionable entry
+            if a.action in ("BUY", "SELL"):
+                await update.message.reply_text(signal_card(a), parse_mode="HTML")
         except Exception as e:
             logger.error(f"msg analyze error: {e}")
             await msg.edit_text("Analysis failed. Please try again.")

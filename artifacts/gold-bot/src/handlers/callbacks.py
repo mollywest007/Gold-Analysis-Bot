@@ -125,6 +125,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             a = await analyze(tf)
             await query.edit_message_text(analysis_card(a), parse_mode="HTML")
+            # Auto-follow with signal if there is an actionable entry
+            if a.action in ("BUY", "SELL"):
+                await query.message.reply_text(signal_card(a), parse_mode="HTML")
         except Exception as e:
             logger.error(f"callback analyze: {e}")
             await query.edit_message_text("Analysis failed. Please try again.")
