@@ -161,6 +161,21 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1782220147.0961263,
+      "status": "tp2_hit",
+      "tp1_hit": false,
+      "tp2_hit": true
+    },
+    {
+      "id": "1782378598",
+      "direction": "SELL",
+      "entry": 3994.0,
+      "sl": 4022.19,
+      "tp1": 3937.62,
+      "tp2": 3895.34,
+      "timeframe": "H1",
+      "confidence": 91,
+      "rr_ratio": 2.0,
+      "opened_at": 1782378598.6156378,
       "status": "open",
       "tp1_hit": false,
       "tp2_hit": false

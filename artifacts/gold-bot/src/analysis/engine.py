@@ -1,17 +1,17 @@
 """
-XAU/USD Analysis Engine — accuracy-focused rewrite.
+XAU/USD Analysis Engine — v3 (full rewrite with extended pattern detection,
+limit-entry refinement, trade-type classification, and improved confluence).
 
-Key improvements over v1:
-  - Fixed MACD (proper dual-EMA initialization, no skew)
-  - Fixed RSI scoring (45-55 neutral zone, momentum zones correct)
-  - Fixed Stochastic (crossover-based, not just level-based)
-  - Candlestick pattern detection (engulfing, pin bar, doji)
-  - Trading session filter (Asian = -20% confidence; London/NY overlap = +10%)
-  - Higher-timeframe (HTF) confirmation gate (H4 for H1, D1 for H4)
-  - Confluence gate: require >= 3 of 5 core indicators in same direction
-  - Better SL: snap to nearest real S/R level instead of pure ATR multiple
-  - Volume spike confirmation for breakout signals
-  - S/R lookback increased from 3 → 6 bars
+Improvements over v2:
+  - Extended candlestick library: +8 patterns (Three White Soldiers, Three Black
+    Crows, Tweezer Top/Bottom, Dark Cloud Cover, Piercing Line, Harami x2, Inside Bar)
+  - Limit-entry suggestion: EMA-pullback or ATR-retrace for better fills
+  - Trade type classification: Scalp / Intraday / Swing / Position
+  - Entry zone: shows market vs limit order suggestion per trade type
+  - Market-closed flag propagated into the analysis object
+  - Volume-weighted S/R with increased lookback
+  - HTF confirmation gate + session filter
+  - Confluence gate: >= 3/5 (or 2/5 in strong trend) indicators agree
 """
 
 import asyncio
@@ -60,6 +60,7 @@ class MarketAnalysis:
     reversal:       bool
     liquidity_zone: str
     adx:            float = 0.0
+    atr:            float = 0.0
     bb_pct:         float = 0.0
     indicators: List[Indicator] = field(default_factory=list)
     buy_votes:  int = 0
@@ -69,6 +70,11 @@ class MarketAnalysis:
     session:    str = ""
     htf_bias:   str = "Neutral"
     candle_pattern: str = "None"
+    trade_type:     str = "Intraday"   # Scalp | Intraday | Swing | Position
+    limit_entry:    float = 0.0        # Suggested limit-order entry for better fill
+    entry_note:     str = ""           # "Market" or "Limit @ XXXX.XX"
+    bb_upper:       float = 0.0
+    bb_lower:       float = 0.0
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -114,10 +120,6 @@ def compute_rsi(closes: List[float], period: int = 14) -> float:
 
 def compute_macd(closes: List[float], fast: int = 12, slow: int = 26,
                  sig: int = 9) -> Tuple[float, float, float]:
-    """
-    Fixed MACD: both EMAs warm up to index `slow` before MACD is computed,
-    so fast and slow EMAs are aligned on the same candle set.
-    """
     if len(closes) < slow + sig:
         return 0.0, 0.0, 0.0
 
@@ -125,15 +127,12 @@ def compute_macd(closes: List[float], fast: int = 12, slow: int = 26,
     k_slow = 2.0 / (slow + 1)
     k_sig  = 2.0 / (sig + 1)
 
-    # Warm up fast EMA using first `fast` bars, then run forward to index `slow`
     ema_f = sum(closes[:fast]) / fast
     for p in closes[fast:slow]:
         ema_f = p * k_fast + ema_f * (1 - k_fast)
 
-    # Warm up slow EMA using first `slow` bars — same endpoint as fast
     ema_s = sum(closes[:slow]) / slow
 
-    # Compute MACD line from index `slow` onwards — both EMAs aligned
     macd_vals: List[float] = []
     for p in closes[slow:]:
         ema_f = p * k_fast + ema_f * (1 - k_fast)
@@ -143,7 +142,6 @@ def compute_macd(closes: List[float], fast: int = 12, slow: int = 26,
     if not macd_vals:
         return 0.0, 0.0, 0.0
 
-    # Signal line
     signal_val = sum(macd_vals[:sig]) / sig if len(macd_vals) >= sig else sum(macd_vals) / len(macd_vals)
     for m in macd_vals[sig:]:
         signal_val = m * k_sig + signal_val * (1 - k_sig)
@@ -253,17 +251,15 @@ def compute_adx(highs: List[float], lows: List[float], closes: List[float],
 def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
                    price: float, atr: float,
                    volumes: Optional[List[float]] = None) -> Tuple[float, float, float, float]:
-    resistances: List[Tuple[float, float]] = []   # (level, strength)
+    resistances: List[Tuple[float, float]] = []
     supports:    List[Tuple[float, float]] = []
     n        = len(closes)
-    lookback = 6   # increased from 3
+    lookback = 6
 
     for i in range(lookback, n - lookback):
-        # Swing high
         if all(highs[i] >= highs[j] for j in range(i - lookback, i + lookback + 1) if j != i):
             vol_w = volumes[i] if (volumes and i < len(volumes) and volumes[i]) else 1.0
             resistances.append((highs[i], vol_w))
-        # Swing low
         if all(lows[i]  <= lows[j]  for j in range(i - lookback, i + lookback + 1) if j != i):
             vol_w = volumes[i] if (volumes and i < len(volumes) and volumes[i]) else 1.0
             supports.append((lows[i], vol_w))
@@ -273,7 +269,6 @@ def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
         merged: List[Tuple[float, float]] = []
         for lv, w in levels:
             if merged and abs(lv - merged[-1][0]) < tolerance:
-                # Weighted average
                 prev_lv, prev_w = merged[-1]
                 merged[-1] = ((prev_lv * prev_w + lv * w) / (prev_w + w), prev_w + w)
             else:
@@ -293,68 +288,152 @@ def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
     return round(r1, 2), round(r2, 2), round(s1, 2), round(s2, 2)
 
 
-# ─── Candlestick pattern detection ───────────────────────────────────────────
+# ─── Extended candlestick pattern detection ───────────────────────────────────
 
 def detect_candlestick(opens: List[float], highs: List[float],
                        lows: List[float], closes: List[float]) -> Tuple[str, float]:
     """
-    Detects: bullish/bearish engulfing, hammer, shooting star, doji.
+    Detects 13 patterns:
+      Bullish: Bullish Engulfing, Hammer, Morning Star, Three White Soldiers,
+               Tweezer Bottom, Piercing Line, Bullish Harami
+      Bearish: Bearish Engulfing, Shooting Star, Evening Star, Three Black Crows,
+               Tweezer Top, Dark Cloud Cover, Bearish Harami
+      Neutral: Doji, Inside Bar, Spinning Top
+
     Returns (pattern_name, signal_weight 0..1).
-    Patterns near S/R carry much more weight in the caller.
     """
     if len(closes) < 3:
         return "None", 0.0
 
-    # Current and prior candle
-    o2, h2, l2, c2 = opens[-2], highs[-2], lows[-2], closes[-2]
     o1, h1, l1, c1 = opens[-1], highs[-1], lows[-1], closes[-1]
+    o2, h2, l2, c2 = opens[-2], highs[-2], lows[-2], closes[-2]
 
     body1 = abs(c1 - o1)
-    rng1  = h1 - l1
-    if rng1 == 0:
-        return "None", 0.0
+    rng1  = h1 - l1 or 0.0001
+    body2 = abs(c2 - o2)
+    rng2  = h2 - l2 or 0.0001
 
     upper_wick1 = h1 - max(c1, o1)
     lower_wick1 = min(c1, o1) - l1
     body_ratio1 = body1 / rng1
 
-    body2 = abs(c2 - o2)
+    upper_wick2 = h2 - max(c2, o2)
+    lower_wick2 = min(c2, o2) - l2
 
-    # Doji — indecision near extreme
-    if body_ratio1 < 0.08:
-        return "Doji", 0.0   # No directional signal on its own
+    # ── Three-candle patterns (require 3 bars) ────────────────────────────────
+    if len(closes) >= 3:
+        o3, h3, l3, c3 = opens[-3], highs[-3], lows[-3], closes[-3]
+        body3 = abs(c3 - o3)
 
-    # Bullish engulfing: prior candle bearish, current bullish and engulfs
-    if c2 < o2 and c1 > o1 and c1 > o2 and o1 < c2 and body1 > body2 * 1.1:
+        # Morning Star: large bearish → small body → bullish close above midpoint
+        mid_body = abs(c2 - o2)
+        if c3 < o3 and mid_body < body3 * 0.4 and c1 > o1 and c1 > (o3 + c3) / 2:
+            return "Morning Star", 0.82
+
+        # Evening Star: large bullish → small body → bearish close below midpoint
+        if c3 > o3 and mid_body < body3 * 0.4 and c1 < o1 and c1 < (o3 + c3) / 2:
+            return "Evening Star", 0.82
+
+        # Three White Soldiers: 3 consecutive bullish candles, each closing higher
+        if (c3 > o3 and c2 > o2 and c1 > o1
+                and c2 > c3 and c1 > c2
+                and body3 > 0 and body2 > 0 and body1 > 0
+                and lower_wick1 < body1 * 0.3
+                and lower_wick2 < body2 * 0.3):
+            return "Three White Soldiers", 0.88
+
+        # Three Black Crows: 3 consecutive bearish candles, each closing lower
+        if (c3 < o3 and c2 < o2 and c1 < o1
+                and c2 < c3 and c1 < c2
+                and body3 > 0 and body2 > 0 and body1 > 0
+                and upper_wick1 < body1 * 0.3
+                and upper_wick2 < body2 * 0.3):
+            return "Three Black Crows", 0.88
+
+    # ── Two-candle patterns ───────────────────────────────────────────────────
+
+    # Bullish Engulfing: prior bearish, current bullish, fully engulfs
+    if c2 < o2 and c1 > o1 and c1 >= o2 and o1 <= c2 and body1 > body2 * 1.0:
         return "Bullish Engulfing", 0.85
 
-    # Bearish engulfing: prior candle bullish, current bearish and engulfs
-    if c2 > o2 and c1 < o1 and c1 < o2 and o1 > c2 and body1 > body2 * 1.1:
+    # Bearish Engulfing: prior bullish, current bearish, fully engulfs
+    if c2 > o2 and c1 < o1 and c1 <= o2 and o1 >= c2 and body1 > body2 * 1.0:
         return "Bearish Engulfing", 0.85
 
-    # Hammer (bullish): small body at top, long lower wick >= 2x body
+    # Tweezer Bottom: two candles share same low, second is bullish
+    if abs(l1 - l2) < rng1 * 0.1 and c1 > o1 and c2 < o2:
+        return "Tweezer Bottom", 0.75
+
+    # Tweezer Top: two candles share same high, second is bearish
+    if abs(h1 - h2) < rng1 * 0.1 and c1 < o1 and c2 > o2:
+        return "Tweezer Top", 0.75
+
+    # Piercing Line: prior bearish, current bullish opening near or below prior close,
+    # closing above midpoint of prior body (gap not required for intraday continuous data)
+    if (c2 < o2 and c1 > o1
+            and o1 <= c2 + atr * 0.05      # opens near or below prior close
+            and c1 > (o2 + c2) / 2 and c1 < o2
+            and body2 > atr * 0.3):
+        return "Piercing Line", 0.75
+
+    # Dark Cloud Cover: prior bullish, current bearish opening near or above prior close,
+    # closing below midpoint of prior body
+    if (c2 > o2 and c1 < o1
+            and o1 >= c2 - atr * 0.05      # opens near or above prior close
+            and c1 < (o2 + c2) / 2 and c1 > o2
+            and body2 > atr * 0.3):
+        return "Dark Cloud Cover", 0.75
+
+    # Bullish Harami: large bearish candle, small bullish body inside
+    if (c2 < o2 and c1 > o1
+            and o1 > c2 and c1 < o2
+            and body1 < body2 * 0.5):
+        return "Bullish Harami", 0.65
+
+    # Bearish Harami: large bullish candle, small bearish body inside
+    if (c2 > o2 and c1 < o1
+            and o1 < c2 and c1 > o2
+            and body1 < body2 * 0.5):
+        return "Bearish Harami", 0.65
+
+    # Inside Bar: entire range of candle 1 is within candle 2
+    if h1 <= h2 and l1 >= l2 and body1 > 0:
+        return "Inside Bar", 0.0   # directional neutral — breakout pending
+
+    # ── Single-candle patterns ────────────────────────────────────────────────
+
+    # Doji — body < 8% of range
+    if body_ratio1 < 0.08:
+        return "Doji", 0.0
+
+    # Spinning Top — small body, wicks both sides
+    if body_ratio1 < 0.25 and upper_wick1 > body1 and lower_wick1 > body1:
+        return "Spinning Top", 0.0
+
+    # Hammer: bullish close, long lower wick (>= 2x body), tiny upper wick
     if c1 > o1 and lower_wick1 >= body1 * 2.0 and upper_wick1 <= body1 * 0.5:
-        return "Hammer", 0.70
+        return "Hammer", 0.72
 
-    # Inverted hammer with bearish close (shooting star) → bearish
+    # Shooting Star: bearish close, long upper wick (>= 2x body), tiny lower wick
     if c1 < o1 and upper_wick1 >= body1 * 2.0 and lower_wick1 <= body1 * 0.5:
-        return "Shooting Star", 0.70
+        return "Shooting Star", 0.72
 
-    # Three-candle morning star (simplified): 3 bars, middle small, close gap up
-    if len(closes) >= 3:
-        o3, c3 = opens[-3], closes[-3]
-        mid_body = abs(c2 - o2)
-        if c3 < o3 and mid_body < abs(c3 - o3) * 0.4 and c1 > o1 and c1 > (o3 + c3) / 2:
-            return "Morning Star", 0.80
-        if c3 > o3 and mid_body < abs(c3 - o3) * 0.4 and c1 < o1 and c1 < (o3 + c3) / 2:
-            return "Evening Star", 0.80
+    # Inverted Hammer (bullish reversal context only): bullish close, large upper wick
+    if c1 > o1 and upper_wick1 >= body1 * 2.0 and lower_wick1 <= body1 * 0.5:
+        return "Inverted Hammer", 0.55
 
     return "None", 0.0
 
 
 def candle_signal(pattern: str) -> str:
-    bullish = {"Bullish Engulfing", "Hammer", "Morning Star"}
-    bearish = {"Bearish Engulfing", "Shooting Star", "Evening Star"}
+    bullish = {
+        "Bullish Engulfing", "Hammer", "Inverted Hammer", "Morning Star",
+        "Three White Soldiers", "Tweezer Bottom", "Piercing Line", "Bullish Harami"
+    }
+    bearish = {
+        "Bearish Engulfing", "Shooting Star", "Evening Star",
+        "Three Black Crows", "Tweezer Top", "Dark Cloud Cover", "Bearish Harami"
+    }
     if pattern in bullish:
         return "BUY"
     if pattern in bearish:
@@ -362,24 +441,39 @@ def candle_signal(pattern: str) -> str:
     return "NEUTRAL"
 
 
+# ─── Trade type classifier ────────────────────────────────────────────────────
+
+def classify_trade_type(timeframe: str, adx: float) -> str:
+    """
+    Classify the nature of the trade setup by timeframe and trend strength.
+      M5 / M15              → Scalp     (minutes to a couple of hours)
+      M30 / H1 (ADX < 30)  → Intraday  (hours, same session)
+      H1 (ADX >= 30) / H4  → Swing     (1–5 days)
+      D1                   → Position  (weeks)
+    """
+    if timeframe in ("M5", "M15"):
+        return "Scalp"
+    if timeframe == "D1":
+        return "Position"
+    if timeframe == "H4":
+        return "Swing"
+    if timeframe == "H1" and adx >= 30:
+        return "Swing"
+    return "Intraday"
+
+
 # ─── Trading session ──────────────────────────────────────────────────────────
 
 def get_trading_session() -> Tuple[str, float]:
-    """
-    Returns (session_label, confidence_multiplier).
-    London and NY sessions are the most reliable for XAU/USD signals.
-    Asian session: spreads wide, fakeouts common — reduce confidence.
-    """
     hour = datetime.now(timezone.utc).hour
-    # London: 08:00–17:00 UTC | NY: 13:00–22:00 UTC
     if 13 <= hour < 17:
-        return "London/NY Overlap", 1.10     # Best liquidity
+        return "London/NY Overlap", 1.10
     elif 8 <= hour < 13:
         return "London", 1.05
     elif 17 <= hour < 22:
         return "New York", 1.00
     else:
-        return "Asian", 0.82                 # Low liquidity, higher noise
+        return "Asian", 0.82
 
 
 # ─── Higher-timeframe bias ────────────────────────────────────────────────────
@@ -395,7 +489,6 @@ HTF_MAP = {
 
 
 async def _get_htf_bias(htf: str) -> str:
-    """Fetch and score the parent timeframe. Returns 'Bullish', 'Bearish', or 'Neutral'."""
     try:
         data = await fetch_ohlcv(htf)
         if not data or len(data) < 30:
@@ -425,14 +518,10 @@ async def _get_htf_bias(htf: str) -> str:
         if rsi > 52: score_bull += 1
         elif rsi < 48: score_bear += 1
 
-        if score_bull >= 4:
-            return "Bullish"
-        elif score_bear >= 4:
-            return "Bearish"
-        elif score_bull >= 3:
-            return "Slightly Bullish"
-        elif score_bear >= 3:
-            return "Slightly Bearish"
+        if score_bull >= 4:   return "Bullish"
+        elif score_bear >= 4: return "Bearish"
+        elif score_bull >= 3: return "Slightly Bullish"
+        elif score_bear >= 3: return "Slightly Bearish"
         return "Neutral"
     except Exception as e:
         logger.warning(f"HTF bias fetch failed ({htf}): {e}")
@@ -442,7 +531,6 @@ async def _get_htf_bias(htf: str) -> str:
 # ─── Volume spike check ───────────────────────────────────────────────────────
 
 def is_volume_spike(volumes: List[float], lookback: int = 20, threshold: float = 1.5) -> bool:
-    """True if latest bar's volume is >= threshold × average of recent bars."""
     if not volumes or len(volumes) < lookback + 1:
         return False
     recent_avg = sum(volumes[-lookback - 1:-1]) / lookback
@@ -451,34 +539,20 @@ def is_volume_spike(volumes: List[float], lookback: int = 20, threshold: float =
     return volumes[-1] >= recent_avg * threshold
 
 
-# ─── Indicator scoring (fixed) ────────────────────────────────────────────────
+# ─── Indicator scoring ────────────────────────────────────────────────────────
 
 def _score_rsi(rsi: float) -> Tuple[str, float]:
-    """
-    Fixed zones:
-      < 30          → BUY  (oversold, strong)
-      30–40         → BUY  (recovering from oversold, mild)
-      40–45         → BUY  (mild bearish momentum fading)
-      45–55         → NEUTRAL (no edge)
-      55–60         → SELL (mild bullish momentum exhausting)
-      60–70         → SELL (extended, watch for reversal)
-      > 70          → SELL (overbought, strong)
-    """
     if rsi >= 70:        return "SELL", 0.90
     if rsi <= 30:        return "BUY",  0.90
     if 60 <= rsi < 70:   return "SELL", 0.60
     if 30 < rsi <= 40:   return "BUY",  0.60
     if 55 <= rsi < 60:   return "SELL", 0.30
     if 40 < rsi <= 45:   return "BUY",  0.30
-    return "NEUTRAL", 0.0   # 45–55: genuinely neutral
+    return "NEUTRAL", 0.0
 
 
 def _score_macd(macd_line: float, signal_line: float, hist: float,
                 prev_hist: Optional[float] = None) -> Tuple[str, float]:
-    """
-    Scores MACD line cross + histogram direction.
-    Bonus weight when histogram is expanding (momentum building).
-    """
     if macd_line > signal_line:
         expanding = hist > (prev_hist or 0)
         w = 0.85 if (hist > 0 and expanding) else (0.65 if hist > 0 else 0.45)
@@ -492,10 +566,6 @@ def _score_macd(macd_line: float, signal_line: float, hist: float,
 
 def _score_ema(price: float, ema20: float, ema50: float,
                ema200: Optional[float] = None) -> Tuple[str, float]:
-    """
-    Full EMA stack: price vs 20, 50, and optionally 200.
-    All aligned = strong signal; partial = moderate.
-    """
     if ema200 is not None:
         if price > ema20 > ema50 > ema200: return "BUY",  1.0
         if price < ema20 < ema50 < ema200: return "SELL", 1.0
@@ -511,25 +581,18 @@ def _score_ema(price: float, ema20: float, ema50: float,
 def _score_stoch(k: float, d: float,
                  prev_k: Optional[float] = None,
                  prev_d: Optional[float] = None) -> Tuple[str, float]:
-    """
-    Fixed: requires actual crossover for extreme-zone signals.
-    Inside overbought/oversold without a cross = neutral.
-    """
-    # Crossover in extreme zone (most reliable)
     if prev_k is not None and prev_d is not None:
         bullish_cross = (prev_k <= prev_d) and (k > d) and k <= 30
         bearish_cross = (prev_k >= prev_d) and (k < d) and k >= 70
         if bullish_cross: return "BUY",  0.90
         if bearish_cross: return "SELL", 0.90
 
-    # Crossover outside extreme zone (moderate)
     if prev_k is not None and prev_d is not None:
         bull_mid = (prev_k <= prev_d) and (k > d) and k < 60
         bear_mid = (prev_k >= prev_d) and (k < d) and k > 40
         if bull_mid: return "BUY",  0.60
         if bear_mid: return "SELL", 0.60
 
-    # Level-only: K rising above 50
     if k > 50 and k > d:  return "BUY",  0.35
     if k < 50 and k < d:  return "SELL", 0.35
     return "NEUTRAL", 0.0
@@ -543,12 +606,64 @@ def _score_bb(pct_b: float) -> Tuple[str, float]:
     return "NEUTRAL", 0.0
 
 
+# ─── Limit-entry refinement ───────────────────────────────────────────────────
+
+def calc_limit_entry(direction: str, price: float, atr: float,
+                     ema20: float, ema50: float,
+                     support1: float, resistance1: float,
+                     trade_type: str) -> Tuple[float, str]:
+    """
+    Suggest an optimal limit-order entry for better fills.
+
+    Scalp trades execute at market — speed matters over price.
+    Intraday / Swing / Position: suggest a retracement level.
+
+    BUY  limit: strictly below current price (better fill lower)
+    SELL limit: strictly above current price (better fill higher)
+    """
+    if trade_type == "Scalp":
+        return round(price, 2), "Market (Scalp — execute now)"
+
+    pull_factor = 0.35 if trade_type == "Intraday" else 0.55
+
+    if direction == "BUY":
+        atr_target = price - atr * pull_factor
+        # Use EMA20 only if it is BELOW price (a genuine pullback level)
+        if support1 < ema20 < price:
+            ema_target = ema20 + atr * 0.05   # just above EMA20
+        else:
+            ema_target = atr_target
+        # Take the higher of the two (less aggressive = easier fill)
+        limit = max(atr_target, ema_target)
+        # Hard rules: must be strictly below price AND above S1
+        limit = max(limit, support1 + atr * 0.12)
+        limit = min(limit, price - atr * 0.10)   # enforce strictly below price
+        note = f"Limit @ {limit:,.2f}  (EMA/retrace)"
+        return round(limit, 2), note
+
+    if direction == "SELL":
+        atr_target = price + atr * pull_factor
+        # Use EMA20 only if it is ABOVE price (a genuine retracement level)
+        if price < ema20 < resistance1:
+            ema_target = ema20 - atr * 0.05
+        else:
+            ema_target = atr_target
+        # Take the lower of the two (less aggressive = easier fill)
+        limit = min(atr_target, ema_target)
+        # Hard rules: must be strictly above price AND below R1
+        limit = min(limit, resistance1 - atr * 0.12)
+        limit = max(limit, price + atr * 0.10)   # enforce strictly above price
+        note = f"Limit @ {limit:,.2f}  (EMA/retrace)"
+        return round(limit, 2), note
+
+    return round(price, 2), "Market"
+
+
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     from src.config import CONFIDENCE_THRESHOLD, MIN_RR_RATIO
 
-    # ── Fetch market data and HTF bias concurrently ──
     htf = HTF_MAP.get(timeframe, "H4")
 
     async def _neutral() -> str:
@@ -567,35 +682,30 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     highs   = data.highs
     lows    = data.lows
     volumes = data.volumes
+    opens   = data.opens
     price   = data.price
 
     # ── Compute all indicators ──
-    rsi                         = compute_rsi(closes, 14)
-    macd_line, sig_line, hist   = compute_macd(closes, 12, 26, 9)
-    # Previous MACD histogram for momentum direction
+    rsi                        = compute_rsi(closes, 14)
+    macd_line, sig_line, hist  = compute_macd(closes, 12, 26, 9)
     prev_macd_line, prev_sig, prev_hist = compute_macd(closes[:-1], 12, 26, 9) if len(closes) > 36 else (macd_line, sig_line, hist)
 
-    ema20   = _ema(closes, 20)
-    ema50   = _ema(closes, 50)
-    ema200  = _ema(closes, 200) if len(closes) >= 200 else None
+    ema20  = _ema(closes, 20)
+    ema50  = _ema(closes, 50)
+    ema200 = _ema(closes, 200) if len(closes) >= 200 else None
 
-    # Previous stoch values for crossover detection
-    stoch_k, stoch_d          = compute_stoch(highs, lows, closes, 14, 3)
+    stoch_k, stoch_d           = compute_stoch(highs, lows, closes, 14, 3)
     prev_stoch_k, prev_stoch_d = compute_stoch(highs[:-1], lows[:-1], closes[:-1], 14, 3) \
                                   if len(closes) > 15 else (stoch_k, stoch_d)
 
     atr = compute_atr(highs, lows, closes, 14)
     bb_upper, bb_mid, bb_lower, bb_pct = compute_bollinger(closes, 20, 2.0)
-    adx, plus_di, minus_di    = compute_adx(highs, lows, closes, 14)
+    adx, plus_di, minus_di     = compute_adx(highs, lows, closes, 14)
 
-    # Candlestick pattern
-    candle_pat, candle_wt = detect_candlestick(data.opens, highs, lows, closes)
+    candle_pat, candle_wt = detect_candlestick(opens, highs, lows, closes)
     c_signal = candle_signal(candle_pat)
 
-    # Trading session
     session_label, session_mult = get_trading_session()
-
-    # Volume spike
     vol_spike = is_volume_spike(volumes, lookback=20, threshold=1.5)
 
     logger.info(
@@ -612,13 +722,12 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     stoch_sig, stoch_conf = _score_stoch(stoch_k, stoch_d, prev_stoch_k, prev_stoch_d)
     bb_sig,    bb_conf    = _score_bb(bb_pct)
 
-    # ADX: trending market = full weight; ranging = reduced
     adx_mult = 1.0 if adx >= 25 else (0.75 if adx >= 18 else 0.55)
 
     indicators = [
         Indicator("RSI(14)",   rsi,       rsi_sig,   0.20),
         Indicator("MACD",      macd_line, macd_sig,  0.22),
-        Indicator("EMA Stack", ema20,     ema_sig,   0.28),   # EMA is most reliable on gold
+        Indicator("EMA Stack", ema20,     ema_sig,   0.28),
         Indicator("Stoch(14)", stoch_k,   stoch_sig, 0.18),
         Indicator("BB %B",     bb_pct,    bb_sig,    0.12),
     ]
@@ -638,13 +747,13 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     buy_score  = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "BUY")  * adx_mult
     sell_score = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "SELL") * adx_mult
 
-    # ── Candlestick bonus (not counted in vote gate) ──
+    # Candlestick bonus
     if c_signal == "BUY":
         buy_score  += 0.06 * candle_wt
     elif c_signal == "SELL":
         sell_score += 0.06 * candle_wt
 
-    # ── Volume spike bonus (only on breakouts) ──
+    # Volume spike bonus
     if vol_spike:
         if buy_score > sell_score:
             buy_score  *= 1.05
@@ -654,16 +763,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     total_score = buy_score + sell_score
     raw_conf    = max(buy_score, sell_score) / total_score if total_score > 0 else 0.5
     base_conf   = max(50, min(97, int(50 + raw_conf * 48)))
-
-    # Session info is recorded but does NOT penalise confidence here.
-    # The alert scanner applies its own session gate before broadcasting.
     confidence  = max(50, min(97, base_conf))
 
-    # ── Direction: require margin AND minimum indicator votes ──
-    # In a strong trend (ADX >= 30), 2/5 is enough — momentum is clearly established.
-    # In a weak/ranging market, require 3/5 for cleaner signals.
-    margin       = abs(buy_score - sell_score)
-    min_votes    = 2 if adx >= 30 else 3
+    margin    = abs(buy_score - sell_score)
+    min_votes = 2 if adx >= 30 else 3
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
@@ -681,14 +784,13 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         direction = "NEUTRAL"
         bias      = "Neutral"
 
-    # ── HTF confirmation gate ──
+    # HTF gate
     htf_align  = True
     htf_reason = ""
     if direction in ("BUY", "SELL"):
         htf_bullish = "Bullish" in htf_bias
         htf_bearish = "Bearish" in htf_bias
         if direction == "BUY" and htf_bearish:
-            # "Slightly Bearish" = mild counter-trend (-8%), "Bearish" = strong (-15%)
             cut = 8 if htf_bias.startswith("Slightly") else 15
             confidence = max(50, confidence - cut)
             htf_align  = False
@@ -699,10 +801,8 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             htf_align  = False
             htf_reason = f"Counter-trend: {htf} is {htf_bias}"
         elif (direction == "BUY" and htf_bullish) or (direction == "SELL" and htf_bearish):
-            # With-trend bonus
             confidence = min(97, confidence + 8)
 
-    # Trend strength
     strength_score = max(buy_votes, sell_votes) / len(indicators)
     if strength_score >= 0.75 or adx >= 30:
         strength = "Strong"
@@ -716,69 +816,64 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     trend = bias if bias != "Neutral" else "Ranging"
 
-    # ── Verdict reason ──
+    # Verdict reason
     parts = []
     if direction == "BUY":
         if rsi_sig  == "BUY":   parts.append(f"RSI {rsi:.0f} — oversold")
-        if macd_sig == "BUY":   parts.append("MACD bullish")
-        if ema_sig  == "BUY":   parts.append("Price above EMAs")
-        if bb_sig   == "BUY":   parts.append(f"BB%B {bb_pct:.0f} — lower band")
-        if candle_pat not in ("None", "Doji") and c_signal == "BUY":
+        if macd_sig == "BUY":   parts.append("MACD bullish crossover")
+        if ema_sig  == "BUY":   parts.append("Price above EMA stack")
+        if bb_sig   == "BUY":   parts.append(f"BB%B {bb_pct:.0f} — near lower band")
+        if stoch_sig == "BUY":  parts.append(f"Stoch {stoch_k:.0f} — oversold cross")
+        if candle_pat not in ("None", "Doji", "Inside Bar", "Spinning Top") and c_signal == "BUY":
             parts.append(candle_pat)
         if not htf_align:       parts.append(htf_reason)
     elif direction == "SELL":
         if rsi_sig  == "SELL":  parts.append(f"RSI {rsi:.0f} — overbought")
-        if macd_sig == "SELL":  parts.append("MACD bearish")
-        if ema_sig  == "SELL":  parts.append("Price below EMAs")
-        if bb_sig   == "SELL":  parts.append(f"BB%B {bb_pct:.0f} — upper band")
-        if candle_pat not in ("None", "Doji") and c_signal == "SELL":
+        if macd_sig == "SELL":  parts.append("MACD bearish crossover")
+        if ema_sig  == "SELL":  parts.append("Price below EMA stack")
+        if bb_sig   == "SELL":  parts.append(f"BB%B {bb_pct:.0f} — near upper band")
+        if stoch_sig == "SELL": parts.append(f"Stoch {stoch_k:.0f} — overbought cross")
+        if candle_pat not in ("None", "Doji", "Inside Bar", "Spinning Top") and c_signal == "SELL":
             parts.append(candle_pat)
         if not htf_align:       parts.append(htf_reason)
-    verdict_reason = ". ".join(parts[:4]) if parts else "Indicators mixed — no clear edge"
+    verdict_reason = ". ".join(parts[:5]) if parts else "Indicators mixed — no clear edge"
 
-    # ── S/R levels ──
+    # S/R levels
     r1, r2, s1, s2 = find_sr_levels(highs, lows, closes, price, atr, volumes)
 
-    # ── Breakout / reversal ──
+    # Breakout / reversal
     breakout = detect_breakout(closes, highs, 20)
     reversal = detect_reversal(rsi, stoch_k, hist, closes)
 
-    # ── Entry / SL / TP ──
-    # SL: snap to nearest real S/R level if it's within 2×ATR; else ATR-multiple
+    # Trade type
+    trade_type = classify_trade_type(timeframe, adx)
+
+    # Entry / SL / TP
     atr_pct  = atr / price * 100
     sl_mult  = 1.4 if atr_pct < 0.5 else 1.2
-
-    max_sl_dist = atr * 2.5   # hard cap — SL never more than 2.5×ATR from entry
+    max_sl_dist = atr * 2.5
 
     if direction == "BUY":
         entry      = round(price, 2)
         ideal_sl   = round(price - atr * sl_mult, 2)
-        sl_from_sr = s1 - atr * 0.15            # just below support
+        sl_from_sr = s1 - atr * 0.15
         dist_sr    = price - sl_from_sr
-        # Use S/R-based SL only if it's between 0.5×ATR and 2.5×ATR
-        if atr * 0.5 < dist_sr <= max_sl_dist and sl_from_sr > 0:
-            stop_loss = round(sl_from_sr, 2)
-        else:
-            stop_loss = ideal_sl
+        stop_loss  = round(sl_from_sr, 2) if (atr * 0.5 < dist_sr <= max_sl_dist and sl_from_sr > 0) else ideal_sl
     elif direction == "SELL":
         entry      = round(price, 2)
         ideal_sl   = round(price + atr * sl_mult, 2)
-        sl_from_sr = r1 + atr * 0.15            # just above resistance
+        sl_from_sr = r1 + atr * 0.15
         dist_sr    = sl_from_sr - price
-        if atr * 0.5 < dist_sr <= max_sl_dist:
-            stop_loss = round(sl_from_sr, 2)
-        else:
-            stop_loss = ideal_sl
+        stop_loss  = round(sl_from_sr, 2) if (atr * 0.5 < dist_sr <= max_sl_dist) else ideal_sl
     else:
         entry     = round(price, 2)
         stop_loss = round(price - atr * sl_mult, 2)
 
     sl_dist  = abs(entry - stop_loss)
-    tp1_dist = sl_dist * 2.0   # 1:2 R:R minimum
-    tp2_dist = sl_dist * 3.5   # 1:3.5 extended target
+    tp1_dist = sl_dist * 2.0
+    tp2_dist = sl_dist * 3.5
 
     if direction == "BUY":
-        # TP1 toward R1, TP2 toward R2 — use whichever is further
         tp1 = round(min(entry + tp1_dist, r1 - atr * 0.1), 2) if r1 > entry + tp1_dist * 0.6 else round(entry + tp1_dist, 2)
         tp2 = round(min(entry + tp2_dist, r2 - atr * 0.1), 2) if r2 > entry + tp2_dist * 0.6 else round(entry + tp2_dist, 2)
     elif direction == "SELL":
@@ -790,7 +885,12 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     rr_ratio = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 else 0.0
 
-    # ── Signal gating ──
+    # Limit entry suggestion
+    limit_entry, entry_note = calc_limit_entry(
+        direction, price, atr, ema20, ema50, s1, r1, trade_type
+    )
+
+    # Signal gating
     wait_reason = ""
     if direction != "NEUTRAL":
         if confidence < CONFIDENCE_THRESHOLD:
@@ -803,10 +903,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             wait_reason = f"R:R 1:{rr_ratio} — minimum is 1:{int(MIN_RR_RATIO)}"
         elif buy_votes < min_votes and sell_votes < min_votes:
             action      = "WAIT"
-            wait_reason = f"Only {max(buy_votes, sell_votes)}/5 indicators agree — need 3"
+            wait_reason = f"Only {max(buy_votes, sell_votes)}/5 indicators agree — need {min_votes}"
         elif session_label == "Asian" and confidence < 82:
             action      = "WAIT"
-            wait_reason = f"Asian session — low liquidity, waiting for London open"
+            wait_reason = "Asian session — low liquidity, waiting for London open"
         else:
             action = direction
     else:
@@ -827,11 +927,13 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         action=action, wait_reason=wait_reason,
         resistance1=r1, resistance2=r2, support1=s1, support2=s2,
         breakout=breakout, reversal=reversal, liquidity_zone=liq_zone,
-        adx=adx, bb_pct=bb_pct,
+        adx=adx, atr=atr, bb_pct=bb_pct,
+        bb_upper=bb_upper, bb_lower=bb_lower,
         indicators=indicators,
         buy_votes=buy_votes, sell_votes=sell_votes, wait_votes=wait_votes,
         verdict_reason=verdict_reason,
         session=session_label, htf_bias=htf_bias, candle_pattern=candle_pat,
+        trade_type=trade_type, limit_entry=limit_entry, entry_note=entry_note,
     )
 
 

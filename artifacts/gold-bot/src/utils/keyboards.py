@@ -12,11 +12,10 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def alerts_keyboard(subscribed: bool) -> InlineKeyboardMarkup:
-    label = "Turn OFF Alerts" if subscribed else "Turn ON Alerts"
+    label  = "Turn OFF Alerts" if subscribed else "Turn ON Alerts"
     action = "alerts:off" if subscribed else "alerts:on"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data=action)],
-        [InlineKeyboardButton("Back", callback_data="back:main")],
     ])
 
 
@@ -34,9 +33,8 @@ def settings_keyboard(current_tf: str) -> InlineKeyboardMarkup:
         tf_buttons.append(row)
 
     rows = [
-        [InlineKeyboardButton("Timeframe", callback_data="settings:tf_header")],
+        [InlineKeyboardButton("-- Timeframe --", callback_data="settings:tf_header")],
         *tf_buttons,
-        [InlineKeyboardButton("Back", callback_data="settings:back")],
     ]
     return InlineKeyboardMarkup(rows)
 

@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes, MessageHandler, filters, Application
 
 from src.analysis import analyze
 from src.alerts import is_subscribed, subscribe, unsubscribe
+from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
@@ -17,8 +18,36 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     return context.user_data.get("timeframe", "H1")
 
 
+def _is_market_open() -> bool:
+    return market_status()["is_open"]
+
+
+def _market_closed_reply() -> str:
+    ms = market_status()
+    lines = [
+        "MARKET CLOSED  |  XAU/USD",
+        "=" * 28,
+        f"Status:  {ms['status_text']}",
+        f"Info:    {ms['note']}",
+        "=" * 28,
+        "Gold futures trade:",
+        "Sun 6 PM  to  Fri 5 PM ET",
+        "Daily break: 5:00–6:00 PM ET",
+        "─" * 28,
+        "Analysis is only available",
+        "when the market is open.",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip().lower()
+
+    # ── Analysis commands — require market open ────────────────────────────────
+    if text in ("recommend", "analyze", "signal", "trend", "levels", "outlook"):
+        if not _is_market_open():
+            await update.message.reply_text(_market_closed_reply(), parse_mode="HTML")
+            return
 
     if text == "recommend":
         msg = await update.message.reply_text("Scanning indicators...")
@@ -84,9 +113,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chat_id = update.effective_chat.id
         subscribed = is_subscribed(chat_id)
         status = "ON" if subscribed else "OFF"
+        ms = market_status()
+        mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
         text_out = (
             "<b>Alerts</b>\n\n"
-            f"Status: <b>{status}</b>\n\n"
+            f"Status: <b>{status}</b>\n"
+            f"Market is currently <b>{mkt_status}</b> — {ms['note']}.\n\n"
             "When alerts are ON, you will receive automatic notifications whenever "
             "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
             "Checks run every 5 minutes. Alerts only fire when all conditions are met."
@@ -100,7 +132,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         text_out = (
             "<b>Settings</b>\n\n"
             f"Current Timeframe: <b>{tf}</b>\n\n"
-            "Select a timeframe to update your default analysis window."
+            "Select a timeframe to update your default analysis window.\n\n"
+            "<b>Trade types by timeframe:</b>\n"
+            "M5 / M15  —  Scalp\n"
+            "M30 / H1  —  Intraday\n"
+            "H4        —  Swing\n"
+            "D1        —  Position"
         )
         await update.message.reply_text(
             text_out, parse_mode="HTML", reply_markup=settings_keyboard(tf)

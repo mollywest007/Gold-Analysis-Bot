@@ -9,7 +9,7 @@ from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
 )
-from src.utils.keyboards import settings_keyboard, alerts_keyboard
+from src.utils.keyboards import settings_keyboard, alerts_keyboard, main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +21,17 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
 def _closed_text() -> str:
     ms = market_status()
     lines = [
-        "MARKET CLOSED",
+        "MARKET CLOSED  |  XAU/USD",
         "=" * 28,
         f"Status:  {ms['status_text']}",
         f"Info:    {ms['note']}",
         "=" * 28,
-        "Analysis is only available",
-        "when the market is open.",
-        "─" * 28,
         "Gold futures trade:",
         "Sun 6 PM  to  Fri 5 PM ET",
-        "Daily break: 5-6 PM ET",
+        "Daily break: 5:00–6:00 PM ET",
+        "─" * 28,
+        "Analysis is only available",
+        "when the market is open.",
     ]
     return "<pre>" + "\n".join(lines) + "</pre>"
 
@@ -49,10 +49,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "alerts:on":
         subscribe(update.effective_chat.id)
         ms  = market_status()
-        mkt = f"\nMarket is currently <b>{'OPEN' if ms['is_open'] else 'CLOSED'}</b> — {ms['note']}."
+        mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
+        mkt = f"Market is currently {mkt_status} — {ms['note']}."
         text = (
             "<b>Alerts</b>\n\n"
-            f"Status: <b>ON</b>{mkt}\n\n"
+            f"Status: <b>ON</b>\n"
+            f"{mkt}\n\n"
             "You will receive automatic notifications whenever a high-confidence "
             "BUY or SELL is detected. Alerts only fire during market hours."
         )
@@ -81,7 +83,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
         return
 
-    if data in ("settings:tf_header", "settings:back", "back:main"):
+    # ── Back / navigation ─────────────────────────────────────────────────────
+    if data in ("back:main", "settings:back"):
+        tf  = _get_tf(context)
+        ms  = market_status()
+        mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
+        text = (
+            f"Market: <b>{mkt_status}</b> — {ms['note']}\n\n"
+            f"Timeframe: <b>{tf}</b>\n\n"
+            "Use the menu below to continue."
+        )
+        try:
+            await query.edit_message_text(text, parse_mode="HTML")
+        except Exception:
+            pass   # message may be identical — Telegram rejects no-op edits
+        return
+
+    # ── Ignore header-only buttons ─────────────────────────────────────────────
+    if data in ("settings:tf_header",):
         return
 
     # ── All analysis callbacks — blocked when market is closed ─────────────────
