@@ -166,17 +166,17 @@
       "tp2_hit": true
     },
     {
-      "id": "1782378771",
+      "id": "1782389328",
       "direction": "SELL",
-      "entry": 3994.1,
-      "sl": 4020.68,
-      "tp1": 3940.94,
-      "tp2": 3901.07,
+      "entry": 3983.2,
+      "sl": 4008.44,
+      "tp1": 3932.72,
+      "tp2": 3894.86,
       "timeframe": "H1",
-      "confidence": 91,
+      "confidence": 89,
       "rr_ratio": 2.0,
-      "opened_at": 1782378771.7354736,
-      "status": "open",
+      "opened_at": 1782389328.6724327,
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false
     }

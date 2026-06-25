@@ -291,7 +291,8 @@ def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
 # ─── Extended candlestick pattern detection ───────────────────────────────────
 
 def detect_candlestick(opens: List[float], highs: List[float],
-                       lows: List[float], closes: List[float]) -> Tuple[str, float]:
+                       lows: List[float], closes: List[float],
+                       atr: float = 0.0) -> Tuple[str, float]:
     """
     Detects 13 patterns:
       Bullish: Bullish Engulfing, Hammer, Morning Star, Three White Soldiers,
@@ -542,67 +543,70 @@ def is_volume_spike(volumes: List[float], lookback: int = 20, threshold: float =
 # ─── Indicator scoring ────────────────────────────────────────────────────────
 
 def _score_rsi(rsi: float) -> Tuple[str, float]:
-    if rsi >= 70:        return "SELL", 0.90
-    if rsi <= 30:        return "BUY",  0.90
-    if 60 <= rsi < 70:   return "SELL", 0.60
-    if 30 < rsi <= 40:   return "BUY",  0.60
-    if 55 <= rsi < 60:   return "SELL", 0.30
-    if 40 < rsi <= 45:   return "BUY",  0.30
+    """Only score RSI at meaningful extremes — no weak 0.30 mid-zone noise."""
+    if rsi >= 70:          return "SELL", 0.90
+    if rsi <= 30:          return "BUY",  0.90
+    if 65 <= rsi < 70:     return "SELL", 0.70
+    if 30 < rsi <= 35:     return "BUY",  0.70
+    # 35–65: RSI is in neutral zone — do not cast a vote
     return "NEUTRAL", 0.0
 
 
 def _score_macd(macd_line: float, signal_line: float, hist: float,
                 prev_hist: Optional[float] = None) -> Tuple[str, float]:
-    if macd_line > signal_line:
-        expanding = hist > (prev_hist or 0)
-        w = 0.85 if (hist > 0 and expanding) else (0.65 if hist > 0 else 0.45)
-        return "BUY", w
-    if macd_line < signal_line:
-        expanding = hist < (prev_hist or 0)
-        w = 0.85 if (hist < 0 and expanding) else (0.65 if hist < 0 else 0.45)
-        return "SELL", w
+    """
+    Require histogram momentum — bare above/below signal line is not enough.
+    Histogram must be expanding (momentum building) for a strong vote.
+    """
+    if macd_line > signal_line and hist > 0:
+        expanding = prev_hist is not None and hist > prev_hist
+        return "BUY", 0.85 if expanding else 0.65
+    if macd_line < signal_line and hist < 0:
+        expanding = prev_hist is not None and hist < prev_hist
+        return "SELL", 0.85 if expanding else 0.65
+    # Crossover zone (macd above signal but hist still negative, or vice versa) = noise
     return "NEUTRAL", 0.0
 
 
 def _score_ema(price: float, ema20: float, ema50: float,
                ema200: Optional[float] = None) -> Tuple[str, float]:
+    """
+    Require a proper EMA stack — partial alignment gives no vote.
+    Price must be on the right side of both EMA20 and EMA50, and they must
+    be in the correct order (ema20 > ema50 for BUY, ema20 < ema50 for SELL).
+    """
     if ema200 is not None:
         if price > ema20 > ema50 > ema200: return "BUY",  1.0
         if price < ema20 < ema50 < ema200: return "SELL", 1.0
-        if price > ema50 > ema200:         return "BUY",  0.75
-        if price < ema50 < ema200:         return "SELL", 0.75
     if price > ema20 > ema50: return "BUY",  0.90
     if price < ema20 < ema50: return "SELL", 0.90
-    if price > ema50:         return "BUY",  0.50
-    if price < ema50:         return "SELL", 0.50
+    # Mixed EMA alignment (e.g. price above EMA50 but below EMA20) = chop = no vote
     return "NEUTRAL", 0.0
 
 
 def _score_stoch(k: float, d: float,
                  prev_k: Optional[float] = None,
                  prev_d: Optional[float] = None) -> Tuple[str, float]:
+    """
+    Only score confirmed crossovers in oversold/overbought zones.
+    Mid-zone stoch gives no vote — it's noise.
+    """
     if prev_k is not None and prev_d is not None:
-        bullish_cross = (prev_k <= prev_d) and (k > d) and k <= 30
-        bearish_cross = (prev_k >= prev_d) and (k < d) and k >= 70
-        if bullish_cross: return "BUY",  0.90
-        if bearish_cross: return "SELL", 0.90
-
-    if prev_k is not None and prev_d is not None:
-        bull_mid = (prev_k <= prev_d) and (k > d) and k < 60
-        bear_mid = (prev_k >= prev_d) and (k < d) and k > 40
-        if bull_mid: return "BUY",  0.60
-        if bear_mid: return "SELL", 0.60
-
-    if k > 50 and k > d:  return "BUY",  0.35
-    if k < 50 and k < d:  return "SELL", 0.35
+        # Bullish crossover from oversold (K crosses above D, both below 35)
+        if (prev_k <= prev_d) and (k > d) and k <= 35:
+            return "BUY",  0.90
+        # Bearish crossover from overbought (K crosses below D, both above 65)
+        if (prev_k >= prev_d) and (k < d) and k >= 65:
+            return "SELL", 0.90
+    # Mid-zone stoch (not oversold/overbought and not a clean crossover) = no vote
     return "NEUTRAL", 0.0
 
 
 def _score_bb(pct_b: float) -> Tuple[str, float]:
+    """Only score at genuine Bollinger Band extremes — ignore mid-band noise."""
     if pct_b > 95:  return "SELL", 0.85
     if pct_b < 5:   return "BUY",  0.85
-    if pct_b > 80:  return "SELL", 0.45
-    if pct_b < 20:  return "BUY",  0.45
+    # 5–95: BB%B in normal range — no vote (price can go anywhere from here)
     return "NEUTRAL", 0.0
 
 
@@ -702,7 +706,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     bb_upper, bb_mid, bb_lower, bb_pct = compute_bollinger(closes, 20, 2.0)
     adx, plus_di, minus_di     = compute_adx(highs, lows, closes, 14)
 
-    candle_pat, candle_wt = detect_candlestick(opens, highs, lows, closes)
+    candle_pat, candle_wt = detect_candlestick(opens, highs, lows, closes, atr)
     c_signal = candle_signal(candle_pat)
 
     session_label, session_mult = get_trading_session()
@@ -722,8 +726,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     stoch_sig, stoch_conf = _score_stoch(stoch_k, stoch_d, prev_stoch_k, prev_stoch_d)
     bb_sig,    bb_conf    = _score_bb(bb_pct)
 
-    adx_mult = 1.0 if adx >= 25 else (0.75 if adx >= 18 else 0.55)
-
+    # ── No adx_mult weighting — ADX is used as a hard gate below ──────────────
     indicators = [
         Indicator("RSI(14)",   rsi,       rsi_sig,   0.20),
         Indicator("MACD",      macd_line, macd_sig,  0.22),
@@ -744,21 +747,21 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     sell_votes = sum(1 for i in indicators if i.signal == "SELL")
     wait_votes = sum(1 for i in indicators if i.signal == "NEUTRAL")
 
-    buy_score  = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "BUY")  * adx_mult
-    sell_score = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "SELL") * adx_mult
+    buy_score  = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "BUY")
+    sell_score = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "SELL")
 
-    # Candlestick bonus
-    if c_signal == "BUY":
-        buy_score  += 0.06 * candle_wt
-    elif c_signal == "SELL":
-        sell_score += 0.06 * candle_wt
+    # Candlestick bonus — meaningful weight only for strong confirmed patterns
+    if c_signal == "BUY"  and candle_wt >= 0.75:
+        buy_score  += 0.10 * candle_wt
+    elif c_signal == "SELL" and candle_wt >= 0.75:
+        sell_score += 0.10 * candle_wt
 
-    # Volume spike bonus
+    # Volume spike bonus — confirms the move has real participation
     if vol_spike:
         if buy_score > sell_score:
-            buy_score  *= 1.05
+            buy_score  *= 1.08
         elif sell_score > buy_score:
-            sell_score *= 1.05
+            sell_score *= 1.08
 
     total_score = buy_score + sell_score
     raw_conf    = max(buy_score, sell_score) / total_score if total_score > 0 else 0.5
@@ -766,16 +769,16 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     confidence  = max(50, min(97, base_conf))
 
     margin    = abs(buy_score - sell_score)
-    min_votes = 2 if adx >= 30 else 3
+    MIN_VOTES = 3   # always require 3/5 — no exceptions
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
-    if buy_score > sell_score and margin > 0.03 and buy_votes >= min_votes:
+    if buy_score > sell_score and margin > 0.05 and buy_votes >= MIN_VOTES:
         direction = "BUY"
         bias      = "Bullish"
         if di_conf_buy:
             confidence = min(97, confidence + 5)
-    elif sell_score > buy_score and margin > 0.03 and sell_votes >= min_votes:
+    elif sell_score > buy_score and margin > 0.05 and sell_votes >= MIN_VOTES:
         direction = "SELL"
         bias      = "Bearish"
         if di_conf_sell:
@@ -784,24 +787,36 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         direction = "NEUTRAL"
         bias      = "Neutral"
 
-    # HTF gate
+    # ── HTF gate (hard block for strong misalignment, penalty for slight) ──────
     htf_align  = True
     htf_reason = ""
     if direction in ("BUY", "SELL"):
-        htf_bullish = "Bullish" in htf_bias
-        htf_bearish = "Bearish" in htf_bias
-        if direction == "BUY" and htf_bearish:
-            cut = 8 if htf_bias.startswith("Slightly") else 15
-            confidence = max(50, confidence - cut)
+        htf_strongly_bullish = htf_bias == "Bullish"
+        htf_slightly_bullish = htf_bias == "Slightly Bullish"
+        htf_strongly_bearish = htf_bias == "Bearish"
+        htf_slightly_bearish = htf_bias == "Slightly Bearish"
+        htf_bullish = htf_strongly_bullish or htf_slightly_bullish
+        htf_bearish = htf_strongly_bearish or htf_slightly_bearish
+
+        if direction == "BUY" and htf_strongly_bearish:
+            # Hard block — never fight a confirmed HTF downtrend
+            direction  = "NEUTRAL"
             htf_align  = False
-            htf_reason = f"Counter-trend: {htf} is {htf_bias}"
-        elif direction == "SELL" and htf_bullish:
-            cut = 8 if htf_bias.startswith("Slightly") else 15
-            confidence = max(50, confidence - cut)
+            htf_reason = f"Hard block: {htf} strongly Bearish — no longs"
+        elif direction == "SELL" and htf_strongly_bullish:
+            direction  = "NEUTRAL"
             htf_align  = False
-            htf_reason = f"Counter-trend: {htf} is {htf_bias}"
+            htf_reason = f"Hard block: {htf} strongly Bullish — no shorts"
+        elif direction == "BUY" and htf_slightly_bearish:
+            confidence = max(50, confidence - 12)
+            htf_align  = False
+            htf_reason = f"Counter-trend: {htf} Slightly Bearish"
+        elif direction == "SELL" and htf_slightly_bullish:
+            confidence = max(50, confidence - 12)
+            htf_align  = False
+            htf_reason = f"Counter-trend: {htf} Slightly Bullish"
         elif (direction == "BUY" and htf_bullish) or (direction == "SELL" and htf_bearish):
-            confidence = min(97, confidence + 8)
+            confidence = min(97, confidence + 8)   # reward alignment
 
     strength_score = max(buy_votes, sell_votes) / len(indicators)
     if strength_score >= 0.75 or adx >= 30:
@@ -848,26 +863,42 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     # Trade type
     trade_type = classify_trade_type(timeframe, adx)
 
-    # Entry / SL / TP
-    atr_pct  = atr / price * 100
-    sl_mult  = 1.4 if atr_pct < 0.5 else 1.2
-    max_sl_dist = atr * 2.5
+    # ── Entry / SL / TP ───────────────────────────────────────────────────────
+    # SL uses 2.0×–2.5× ATR so gold wicks don't stop us out before the move.
+    # Previous 1.2–1.4× SL was the primary cause of SL hits.
+    sl_mult = (
+        2.5 if timeframe in ("M5", "M15") else   # scalp: tighter but still respects wick
+        2.2 if timeframe in ("M30", "H1") else
+        2.0                                        # H4/D1: slower, wider is fine
+    )
+    max_sl_dist = atr * 3.5   # cap so SL isn't absurdly far from price
+
+    sl_min_dist = atr * sl_mult   # enforce this as the absolute floor for SL distance
 
     if direction == "BUY":
         entry      = round(price, 2)
-        ideal_sl   = round(price - atr * sl_mult, 2)
-        sl_from_sr = s1 - atr * 0.15
+        ideal_sl   = round(price - sl_min_dist, 2)
+        # Use S1 level only when it gives AT LEAST sl_mult × ATR room
+        sl_from_sr = s1 - atr * 0.20
         dist_sr    = price - sl_from_sr
-        stop_loss  = round(sl_from_sr, 2) if (atr * 0.5 < dist_sr <= max_sl_dist and sl_from_sr > 0) else ideal_sl
+        stop_loss  = (
+            round(sl_from_sr, 2)
+            if (dist_sr >= sl_min_dist and dist_sr <= max_sl_dist and sl_from_sr > 0)
+            else ideal_sl
+        )
     elif direction == "SELL":
         entry      = round(price, 2)
-        ideal_sl   = round(price + atr * sl_mult, 2)
-        sl_from_sr = r1 + atr * 0.15
+        ideal_sl   = round(price + sl_min_dist, 2)
+        sl_from_sr = r1 + atr * 0.20
         dist_sr    = sl_from_sr - price
-        stop_loss  = round(sl_from_sr, 2) if (atr * 0.5 < dist_sr <= max_sl_dist) else ideal_sl
+        stop_loss  = (
+            round(sl_from_sr, 2)
+            if (dist_sr >= sl_min_dist and dist_sr <= max_sl_dist)
+            else ideal_sl
+        )
     else:
         entry     = round(price, 2)
-        stop_loss = round(price - atr * sl_mult, 2)
+        stop_loss = round(price - sl_min_dist, 2)
 
     sl_dist  = abs(entry - stop_loss)
     tp1_dist = sl_dist * 2.0
@@ -890,10 +921,36 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         direction, price, atr, ema20, ema50, s1, r1, trade_type
     )
 
-    # Signal gating
+    # ── Signal gating — quality filters applied in priority order ────────────
     wait_reason = ""
-    if direction != "NEUTRAL":
-        if confidence < CONFIDENCE_THRESHOLD:
+
+    # Check for entry too close to opposing S/R (wall check)
+    near_resistance = direction == "BUY"  and (r1 - price) < atr * 0.5
+    near_support    = direction == "SELL" and (price - s1) < atr * 0.5
+
+    if direction != "NEUTRAL" and htf_reason and "Hard block" in htf_reason:
+        # Already forced to NEUTRAL above — just set the wait reason
+        action      = "WAIT"
+        wait_reason = htf_reason
+    elif direction != "NEUTRAL":
+        if adx < 20 and timeframe not in ("H4", "D1"):
+            # Ranging market — no reliable signals on short/medium TFs
+            action      = "WAIT"
+            wait_reason = f"ADX {adx:.1f} — market ranging, no clear trend"
+        elif adx < 15:
+            # Extremely low ADX even on H4/D1 = no trade
+            action      = "WAIT"
+            wait_reason = f"ADX {adx:.1f} — extreme chop, skipping all TFs"
+        elif near_resistance:
+            action      = "WAIT"
+            wait_reason = f"BUY entry within {atr*0.5:.1f} pts of resistance {r1:.2f} — too close to wall"
+        elif near_support:
+            action      = "WAIT"
+            wait_reason = f"SELL entry within {atr*0.5:.1f} pts of support {s1:.2f} — too close to wall"
+        elif session_label == "Asian" and timeframe in ("M5", "M15", "M30", "H1"):
+            action      = "WAIT"
+            wait_reason = "Asian session — low liquidity on short TF, wait for London open"
+        elif confidence < CONFIDENCE_THRESHOLD:
             action      = "WAIT"
             wait_reason = f"Confidence {confidence}% below {CONFIDENCE_THRESHOLD}% threshold"
             if htf_reason:
@@ -901,17 +958,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         elif rr_ratio < MIN_RR_RATIO:
             action      = "WAIT"
             wait_reason = f"R:R 1:{rr_ratio} — minimum is 1:{int(MIN_RR_RATIO)}"
-        elif buy_votes < min_votes and sell_votes < min_votes:
+        elif max(buy_votes, sell_votes) < MIN_VOTES:
             action      = "WAIT"
-            wait_reason = f"Only {max(buy_votes, sell_votes)}/5 indicators agree — need {min_votes}"
-        elif session_label == "Asian" and confidence < 82:
-            action      = "WAIT"
-            wait_reason = "Asian session — low liquidity, waiting for London open"
+            wait_reason = f"Only {max(buy_votes, sell_votes)}/5 indicators agree — need {MIN_VOTES}"
         else:
             action = direction
     else:
         action      = "WAIT"
-        wait_reason = verdict_reason or "Indicators mixed — no edge"
+        wait_reason = htf_reason or verdict_reason or "Indicators mixed — no edge"
 
     liq_zone = (
         f"{s1:.2f} — {round(s1 + atr, 2)}"
