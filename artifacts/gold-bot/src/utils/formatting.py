@@ -67,6 +67,47 @@ def _consensus_bar(a: MarketAnalysis) -> str:
     return f"[{bar}]\nBUY {b_pct}%   SELL {s_pct}%   WAIT {n_pct}%"
 
 
+_TF_MINUTES = {
+    "M5": 5, "M15": 15, "M30": 30,
+    "H1": 60, "H4": 240, "D1": 1440,
+}
+
+
+def _estimate_time(a: MarketAnalysis, target: float) -> str:
+    """
+    Estimate how long it should take price to reach `target` from entry.
+
+    Method: distance / ATR gives the number of candles of full-ATR movement needed.
+    Multiply by 1.5 to account for non-linear / retracement movement, then
+    multiply by candle duration in minutes.
+    Returns a human-readable string like '~15 min', '~2.5 hrs', '~3 days'.
+    """
+    atr = a.atr if a.atr and a.atr > 0 else None
+    if atr is None:
+        return "N/A"
+
+    dist = abs(target - a.entry)
+    if dist <= 0:
+        return "N/A"
+
+    candle_min = _TF_MINUTES.get(a.timeframe, 60)
+    candles    = (dist / atr) * 1.5       # 1.5x factor for real-world noise/retrace
+    minutes    = candles * candle_min
+
+    if minutes < 60:
+        return f"~{max(1, round(minutes))} min"
+    if minutes < 1440:
+        hrs = minutes / 60
+        if hrs < 2:
+            mins_rem = round((hrs - int(hrs)) * 60)
+            return f"~{int(hrs)}h {mins_rem}m" if mins_rem else f"~{int(hrs)}h"
+        return f"~{round(hrs, 1)}h"
+    days = minutes / 1440
+    if days < 7:
+        return f"~{round(days, 1)} days"
+    return f"~{round(days / 7, 1)} weeks"
+
+
 def _trade_type_label(a: MarketAnalysis) -> str:
     labels = {
         "Scalp":    "SCALP    (minutes–hours)",
@@ -102,6 +143,8 @@ def recommend_card(a: MarketAnalysis) -> str:
     ]
 
     if a.action in ("BUY", "SELL"):
+        t1 = _estimate_time(a, a.tp1)
+        t2 = _estimate_time(a, a.tp2)
         lines += [
             f"Entry:    {fmt_price(a.entry)}",
         ]
@@ -109,8 +152,8 @@ def recommend_card(a: MarketAnalysis) -> str:
             lines.append(f"Limit:    {fmt_price(a.limit_entry)}  *better fill")
         lines += [
             f"SL:       {fmt_price(a.stop_loss)}",
-            f"TP1:      {fmt_price(a.tp1)}",
-            f"TP2:      {fmt_price(a.tp2)}",
+            f"TP1:      {fmt_price(a.tp1)}  ({t1})",
+            f"TP2:      {fmt_price(a.tp2)}  ({t2})",
             f"R:R       1:{a.rr_ratio}",
             "─" * 30,
             f"Type:     {_trade_type_label(a)}",
@@ -151,14 +194,17 @@ def alert_card(a: MarketAnalysis) -> str:
         "─" * 30,
         f"Entry:      {fmt_price(a.entry)}",
     ]
+    t1 = _estimate_time(a, a.tp1)
+    t2 = _estimate_time(a, a.tp2)
     if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
         lines.append(f"Limit:      {fmt_price(a.limit_entry)}  *better fill")
     lines += [
         f"SL:         {fmt_price(a.stop_loss)}",
-        f"TP1:        {fmt_price(a.tp1)}",
-        f"TP2:        {fmt_price(a.tp2)}",
+        f"TP1:        {fmt_price(a.tp1)}  ({t1})",
+        f"TP2:        {fmt_price(a.tp2)}  ({t2})",
         f"R:R         1:{a.rr_ratio}",
         "─" * 30,
+        f"Type:       {_trade_type_label(a)}",
         f"Bias:       {a.bias}   Strength: {a.strength}",
     ]
     if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Inside Bar", "Spinning Top"):
@@ -194,11 +240,23 @@ def analysis_card(a: MarketAnalysis) -> str:
     ]
     if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry and a.action in ("BUY", "SELL"):
         lines.append(f"Limit:   {fmt_price(a.limit_entry)}  *better fill")
+    if a.action in ("BUY", "SELL"):
+        t1 = _estimate_time(a, a.tp1)
+        t2 = _estimate_time(a, a.tp2)
+        lines += [
+            f"SL:      {fmt_price(a.stop_loss)}",
+            f"TP1:     {fmt_price(a.tp1)}  ({t1})",
+            f"TP2:     {fmt_price(a.tp2)}  ({t2})",
+            f"R:R      1:{a.rr_ratio}",
+        ]
+    else:
+        lines += [
+            f"SL:      {fmt_price(a.stop_loss)}",
+            f"TP1:     {fmt_price(a.tp1)}",
+            f"TP2:     {fmt_price(a.tp2)}",
+            f"R:R      1:{a.rr_ratio}",
+        ]
     lines += [
-        f"SL:      {fmt_price(a.stop_loss)}",
-        f"TP1:     {fmt_price(a.tp1)}",
-        f"TP2:     {fmt_price(a.tp2)}",
-        f"R:R      1:{a.rr_ratio}",
         "─" * 30,
         _verdict_block(a),
     ]
@@ -244,12 +302,14 @@ def signal_card(a: MarketAnalysis) -> str:
             "─" * 30,
             f"Entry:   {fmt_price(a.entry)}",
         ]
+        t1 = _estimate_time(a, a.tp1)
+        t2 = _estimate_time(a, a.tp2)
         if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
             lines.append(f"Limit:   {fmt_price(a.limit_entry)}  *better fill")
         lines += [
             f"SL:      {fmt_price(a.stop_loss)}",
-            f"TP1:     {fmt_price(a.tp1)}",
-            f"TP2:     {fmt_price(a.tp2)}",
+            f"TP1:     {fmt_price(a.tp1)}  ({t1})",
+            f"TP2:     {fmt_price(a.tp2)}  ({t2})",
             f"R:R      1:{a.rr_ratio}",
             "─" * 30,
             f"ADX:     {a.adx:.1f}   TF: {a.timeframe}",
