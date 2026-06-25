@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11"]
+modules = ["nodejs-20", "python-3.11", "web"]
 
 [deployment]
 router = "application"
@@ -32,7 +32,7 @@ args = "cd artifacts/gold-bot && python main.py"
 outputType = "console"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
