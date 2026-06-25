@@ -488,6 +488,53 @@ def weekly_closed_recap_text() -> str:
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
+def news_card(items: list) -> str:
+    """Format fetched gold news headlines into a monospace card."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
+    lines = [
+        "GOLD NEWS  |  XAU/USD",
+        "=" * 32,
+        f"Updated: {now}",
+        "=" * 32,
+    ]
+    if not items:
+        lines += [
+            "No headlines available right now.",
+            "Try again in a few minutes.",
+        ]
+    else:
+        for i, item in enumerate(items, 1):
+            date_part = f"  [{item['date']}]" if item.get("date") else ""
+            # Wrap long titles at 34 chars
+            title = item.get("title", "")
+            words = title.split()
+            wrapped, line = [], ""
+            for w in words:
+                if len(line) + len(w) + 1 > 34:
+                    if line:
+                        wrapped.append(line)
+                    line = w
+                else:
+                    line = f"{line} {w}".strip()
+            if line:
+                wrapped.append(line)
+            first_line = f"{i}. {wrapped[0]}" if wrapped else f"{i}. {title}"
+            lines.append(first_line)
+            for extra in wrapped[1:]:
+                lines.append(f"   {extra}")
+            src = item.get("source", "")
+            lines.append(f"   {src}{date_part}")
+            if i < len(items):
+                lines.append("─" * 32)
+    lines += [
+        "=" * 32,
+        "Source: Yahoo Finance / RSS",
+        "Refreshes every 30 minutes.",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 def welcome_text(name: str) -> str:
     ms  = market_status()
     if ms["is_open"]:
@@ -511,6 +558,7 @@ def help_text() -> str:
         ("/trend",     "Current trend direction and strength"),
         ("/levels",    "Support, resistance, BB, and liquidity zones"),
         ("/outlook",   "Market outlook report"),
+        ("/news",      "Latest gold market headlines"),
         ("/alerts",    "Toggle automatic entry notifications"),
         ("/settings",  "Change timeframe"),
         ("/help",      "This message"),

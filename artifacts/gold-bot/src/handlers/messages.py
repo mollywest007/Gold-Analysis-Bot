@@ -7,7 +7,7 @@ from src.alerts import is_subscribed, subscribe, unsubscribe
 from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
-    outlook_card, recommend_card
+    outlook_card, recommend_card, news_card
 )
 from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
 
@@ -108,6 +108,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error(f"msg outlook error: {e}")
             await msg.edit_text("Outlook generation failed. Please try again.")
+
+    elif text == "news":
+        msg = await update.message.reply_text("Fetching gold headlines...")
+        try:
+            from src.news import fetch_gold_news
+            items = await fetch_gold_news()
+            await msg.edit_text(news_card(items), parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"msg news error: {e}")
+            await msg.edit_text("Could not fetch news right now. Try again shortly.")
 
     elif text == "alerts":
         chat_id = update.effective_chat.id

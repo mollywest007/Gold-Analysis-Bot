@@ -7,7 +7,7 @@ from src.alerts import is_subscribed, subscribe, unsubscribe, subscriber_count
 from src.market_hours import market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
-    trend_card, levels_card, outlook_card, recommend_card
+    trend_card, levels_card, outlook_card, recommend_card, news_card
 )
 from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
 
@@ -185,6 +185,17 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
 
 
+async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = await update.message.reply_text("Fetching gold headlines...")
+    try:
+        from src.news import fetch_gold_news
+        items = await fetch_gold_news()
+        await msg.edit_text(news_card(items), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"news error: {e}")
+        await msg.edit_text("Could not fetch news right now. Try again shortly.")
+
+
 def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("help",      cmd_help))
@@ -196,3 +207,4 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("outlook",   cmd_outlook))
     app.add_handler(CommandHandler("alerts",    cmd_alerts))
     app.add_handler(CommandHandler("settings",  cmd_settings))
+    app.add_handler(CommandHandler("news",      cmd_news))
