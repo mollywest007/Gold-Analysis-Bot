@@ -11,6 +11,7 @@ from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
     register_message_handlers,
+    register_photo_handlers,
 )
 from src.alerts import check_and_alert
 
@@ -66,6 +67,7 @@ def main() -> None:
 
     register_command_handlers(app)
     register_callback_handlers(app)
+    register_photo_handlers(app)
     register_message_handlers(app)
 
     # ── Jobs ──────────────────────────────────────────────────────────────────
