@@ -68,27 +68,29 @@ _SYSTEM_PROMPT = (
 )
 
 _USER_PROMPT = """\
-Analyse this XAU/USD chart screenshot and return a JSON object with EXACTLY these keys:
+This is a XAU/USD (Gold vs US Dollar) chart screenshot from a trading platform such as MetaTrader.
+Analyse it thoroughly as an expert gold technical analyst and return a JSON object with EXACTLY these keys:
 
 {
   "bias":           "BULLISH" | "BEARISH" | "NEUTRAL" | "RANGING",
   "confidence":     <integer 0-100>,
   "trend":          "UPTREND" | "DOWNTREND" | "SIDEWAYS",
-  "pattern":        "<chart pattern name, e.g. Bull Flag, Double Top, or 'None'>",
-  "candlestick":    "<candlestick pattern at the last candle, or 'None'>",
-  "timeframe":      "<detected timeframe, e.g. M15, H1, H4, or 'Unknown'>",
-  "key_support":    [<up to 3 support price levels as floats>],
-  "key_resistance": [<up to 3 resistance price levels as floats>],
-  "entry":          <suggested entry price as float, or null>,
-  "stop_loss":      <suggested SL price as float, or null>,
-  "take_profit_1":  <TP1 price as float, or null>,
-  "take_profit_2":  <TP2 price as float, or null>,
-  "summary":        "<2-3 sentence technical assessment>"
+  "pattern":        "<chart pattern name, e.g. Bull Flag, Double Top, Descending Channel, or 'None'>",
+  "candlestick":    "<candlestick pattern visible at the most recent candle(s), or 'None'>",
+  "timeframe":      "<timeframe shown on the chart, e.g. M15, H1, H4, or 'Unknown'>",
+  "key_support":    [<up to 3 support price levels visible on the chart as floats>],
+  "key_resistance": [<up to 3 resistance price levels visible on the chart as floats>],
+  "entry":          <suggested entry price based on the chart as float, or null>,
+  "stop_loss":      <suggested stop loss price as float, or null>,
+  "take_profit_1":  <first take profit target as float, or null>,
+  "take_profit_2":  <second take profit target as float, or null>,
+  "summary":        "<2-3 sentence technical assessment of the chart>"
 }
 
 Rules:
-- All prices must be realistic XAU/USD values (typically 1800-3500).
-- If a chart feature is unclear, use null or empty list rather than guessing wildly.
+- Use the EXACT price values visible on the chart's Y-axis (right side). Gold (XAU/USD) can trade anywhere from 1500 to 5000+ — do not reject any prices in that range.
+- Read the timeframe label directly from the chart image (e.g. "H1", "M15").
+- If a feature is genuinely unclear, use null or [] rather than guessing.
 - Do NOT output any text outside the JSON object.
 """
 
