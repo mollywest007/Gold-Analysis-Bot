@@ -120,7 +120,7 @@ async def analyse_chart_bytes(
         ],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 800,
+            "maxOutputTokens": 2048,
         },
     }
 
@@ -137,9 +137,14 @@ async def analyse_chart_bytes(
                 raise RuntimeError(f"Gemini API error {resp.status}: {body[:300]}")
             data = await resp.json()
 
-    # Extract text from response
+    # Extract text — gemini-2.5-flash may include a "thought" part before the
+    # actual JSON output, so scan all parts for the one that contains JSON.
     try:
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+        parts = data["candidates"][0]["content"]["parts"]
+        raw_text = next(
+            (p["text"] for p in parts if p.get("text", "").strip().startswith("{")),
+            parts[-1].get("text", ""),
+        )
     except (KeyError, IndexError) as e:
         raise ValueError(f"Unexpected Gemini response shape: {data}") from e
 
