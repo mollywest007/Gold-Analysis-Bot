@@ -26,9 +26,13 @@ _client: Optional[AsyncOpenAI] = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("GOLD", "")
+        api_key = (
+            os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("GOLD_KEY")
+            or os.environ.get("GOLD", "")
+        )
         if not api_key:
-            raise RuntimeError("OpenAI API key is not set (checked OPENAI_API_KEY and GOLD).")
+            raise RuntimeError("OpenAI API key is not set (checked OPENAI_API_KEY, GOLD_KEY, GOLD).")
         _client = AsyncOpenAI(api_key=api_key)
     return _client
 
