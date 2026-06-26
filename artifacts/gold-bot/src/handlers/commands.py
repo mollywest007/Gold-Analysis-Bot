@@ -199,6 +199,53 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.edit_text("Could not fetch news right now. Try again shortly.")
 
 
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch live OHLCV data, render a chart, analyse it with Gemini Vision."""
+    import html
+    from src.chart_generator import generate_chart_image
+    from src.chart_analysis import analyse_chart_bytes, ChartAnalysisResult
+    from src.handlers.photos import _result_card
+    from telegram import InputFile
+    import io
+
+    tf = _get_tf(context)
+    msg = await update.message.reply_text(
+        f"Fetching live XAU/USD {tf} data and generating chart...",
+        parse_mode="HTML",
+    )
+
+    try:
+        # 1. Generate chart image from live data
+        img_bytes = await generate_chart_image(tf)
+        if img_bytes is None:
+            await msg.edit_text("Could not fetch market data right now. Try again shortly.")
+            return
+
+        # 2. Send the chart image
+        await update.message.reply_photo(
+            photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_chart.jpg"),
+            caption=f"XAU/USD {tf} — analysing with AI...",
+            parse_mode="HTML",
+        )
+
+        await msg.edit_text("Analysing chart with Gemini Vision... this may take 15-30 seconds.")
+
+        # 3. Analyse with Gemini Vision
+        result = await analyse_chart_bytes(img_bytes)
+
+        # 4. Send analysis card
+        await update.message.reply_text(_result_card(result), parse_mode="HTML")
+        await msg.delete()
+
+    except Exception as e:
+        logger.error(f"cmd_chart error: {e}", exc_info=True)
+        await msg.edit_text(
+            f"Chart analysis failed. Try again shortly.\n"
+            f"<i>Error: {html.escape(type(e).__name__)}</i>",
+            parse_mode="HTML",
+        )
+
+
 def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("help",      cmd_help))
@@ -211,3 +258,4 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("alerts",    cmd_alerts))
     app.add_handler(CommandHandler("settings",  cmd_settings))
     app.add_handler(CommandHandler("news",      cmd_news))
+    app.add_handler(CommandHandler("chart",     cmd_chart))
