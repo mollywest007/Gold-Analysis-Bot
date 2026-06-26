@@ -179,6 +179,21 @@
       "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false
+    },
+    {
+      "id": "1782395728",
+      "direction": "SELL",
+      "entry": 4011.4,
+      "sl": 4060.27,
+      "tp1": 3913.66,
+      "tp2": 3880.33,
+      "timeframe": "H1",
+      "confidence": 93,
+      "rr_ratio": 2.0,
+      "opened_at": 1782395728.0412765,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false
     }
   ]
 }
