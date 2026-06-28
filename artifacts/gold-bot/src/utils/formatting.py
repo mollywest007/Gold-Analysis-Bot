@@ -237,105 +237,337 @@ def analysis_card(a: MarketAnalysis) -> str:
 
 def _quality_label(q: str) -> str:
     return {
-        "A+": "A+  PREMIUM SETUP  (85%+ win rate)",
-        "A":  "A   HIGH QUALITY   (80%+ win rate)",
-        "B":  "B   STANDARD       (70%+ win rate)",
-        "C":  "C   MARGINAL       (monitor only)",
+        "A+": "A+  PREMIUM  (85%+ win rate)",
+        "A":  "A   QUALITY  (80%+ win rate)",
+        "B":  "B   STANDARD (70%+ win rate)",
+        "C":  "C   MARGINAL (no entry)",
     }.get(q, q)
 
 
-def recommend_card(a: MarketAnalysis) -> str:
-    ms = market_status()
+# ─── PART 1: Full professional market analysis ────────────────────────────────
+
+def pro_analysis_card(a: MarketAnalysis) -> str:
+    """
+    Step 1 of /recommend — the full institutional breakdown.
+    Shows everything the engine computed so the user understands
+    the market before seeing any entry.
+    """
+    ms  = market_status()
+    mkt = "LIVE" if ms["is_open"] else ms["status_text"]
+
+    # Describe what each indicator is saying in plain language
+    def _ind_verdict(ind) -> str:
+        if ind.signal == "BUY":
+            return "Bullish"
+        if ind.signal == "SELL":
+            return "Bearish"
+        return "Neutral"
+
+    # ADX trend strength description
+    if a.adx >= 40:
+        adx_desc = "Very Strong Trend"
+    elif a.adx >= 25:
+        adx_desc = "Trending"
+    elif a.adx >= 18:
+        adx_desc = "Weak Trend"
+    else:
+        adx_desc = "Ranging / Choppy"
+
+    # RSI description
+    if a.rsi_value >= 70:
+        rsi_desc = "Overbought"
+    elif a.rsi_value <= 30:
+        rsi_desc = "Oversold"
+    elif a.rsi_value >= 60:
+        rsi_desc = "Bullish territory"
+    elif a.rsi_value <= 40:
+        rsi_desc = "Bearish territory"
+    else:
+        rsi_desc = "Neutral zone"
+
+    # MACD description
+    macd_desc = "Bullish momentum" if a.macd_hist > 0 else "Bearish momentum"
+    if abs(a.macd_hist) < 0.1:
+        macd_desc = "Flat / crossing"
+
+    # Stoch description
+    if a.stoch_k_val >= 80:
+        stoch_desc = "Overbought"
+    elif a.stoch_k_val <= 20:
+        stoch_desc = "Oversold"
+    else:
+        stoch_desc = "Mid-range"
+
+    # BB description
+    if a.bb_pct >= 90:
+        bb_desc = "Near upper band — extended"
+    elif a.bb_pct <= 10:
+        bb_desc = "Near lower band — extended"
+    else:
+        bb_desc = f"{a.bb_pct:.0f}% of range"
+
+    # Di line interpretation
+    if a.plus_di > a.minus_di:
+        di_desc = "Buyers in control"
+    elif a.minus_di > a.plus_di:
+        di_desc = "Sellers in control"
+    else:
+        di_desc = "Balanced"
+
+    # HTF context sentence
+    htf_map = {"M5": "H1", "M15": "H1", "M30": "H4",
+                "H1": "H4", "H4": "D1", "D1": "D1"}
+    htf_tf = htf_map.get(a.timeframe, "HTF")
+    if a.htf_bias in ("Bullish", "Slightly Bullish"):
+        htf_desc = f"{htf_tf} is {a.htf_bias} — macro supports longs"
+    elif a.htf_bias in ("Bearish", "Slightly Bearish"):
+        htf_desc = f"{htf_tf} is {a.htf_bias} — macro supports shorts"
+    else:
+        htf_desc = f"{htf_tf} is Neutral — no macro edge"
+
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
-        "║   XAU/USD  RECOMMENDATION        ║",
+        "║   XAU/USD  FULL ANALYSIS  Pt.1   ║",
         "╚══════════════════════════════════╝",
         "",
+        f"  Price     : {fmt_price(a.price)}",
+        f"  Timeframe : {a.timeframe}   Status: {mkt}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "══════════════════════════════════",
+        "  MARKET STRUCTURE",
+        "══════════════════════════════════",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Trend     : {a.trend}   Strength: {a.strength}",
+        f"  Bias      : {a.bias}   Momentum: {a.momentum}",
+        "",
+        f"  {htf_desc}",
+        "",
+        "══════════════════════════════════",
+        "  INDICATOR BREAKDOWN",
+        "══════════════════════════════════",
+        f"  ADX  {a.adx:>5.1f}   {adx_desc}",
+        f"  +DI  {a.plus_di:>5.1f}   {di_desc}",
+        f"  -DI  {a.minus_di:>5.1f}",
+        "──────────────────────────────────",
+        f"  RSI  {a.rsi_value:>5.1f}   {rsi_desc}",
+        f"  Stoch {a.stoch_k_val:>4.1f}/{a.stoch_d_val:.1f}   {stoch_desc}",
+        "──────────────────────────────────",
+        f"  MACD Hist {a.macd_hist:>+7.3f}   {macd_desc}",
+        f"  BB%B      {a.bb_pct:>6.1f}%   {bb_desc}",
+        "──────────────────────────────────",
+        f"  Indicator votes:",
+        f"    BUY  {a.buy_votes}/5   SELL  {a.sell_votes}/5   WAIT  {a.wait_votes}/5",
+    ]
+
+    if a.candle_pattern and a.candle_pattern != "None":
+        lines += [
+            "──────────────────────────────────",
+            f"  Candle  : {a.candle_pattern}",
+        ]
+    if a.breakout:
+        lines.append("  Signal  : Breakout above swing high")
+    if a.reversal:
+        lines.append("  Signal  : Divergence reversal detected")
+
+    lines += [
+        "",
+        "══════════════════════════════════",
+        "  KEY LEVELS",
+        "══════════════════════════════════",
+        f"  R2       : {fmt_price(a.resistance2)}",
+        f"  R1       : {fmt_price(a.resistance1)}",
+        f"  BB Upper : {fmt_price(a.bb_upper)}",
+        f"  -- Price : {fmt_price(a.price)}",
+        f"  BB Lower : {fmt_price(a.bb_lower)}",
+        f"  S1       : {fmt_price(a.support1)}",
+        f"  S2       : {fmt_price(a.support2)}",
+        f"  ATR(14)  : {fmt_price(a.atr)}  (daily range estimate)",
+        "",
+        "══════════════════════════════════",
+        "  SETUP ASSESSMENT",
+        "══════════════════════════════════",
+        f"  Direction   : {a.action}",
+        f"  Confidence  : {a.confidence}%",
+        f"  Setup Grade : {_quality_label(a.setup_quality)}",
     ]
 
     if a.action in ("BUY", "SELL"):
-        lines += [
-            f"  [ {a.action} ]  {_trade_type_label(a)}",
-            f"  Grade     : {_quality_label(a.setup_quality)}",
-            f"  Win Rate  : {_win_bar(a.win_probability)}",
-            f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
-            "",
-            f"  Price     : {fmt_price(a.price)}   TF: {a.timeframe}",
-            f"  Structure : {_struct_label(a.market_structure)}",
-            f"  HTF Align : {a.htf_bias}",
-            f"  Session   : {a.session or 'N/A'}",
-            "",
-            "──────────────────────────────────",
-            "  INDICATOR CONSENSUS",
-            "──────────────────────────────────",
-            _indicator_rows(a),
-            "",
-            "──────────────────────────────────",
-        ]
-
-        # Early entry block — only show for A/A+ setups
-        if a.setup_quality in ("A+", "A") and a.early_entry and a.early_entry != a.entry:
+        if a.setup_quality in ("A+", "A"):
             lines += [
-                "  EARLY ENTRY  (limit order)",
-                "──────────────────────────────────",
-                f"  Zone      : {fmt_price(a.early_entry)}",
-                f"  Why       : {a.early_entry_reason[:42]}",
                 "",
-                "  FIB LEVELS",
-                f"  38.2%     : {fmt_price(a.fib_382)}",
-                f"  50.0%     : {fmt_price(a.fib_500)}",
-                f"  61.8%     : {fmt_price(a.fib_618)}",
-                "",
-                "──────────────────────────────────",
+                "  Grade A/A+ confirmed.",
+                "  Early entry signal follows.",
             ]
-
-        t1 = _estimate_time(a, a.tp1)
-        t2 = _estimate_time(a, a.tp2)
-        sl_dist = abs(a.entry - a.stop_loss)
-        rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-        rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-        rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-        lines += [
-            "  TRADE PLAN",
-            "──────────────────────────────────",
-            f"  Market In : {fmt_price(a.entry)}",
-        ]
-        if a.early_entry and a.early_entry != a.entry:
-            lines.append(f"  Limit In  : {fmt_price(a.early_entry)}  (better R:R)")
-        lines += [
-            f"  Stop Loss : {fmt_price(a.stop_loss)}",
-            f"  TP1       : {fmt_price(a.tp1)}  1:{rr1}  ({t1})",
-            f"  TP2       : {fmt_price(a.tp2)}  1:{rr2}  ({t2})",
-            f"  TP3       : {fmt_price(a.tp3)}  1:{rr3}",
-            "",
-        ]
-        if a.confluence_list:
-            lines.append(f"  CONFLUENCE ({len(a.confluence_list)} factors)")
-            for cf in a.confluence_list:
-                lines.append(f"    + {cf}")
-        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
-            lines.append(f"  Pattern   : {a.candle_pattern}")
+        else:
+            lines += [
+                "",
+                f"  Grade {a.setup_quality} — conditions not strong",
+                "  enough for 80%+ early entry.",
+                "  Reason: " + (a.wait_reason or a.verdict_reason or "Low confluence")[:36],
+            ]
     else:
         lines += [
-            "  [ WAIT ]  Setup not confirmed",
-            f"  Reason: {(a.wait_reason or a.verdict_reason)[:44]}",
             "",
-            "  INDICATOR SNAPSHOT",
-            "──────────────────────────────────",
-            _indicator_rows(a),
-            "",
-            f"  Structure : {_struct_label(a.market_structure)}",
-            f"  HTF Bias  : {a.htf_bias}",
-            f"  Session   : {a.session or 'N/A'}",
-            f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
-            "",
-            "  Wait for A/A+ grade setup.",
+            "  No directional signal.",
+            f"  Reason: {(a.wait_reason or a.verdict_reason)[:42]}",
+            "  Wait for market to set up.",
         ]
+
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
+
+def early_entry_card(a: MarketAnalysis) -> str:
+    """
+    Step 2 of /recommend — the actual trade setup.
+    Only called when setup_quality is A or A+ (80%+ win rate).
+    """
+    ms = market_status()
+    sl_dist = abs(a.entry - a.stop_loss)
+    rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+    rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+    rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+    t1  = _estimate_time(a, a.tp1)
+    t2  = _estimate_time(a, a.tp2)
+
+    # Describe the early entry approach
+    if a.action == "BUY":
+        strategy = "Wait for price to pull back into the zone below, then buy."
+    else:
+        strategy = "Wait for price to retrace up into the zone, then sell."
+
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  EARLY ENTRY  Pt.2     ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  [ {a.action} ]  Grade: {_quality_label(a.setup_quality)}",
+        f"  Win Rate  : {_win_bar(a.win_probability)}",
+        f"  Type      : {_trade_type_label(a)}",
+        f"  TF        : {a.timeframe}   Session: {a.session or 'N/A'}",
+        "",
+        "══════════════════════════════════",
+        "  FIBONACCI ENTRY ZONE",
+        "══════════════════════════════════",
+        f"  Swing Range:",
+        f"    38.2% : {fmt_price(a.fib_382)}",
+        f"    50.0% : {fmt_price(a.fib_500)}",
+        f"    61.8% : {fmt_price(a.fib_618)}",
+        "",
+    ]
+
+    # Highlight which Fib level is the recommended early entry
+    if a.early_entry and a.early_entry != a.entry:
+        lines += [
+            "  RECOMMENDED ENTRY ZONE",
+            "──────────────────────────────────",
+            f"  Limit at  : {fmt_price(a.early_entry)}",
+            f"  Reason    : {a.early_entry_reason[:44]}",
+            "",
+            f"  {strategy}",
+            "",
+        ]
+    else:
+        lines += [
+            "  ENTRY",
+            "──────────────────────────────────",
+            f"  Market at : {fmt_price(a.entry)}",
+            "",
+        ]
+
+    lines += [
+        "══════════════════════════════════",
+        "  TRADE PLAN",
+        "══════════════════════════════════",
+    ]
+
+    if a.early_entry and a.early_entry != a.entry:
+        lines.append(f"  Limit In  : {fmt_price(a.early_entry)}  (preferred)")
+    lines.append(f"  Market In : {fmt_price(a.entry)}  (if missed)")
+
+    lines += [
+        f"  Stop Loss : {fmt_price(a.stop_loss)}",
+        "",
+        f"  TP1 : {fmt_price(a.tp1)}   1:{rr1} R:R   ({t1})",
+        f"  TP2 : {fmt_price(a.tp2)}   1:{rr2} R:R   ({t2})",
+        f"  TP3 : {fmt_price(a.tp3)}   1:{rr3} R:R   (full move)",
+        "",
+        "  Strategy: Close 50% at TP1,",
+        "  move SL to entry, ride TP2/3.",
+        "",
+        "══════════════════════════════════",
+        "  CONFLUENCE FACTORS",
+        "══════════════════════════════════",
+    ]
+
+    for i, cf in enumerate(a.confluence_list, 1):
+        lines.append(f"  {i:>2}. {cf}")
+
+    if not a.confluence_list:
+        lines.append("  (no factors listed)")
+
+    if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
+        lines += ["", f"  Candle Pattern : {a.candle_pattern}"]
 
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+
     lines += ["", "  Not financial advice.", "</pre>"]
     return "\n".join(lines)
+
+
+def no_early_entry_card(a: MarketAnalysis) -> str:
+    """Shown when analysis finds a direction but grade is B/C — not 80%+ confident."""
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  NO ENTRY  Pt.2        ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Direction : {a.action}  (grade {a.setup_quality})",
+        f"  Win Rate  : {_win_bar(a.win_probability) if a.win_probability else 'N/A'}",
+        "",
+        "  Grade below A — 80% threshold NOT met.",
+        "  No early entry issued.",
+        "",
+        "  What needs to improve:",
+        "──────────────────────────────────",
+    ]
+
+    # Tell the user what is missing
+    missing = []
+    if a.confidence < 80:
+        missing.append(f"Confidence {a.confidence}% < 80% (need more indicators)")
+    if len(a.confluence_list) < 4:
+        missing.append(f"Confluence {len(a.confluence_list)}/4+ factors needed")
+    if a.adx < 20:
+        missing.append(f"ADX {a.adx:.1f} too low — market ranging")
+    if a.htf_bias in ("Neutral",):
+        missing.append("HTF bias neutral — need clear macro alignment")
+    if a.session in ("Asian",):
+        missing.append("Asian session — wait for London/NY for volume")
+    if not missing:
+        missing.append("Signal gating: R:R or ADX conditions not met")
+
+    for m in missing:
+        lines.append(f"  - {m}")
+
+    lines += [
+        "",
+        "  Monitor for setup to improve.",
+        "  Use /alerts to get notified",
+        "  when A/A+ grade fires.",
+        "",
+        "  Not financial advice.", "</pre>",
+    ]
+    return "\n".join(lines)
+
+
+def recommend_card(a: MarketAnalysis) -> str:
+    """Legacy single-card fallback — not used by /recommend but kept for alerts."""
+    return pro_analysis_card(a)
 
 
 # ─── TREND CARD ───────────────────────────────────────────────────────────────
