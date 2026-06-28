@@ -76,6 +76,34 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         a = await get_analysis(tf)
         await msg.edit_text(recommend_card(a), parse_mode="HTML")
+
+        # For A/A+ grade signals auto-attach the live chart
+        if a.action in ("BUY", "SELL") and a.setup_quality in ("A+", "A"):
+            try:
+                import io
+                from telegram import InputFile
+                from src.chart_generator import generate_chart_image
+                chart_msg = await update.message.reply_text(
+                    f"Generating {tf} chart for this {a.setup_quality} setup..."
+                )
+                img_bytes = await generate_chart_image(tf)
+                if img_bytes:
+                    await chart_msg.delete()
+                    sl_dist = abs(a.entry - a.stop_loss)
+                    rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+                    caption = (
+                        f"XAU/USD {tf}  |  Grade: {a.setup_quality}  |  {a.action}\n"
+                        f"Early Entry: {a.early_entry:,.2f}  SL: {a.stop_loss:,.2f}\n"
+                        f"TP1: {a.tp1:,.2f}  TP2: {a.tp2:,.2f}  TP3: {a.tp3:,.2f} (1:{rr3})"
+                    )
+                    await update.message.reply_photo(
+                        photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_recommend.jpg"),
+                        caption=caption,
+                    )
+                else:
+                    await chart_msg.delete()
+            except Exception as chart_err:
+                logger.warning(f"recommend chart attach failed: {chart_err}")
     except Exception as e:
         logger.error(f"recommend error: {e}")
         await msg.edit_text("Recommendation failed. Please try again.")

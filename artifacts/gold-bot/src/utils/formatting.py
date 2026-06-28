@@ -235,6 +235,15 @@ def analysis_card(a: MarketAnalysis) -> str:
 
 # ─── RECOMMEND CARD ───────────────────────────────────────────────────────────
 
+def _quality_label(q: str) -> str:
+    return {
+        "A+": "A+  PREMIUM SETUP  (85%+ win rate)",
+        "A":  "A   HIGH QUALITY   (80%+ win rate)",
+        "B":  "B   STANDARD       (70%+ win rate)",
+        "C":  "C   MARGINAL       (monitor only)",
+    }.get(q, q)
+
+
 def recommend_card(a: MarketAnalysis) -> str:
     ms = market_status()
     lines = ["<pre>",
@@ -247,6 +256,7 @@ def recommend_card(a: MarketAnalysis) -> str:
     if a.action in ("BUY", "SELL"):
         lines += [
             f"  [ {a.action} ]  {_trade_type_label(a)}",
+            f"  Grade     : {_quality_label(a.setup_quality)}",
             f"  Win Rate  : {_win_bar(a.win_probability)}",
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
             "",
@@ -261,33 +271,56 @@ def recommend_card(a: MarketAnalysis) -> str:
             _indicator_rows(a),
             "",
             "──────────────────────────────────",
-            "  TRADE PLAN",
-            "──────────────────────────────────",
-            f"  Entry     : {fmt_price(a.entry)}",
         ]
-        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
+
+        # Early entry block — only show for A/A+ setups
+        if a.setup_quality in ("A+", "A") and a.early_entry and a.early_entry != a.entry:
+            lines += [
+                "  EARLY ENTRY  (limit order)",
+                "──────────────────────────────────",
+                f"  Zone      : {fmt_price(a.early_entry)}",
+                f"  Why       : {a.early_entry_reason[:42]}",
+                "",
+                "  FIB LEVELS",
+                f"  38.2%     : {fmt_price(a.fib_382)}",
+                f"  50.0%     : {fmt_price(a.fib_500)}",
+                f"  61.8%     : {fmt_price(a.fib_618)}",
+                "",
+                "──────────────────────────────────",
+            ]
+
         t1 = _estimate_time(a, a.tp1)
         t2 = _estimate_time(a, a.tp2)
+        sl_dist = abs(a.entry - a.stop_loss)
+        rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+        rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+        rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+        lines += [
+            "  TRADE PLAN",
+            "──────────────────────────────────",
+            f"  Market In : {fmt_price(a.entry)}",
+        ]
+        if a.early_entry and a.early_entry != a.entry:
+            lines.append(f"  Limit In  : {fmt_price(a.early_entry)}  (better R:R)")
         lines += [
             f"  Stop Loss : {fmt_price(a.stop_loss)}",
-            f"  TP1       : {fmt_price(a.tp1)}  ({t1})",
-            f"  TP2       : {fmt_price(a.tp2)}  ({t2})",
-            f"  TP3       : {fmt_price(a.tp3)}",
-            f"  R:R       : 1:{a.rr_ratio}",
+            f"  TP1       : {fmt_price(a.tp1)}  1:{rr1}  ({t1})",
+            f"  TP2       : {fmt_price(a.tp2)}  1:{rr2}  ({t2})",
+            f"  TP3       : {fmt_price(a.tp3)}  1:{rr3}",
+            "",
         ]
         if a.confluence_list:
-            lines += ["", f"  CONFLUENCE ({len(a.confluence_list)} factors)"]
+            lines.append(f"  CONFLUENCE ({len(a.confluence_list)} factors)")
             for cf in a.confluence_list:
                 lines.append(f"    + {cf}")
         if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
             lines.append(f"  Pattern   : {a.candle_pattern}")
     else:
         lines += [
-            "  [ WAIT ]  No trade setup",
+            "  [ WAIT ]  Setup not confirmed",
             f"  Reason: {(a.wait_reason or a.verdict_reason)[:44]}",
             "",
-            "  INDICATOR CONSENSUS",
+            "  INDICATOR SNAPSHOT",
             "──────────────────────────────────",
             _indicator_rows(a),
             "",
@@ -295,6 +328,8 @@ def recommend_card(a: MarketAnalysis) -> str:
             f"  HTF Bias  : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
             f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+            "",
+            "  Wait for A/A+ grade setup.",
         ]
 
     if not ms["is_open"]:

@@ -86,6 +86,13 @@ class MarketAnalysis:
     win_probability:  int = 0
     confluence_list: List[str] = field(default_factory=list)
     tp3:            float = 0.0
+    # Early entry / Fibonacci fields
+    fib_382:        float = 0.0
+    fib_500:        float = 0.0
+    fib_618:        float = 0.0
+    early_entry:    float = 0.0   # best pullback entry price
+    early_entry_reason: str = ""  # description of the early entry zone
+    setup_quality:  str = ""      # "A+" | "A" | "B" | "WAIT"
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -1043,6 +1050,55 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     if adx >= 40: raw_wp += 2
     win_probability = max(50, min(92, raw_wp)) if action in ("BUY", "SELL") else 0
 
+    # ── Fibonacci retracement & early entry ──────────────────────────────────
+    eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
+    fib_382, fib_500, fib_618 = compute_fibonacci_levels(highs, lows, eff_dir, lookback=50)
+
+    # Early entry: best pullback level for a limit order
+    # BUY  → we want price to dip to 61.8% or 50% before bouncing up
+    # SELL → we want price to rally to 61.8% or 50% before falling
+    early_entry = 0.0
+    early_entry_reason = ""
+    if action == "BUY":
+        if fib_618 > stop_loss and fib_618 < price:
+            early_entry = fib_618
+            early_entry_reason = f"Fib 61.8% retrace @ {fib_618:,.2f} — deep pullback, high R:R"
+        elif fib_500 > stop_loss and fib_500 < price:
+            early_entry = fib_500
+            early_entry_reason = f"Fib 50.0% retrace @ {fib_500:,.2f} — mid pullback zone"
+        elif fib_382 > stop_loss and fib_382 < price:
+            early_entry = fib_382
+            early_entry_reason = f"Fib 38.2% retrace @ {fib_382:,.2f} — shallow pullback"
+        else:
+            early_entry = limit_entry if limit_entry and limit_entry < price else price
+            early_entry_reason = "EMA/ATR pullback zone — enter on retrace, not market"
+    elif action == "SELL":
+        if fib_618 < r1 and fib_618 > price:
+            early_entry = fib_618
+            early_entry_reason = f"Fib 61.8% retrace @ {fib_618:,.2f} — deep retrace, high R:R"
+        elif fib_500 < r1 and fib_500 > price:
+            early_entry = fib_500
+            early_entry_reason = f"Fib 50.0% retrace @ {fib_500:,.2f} — mid retrace zone"
+        elif fib_382 < r1 and fib_382 > price:
+            early_entry = fib_382
+            early_entry_reason = f"Fib 38.2% retrace @ {fib_382:,.2f} — shallow retrace"
+        else:
+            early_entry = limit_entry if limit_entry and limit_entry > price else price
+            early_entry_reason = "EMA/ATR retrace zone — sell the bounce, not market"
+
+    # ── Setup quality grade ───────────────────────────────────────────────────
+    if action in ("BUY", "SELL"):
+        if win_probability >= 85 and len(confluence_list) >= 5 and adx >= 25:
+            setup_quality = "A+"
+        elif win_probability >= 80 and len(confluence_list) >= 4:
+            setup_quality = "A"
+        elif win_probability >= 72:
+            setup_quality = "B"
+        else:
+            setup_quality = "C"
+    else:
+        setup_quality = "WAIT"
+
     return MarketAnalysis(
         price=price, timeframe=timeframe,
         bias=bias, trend=trend, strength=strength, momentum=momentum,
@@ -1064,7 +1120,45 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         win_probability=win_probability,
         confluence_list=confluence_list,
         tp3=tp3,
+        fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,
+        early_entry=early_entry, early_entry_reason=early_entry_reason,
+        setup_quality=setup_quality,
     )
+
+
+def compute_fibonacci_levels(highs: List[float], lows: List[float],
+                             direction: str, lookback: int = 50
+                             ) -> Tuple[float, float, float]:
+    """
+    Find the most recent significant swing and compute Fibonacci retracement levels.
+    BUY:  swing = recent low → recent high  → retrace levels below price
+    SELL: swing = recent high → recent low  → retrace levels above price
+    Returns (fib_382, fib_500, fib_618).
+    """
+    n = len(highs)
+    window = min(lookback, n)
+    h_slice = highs[-window:]
+    l_slice = lows[-window:]
+
+    swing_high = max(h_slice)
+    swing_low  = min(l_slice)
+    rng = swing_high - swing_low
+    if rng <= 0:
+        mid = (swing_high + swing_low) / 2
+        return round(mid, 2), round(mid, 2), round(mid, 2)
+
+    if direction == "BUY":
+        # Retracement FROM swing_high DOWN — entries below current price
+        fib_382 = round(swing_high - rng * 0.382, 2)
+        fib_500 = round(swing_high - rng * 0.500, 2)
+        fib_618 = round(swing_high - rng * 0.618, 2)
+    else:
+        # Retracement FROM swing_low UP — entries above current price
+        fib_382 = round(swing_low + rng * 0.382, 2)
+        fib_500 = round(swing_low + rng * 0.500, 2)
+        fib_618 = round(swing_low + rng * 0.618, 2)
+
+    return fib_382, fib_500, fib_618
 
 
 def detect_market_structure(highs: List[float], lows: List[float], lookback: int = 5) -> str:
