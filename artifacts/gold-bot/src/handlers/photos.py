@@ -1,15 +1,6 @@
 """
-Photo message handler — receives a chart screenshot, analyses it with GPT-4o
-Vision, annotates the image with a Pillow overlay, and replies with:
-  1. The annotated JPEG
-  2. A structured text summary
-
-Design decisions:
-- Image bytes are downloaded ONCE using python-telegram-bot's native API
-  (no raw aiohttp, no external URL fetch).
-- status_msg is never deleted mid-flight; it is edited to show the final
-  error if anything goes wrong, so the user always gets feedback.
-- All model-derived strings are HTML-escaped before insertion into cards.
+Photo message handler — receives a chart screenshot, analyses it with Gemini Vision,
+and replies with a professional institutional-grade analysis card.
 """
 from __future__ import annotations
 
@@ -25,68 +16,141 @@ from src.chart_analysis import analyse_chart_bytes, ChartAnalysisResult
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Text card formatter
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _esc(text: str) -> str:
-    """HTML-escape a model-derived string."""
     return html.escape(str(text))
 
 
 def _result_card(r: ChartAnalysisResult) -> str:
-    bias_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪", "RANGING": "🟡"}
-    trend_emoji = {"UPTREND": "📈", "DOWNTREND": "📉", "SIDEWAYS": "➡️"}
+    lines = []
 
-    be = bias_emoji.get(r.bias, "⚪")
-    te = trend_emoji.get(r.trend, "➡️")
-
-    lines = [
-        "┌─────────────────────────────┐",
-        "│  📸  CHART VISION ANALYSIS  │",
-        "└─────────────────────────────┘",
-        "",
-        f"{be} <b>Bias:</b> {_esc(r.bias)}   {te} <b>Trend:</b> {_esc(r.trend)}",
-        f"🎯 <b>Confidence:</b> {r.confidence}%   🕒 <b>TF:</b> {_esc(r.timeframe)}",
+    # ── Header ───────────────────────────────────────────────────────────────
+    lines += [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  CHART VISION ANALYSIS ║",
+        "╚══════════════════════════════════╝",
         "",
     ]
 
-    if r.pattern and r.pattern.lower() != "none":
-        lines.append(f"📐 <b>Pattern:</b> {_esc(r.pattern)}")
-    if r.candlestick and r.candlestick.lower() != "none":
-        lines.append(f"🕯 <b>Candle:</b> {_esc(r.candlestick)}")
+    # ── Structure & Bias ─────────────────────────────────────────────────────
+    bias_label  = {"BULLISH": "BULLISH", "BEARISH": "BEARISH", "NEUTRAL": "NEUTRAL", "RANGING": "RANGING"}.get(r.bias, r.bias)
+    trend_label = {"UPTREND": "UPTREND", "DOWNTREND": "DOWNTREND", "SIDEWAYS": "SIDEWAYS"}.get(r.trend, r.trend)
+    ms_map      = {"HH_HL": "HH / HL  (Bullish)", "LH_LL": "LH / LL  (Bearish)", "RANGING": "Ranging", "TRANSITION": "Structure Break"}.get(r.market_structure, r.market_structure)
+    mom_map     = {"STRONG": "Strong", "MODERATE": "Moderate", "WEAK": "Weak", "DIVERGING": "Diverging"}.get(r.momentum, r.momentum)
 
-    if r.key_support or r.key_resistance:
-        lines.append("")
-        if r.key_support:
-            sup_str = "  |  ".join(f"{v:.2f}" for v in r.key_support)
-            lines.append(f"🔵 <b>Support:</b>    {sup_str}")
-        if r.key_resistance:
-            res_str = "  |  ".join(f"{v:.2f}" for v in r.key_resistance)
-            lines.append(f"🔴 <b>Resistance:</b> {res_str}")
+    lines += [
+        f"  TF       : {_esc(r.timeframe)}",
+        f"  Bias     : {_esc(bias_label)}",
+        f"  Trend    : {_esc(trend_label)}",
+        f"  Structure: {_esc(ms_map)}",
+        f"  Momentum : {_esc(mom_map)}",
+        "",
+    ]
 
-    has_trade = any(v is not None for v in [r.entry, r.stop_loss, r.take_profit_1])
-    if has_trade:
-        lines.append("")
-        lines.append("──────────────────────────────")
-        lines.append("📊 <b>TRADE LEVELS</b>")
-        if r.entry:
-            lines.append(f"  Entry:  <b>{r.entry:.2f}</b>")
-        if r.stop_loss:
-            lines.append(f"  SL:     <b>{r.stop_loss:.2f}</b>  🛡")
-        if r.take_profit_1:
-            lines.append(f"  TP1:    <b>{r.take_profit_1:.2f}</b>  🎯")
-        if r.take_profit_2:
-            lines.append(f"  TP2:    <b>{r.take_profit_2:.2f}</b>  🎯")
-        lines.append("──────────────────────────────")
+    # ── Win Probability Bar ───────────────────────────────────────────────────
+    filled = round(r.win_probability / 10)
+    bar    = "█" * filled + "░" * (10 - filled)
+    lines += [
+        "──────────────────────────────────",
+        f"  Win Rate : [{bar}] {r.win_probability}%",
+        f"  Confidence: {r.confidence}%",
+        "──────────────────────────────────",
+        "",
+    ]
 
-    if r.summary:
-        lines.append("")
-        lines.append(f"📝 {_esc(r.summary)}")
-
+    # ── Patterns ─────────────────────────────────────────────────────────────
+    if r.chart_patterns:
+        lines.append("  PATTERNS DETECTED:")
+        for p in r.chart_patterns:
+            lines.append(f"    - {_esc(p)}")
+    if r.candlestick_pattern and r.candlestick_pattern.lower() not in ("none", ""):
+        lines.append(f"  Candle   : {_esc(r.candlestick_pattern)}")
     lines.append("")
-    lines.append("<i>Analysis powered by GPT-4o Vision.</i>")
-    lines.append("<i>Not financial advice — always use your own judgement.</i>")
+
+    # ── Key Levels ───────────────────────────────────────────────────────────
+    lines.append("  KEY LEVELS:")
+    if r.key_resistance:
+        res_str = "  |  ".join(f"{v:.2f}" for v in r.key_resistance)
+        lines.append(f"    Resistance: {res_str}")
+    if r.key_support:
+        sup_str = "  |  ".join(f"{v:.2f}" for v in r.key_support)
+        lines.append(f"    Support   : {sup_str}")
+    if r.order_block:
+        lines.append(f"    Order Blk : {r.order_block:.2f}")
+    if r.fair_value_gap:
+        lines.append(f"    FVG       : {r.fair_value_gap:.2f}")
+    lines.append("")
+
+    # ── Trade Setup ──────────────────────────────────────────────────────────
+    has_trade = r.entry_type not in ("WAIT", "") and r.entry is not None
+    lines.append("──────────────────────────────────")
+    if has_trade:
+        rr_str = f"{r.rr_ratio:.1f}:1" if r.rr_ratio else "N/A"
+        lines += [
+            f"  SETUP    : {_esc(r.entry_type.replace('_', ' '))}",
+            f"  R:R      : {rr_str}",
+            "",
+            f"  Entry    : {r.entry:.2f}",
+        ]
+        if r.stop_loss:
+            lines.append(f"  Stop Loss: {r.stop_loss:.2f}")
+        if r.take_profit_1:
+            lines.append(f"  TP 1     : {r.take_profit_1:.2f}")
+        if r.take_profit_2:
+            lines.append(f"  TP 2     : {r.take_profit_2:.2f}")
+        if r.take_profit_3:
+            lines.append(f"  TP 3     : {r.take_profit_3:.2f}")
+        if r.invalidation:
+            lines.append(f"  Invalidat: {r.invalidation:.2f}")
+    else:
+        lines.append("  SETUP    : WAIT — No high-prob setup")
+    lines.append("──────────────────────────────────")
+    lines.append("")
+
+    # ── Confluence Factors ───────────────────────────────────────────────────
+    if r.confluence_factors:
+        lines.append("  CONFLUENCE:")
+        for f_ in r.confluence_factors:
+            lines.append(f"    + {_esc(f_)}")
+        lines.append("")
+
+    # ── Early Entry Reason ───────────────────────────────────────────────────
+    if r.early_entry_reason:
+        lines.append("  ENTRY LOGIC:")
+        # Word-wrap at ~36 chars
+        words = r.early_entry_reason.split()
+        line_buf, row_lines = [], []
+        for w in words:
+            if sum(len(x) + 1 for x in line_buf) + len(w) > 34:
+                row_lines.append("    " + _esc(" ".join(line_buf)))
+                line_buf = [w]
+            else:
+                line_buf.append(w)
+        if line_buf:
+            row_lines.append("    " + _esc(" ".join(line_buf)))
+        lines += row_lines
+        lines.append("")
+
+    # ── Summary ──────────────────────────────────────────────────────────────
+    if r.summary:
+        lines.append("  ASSESSMENT:")
+        words = r.summary.split()
+        line_buf, row_lines = [], []
+        for w in words:
+            if sum(len(x) + 1 for x in line_buf) + len(w) > 34:
+                row_lines.append("    " + _esc(" ".join(line_buf)))
+                line_buf = [w]
+            else:
+                line_buf.append(w)
+        if line_buf:
+            row_lines.append("    " + _esc(" ".join(line_buf)))
+        lines += row_lines
+        lines.append("")
+
+    lines += [
+        "  Not financial advice.",
+        "</pre>",
+    ]
 
     return "\n".join(lines)
 
@@ -101,58 +165,34 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not message or not message.photo:
         return
 
-    # Acknowledge immediately so the user knows we're working.
-    # status_msg stays alive until the very end — editable for error fallback.
     status_msg = await message.reply_text(
-        "📸 <b>Chart received!</b>\n\nAnalysing with AI vision… this may take 15–30 seconds.",
-        parse_mode="HTML",
+        "Chart received. Running professional analysis... this takes 20-40 seconds.",
     )
 
     try:
-        # ── 1. Download image bytes via PTB (one round-trip, no raw URL fetch) ──
-        photo = max(message.photo, key=lambda p: p.file_size or 0)
-        tg_file = await context.bot.get_file(photo.file_id)
+        photo    = max(message.photo, key=lambda p: p.file_size or 0)
+        tg_file  = await context.bot.get_file(photo.file_id)
         img_bytes = bytes(await tg_file.download_as_bytearray())
         logger.info(f"Downloaded chart photo — {len(img_bytes):,} bytes")
 
-        # ── 2. Run GPT-4o vision analysis ──────────────────────────────────────
         result = await analyse_chart_bytes(img_bytes)
 
-        # ── 3. Annotate the image (Pillow overlay) ─────────────────────────────
-        from src.chart_annotator import annotate_chart
-        annotated_bytes = annotate_chart(img_bytes, result)
-
-        # ── 4. Send annotated image ─────────────────────────────────────────────
-        await message.reply_photo(
-            photo=InputFile(io.BytesIO(annotated_bytes), filename="gold_analysis.jpg"),
-            caption="📊 <b>XAU/USD Chart Analysis</b>",
-            parse_mode="HTML",
-        )
-
-        # ── 5. Send text summary ────────────────────────────────────────────────
         await message.reply_text(_result_card(result), parse_mode="HTML")
 
-        # ── 6. Delete the "Analysing…" status message now that all sends worked ─
         try:
             await status_msg.delete()
         except Exception:
-            pass  # Non-critical — ignore if already gone
+            pass
 
     except Exception as e:
         logger.error(f"Photo analysis failed: {e}", exc_info=True)
-        # Edit (not delete) the status message so the user still gets feedback
         try:
             await status_msg.edit_text(
-                "⚠️ <b>Analysis failed.</b>\n\n"
-                "Please send a clear XAU/USD chart screenshot and try again.\n"
-                f"<i>Error: {html.escape(type(e).__name__)}</i>",
-                parse_mode="HTML",
+                f"Analysis failed. Please try again with a clear chart screenshot.\n"
+                f"Error: {html.escape(type(e).__name__)}",
             )
         except Exception:
-            # Last resort — reply fresh if status_msg is already gone
-            await message.reply_text(
-                "⚠️ Analysis failed. Please try again with a clear chart screenshot.",
-            )
+            await message.reply_text("Analysis failed. Please try again.")
 
 
 def register_photo_handlers(app: Application) -> None:

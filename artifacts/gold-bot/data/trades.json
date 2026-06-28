@@ -191,7 +191,7 @@
       "confidence": 93,
       "rr_ratio": 2.0,
       "opened_at": 1782395728.0412765,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false
     }
