@@ -329,9 +329,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         result = await analyse_chart_bytes(img_bytes)
     except Exception as e:
         logger.error(f"cmd_chart — Gemini analysis error: {e}", exc_info=True)
+        short = _html.escape(str(e)[:200])
         await msg.edit_text(
-            "Chart sent. AI analysis failed — check your GOOGLE_AI_KEY or try again shortly.\n"
-            f"<i>({_html.escape(type(e).__name__)})</i>",
+            f"Chart sent. AI analysis failed — try again shortly.\n"
+            f"<i>{short}</i>",
             parse_mode="HTML",
         )
         return
