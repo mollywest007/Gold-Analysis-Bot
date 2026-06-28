@@ -99,7 +99,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text("Analysis failed. Please try again.")
 
 
-async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa: F811
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
@@ -108,7 +108,29 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
     try:
         a = await get_analysis(tf)
+        # Send signal card first (always fast)
         await msg.edit_text(signal_card(a), parse_mode="HTML")
+
+        # When there is an actionable signal, attach a live chart automatically
+        if a.action in ("BUY", "SELL"):
+            try:
+                import io
+                from telegram import InputFile
+                from src.chart_generator import generate_chart_image
+                chart_msg = await update.message.reply_text(
+                    f"Generating {tf} chart for this signal..."
+                )
+                img_bytes = await generate_chart_image(tf)
+                if img_bytes:
+                    await chart_msg.delete()
+                    await update.message.reply_photo(
+                        photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_signal.jpg"),
+                        caption=f"XAU/USD {tf} — {a.action} setup  |  Entry {a.entry:,.2f}  SL {a.stop_loss:,.2f}  TP1 {a.tp1:,.2f}",
+                    )
+                else:
+                    await chart_msg.delete()
+            except Exception as chart_err:
+                logger.warning(f"signal chart attach failed: {chart_err}")
     except Exception as e:
         logger.error(f"signal error: {e}")
         await msg.edit_text("Signal scan failed. Please try again.")

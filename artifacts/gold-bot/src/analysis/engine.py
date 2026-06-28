@@ -75,6 +75,17 @@ class MarketAnalysis:
     entry_note:     str = ""           # "Market" or "Limit @ XXXX.XX"
     bb_upper:       float = 0.0
     bb_lower:       float = 0.0
+    # Extended pro fields
+    rsi_value:      float = 0.0
+    stoch_k_val:    float = 0.0
+    stoch_d_val:    float = 0.0
+    macd_hist:      float = 0.0
+    plus_di:        float = 0.0
+    minus_di:       float = 0.0
+    market_structure: str = "RANGING"   # HH_HL | LH_LL | RANGING | TRANSITION
+    win_probability:  int = 0
+    confluence_list: List[str] = field(default_factory=list)
+    tp3:            float = 0.0
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -973,6 +984,65 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         else f"{round(r1 - atr, 2)} — {r1:.2f}"
     )
 
+    # ── Extended pro fields ────────────────────────────────────────────────────
+    mkt_structure = detect_market_structure(highs, lows, lookback=5)
+
+    # TP3: measured move (5× SL distance)
+    if direction == "BUY":
+        tp3 = round(entry + sl_dist * 5.0, 2)
+    elif direction == "SELL":
+        tp3 = round(entry - sl_dist * 5.0, 2)
+    else:
+        tp3 = round(entry + sl_dist * 5.0, 2)
+
+    # Confluence list
+    confluence_list: List[str] = []
+    if direction in ("BUY", "SELL"):
+        for ind in indicators:
+            if ind.signal == direction:
+                if ind.name == "RSI(14)":
+                    tag = "oversold" if direction == "BUY" else "overbought"
+                    confluence_list.append(f"RSI {rsi:.0f} — {tag}")
+                elif ind.name == "MACD":
+                    tag = "bullish" if direction == "BUY" else "bearish"
+                    confluence_list.append(f"MACD {tag} crossover")
+                elif ind.name == "EMA Stack":
+                    tag = "above" if direction == "BUY" else "below"
+                    confluence_list.append(f"Price {tag} EMA stack")
+                elif ind.name == "Stoch(14)":
+                    tag = "oversold cross" if direction == "BUY" else "overbought cross"
+                    confluence_list.append(f"Stoch {stoch_k:.0f} — {tag}")
+                elif ind.name == "BB %B":
+                    tag = "lower band" if direction == "BUY" else "upper band"
+                    confluence_list.append(f"BB%B {bb_pct:.0f} — near {tag}")
+        if mkt_structure == "HH_HL" and direction == "BUY":
+            confluence_list.append("HH/HL market structure (bullish)")
+        elif mkt_structure == "LH_LL" and direction == "SELL":
+            confluence_list.append("LH/LL market structure (bearish)")
+        if htf_bias in ("Bullish", "Slightly Bullish") and direction == "BUY":
+            confluence_list.append(f"{htf} bias aligned ({htf_bias})")
+        elif htf_bias in ("Bearish", "Slightly Bearish") and direction == "SELL":
+            confluence_list.append(f"{htf} bias aligned ({htf_bias})")
+        if vol_spike:
+            confluence_list.append("Volume spike (institutional participation)")
+        if session_label == "London/NY Overlap":
+            confluence_list.append("London/NY Overlap (highest liquidity)")
+        if candle_pat not in ("None", "Doji", "Inside Bar", "Spinning Top") and candle_wt >= 0.72:
+            if c_signal == direction or c_signal == "BUY" and direction == "BUY" or c_signal == "SELL" and direction == "SELL":
+                confluence_list.append(f"Candle: {candle_pat}")
+        if breakout:
+            confluence_list.append("Breakout above recent swing high")
+        if reversal:
+            confluence_list.append("Divergence reversal signal")
+
+    # Win probability — starts at confidence, boosted by confluence depth
+    raw_wp = confidence
+    raw_wp += min(len(confluence_list) * 2, 10)   # up to +10 for deep confluence
+    if session_label == "London/NY Overlap": raw_wp += 3
+    if adx >= 30: raw_wp += 3
+    if adx >= 40: raw_wp += 2
+    win_probability = max(50, min(92, raw_wp)) if action in ("BUY", "SELL") else 0
+
     return MarketAnalysis(
         price=price, timeframe=timeframe,
         bias=bias, trend=trend, strength=strength, momentum=momentum,
@@ -988,7 +1058,35 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         verdict_reason=verdict_reason,
         session=session_label, htf_bias=htf_bias, candle_pattern=candle_pat,
         trade_type=trade_type, limit_entry=limit_entry, entry_note=entry_note,
+        rsi_value=rsi, stoch_k_val=stoch_k, stoch_d_val=stoch_d,
+        macd_hist=hist, plus_di=plus_di, minus_di=minus_di,
+        market_structure=mkt_structure,
+        win_probability=win_probability,
+        confluence_list=confluence_list,
+        tp3=tp3,
     )
+
+
+def detect_market_structure(highs: List[float], lows: List[float], lookback: int = 5) -> str:
+    """Return HH_HL, LH_LL, TRANSITION, or RANGING based on swing structure."""
+    n = len(highs)
+    if n < lookback * 4:
+        return "RANGING"
+    swing_highs, swing_lows = [], []
+    for i in range(lookback, n - lookback):
+        if all(highs[i] >= highs[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            swing_highs.append(highs[i])
+        if all(lows[i] <= lows[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            swing_lows.append(lows[i])
+    if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+        hh = swing_highs[-1] > swing_highs[-2]
+        hl = swing_lows[-1]  > swing_lows[-2]
+        lh = swing_highs[-1] < swing_highs[-2]
+        ll = swing_lows[-1]  < swing_lows[-2]
+        if hh and hl:   return "HH_HL"
+        if lh and ll:   return "LH_LL"
+        if hh or hl or lh or ll: return "TRANSITION"
+    return "RANGING"
 
 
 def detect_breakout(closes: List[float], highs: List[float], period: int = 20) -> bool:

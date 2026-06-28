@@ -6,476 +6,530 @@ def fmt_price(p: float) -> str:
     return f"{p:,.2f}"
 
 
-def _market_status_line() -> str:
+def _mkt_line() -> str:
     ms = market_status()
-    if ms["is_open"]:
-        return f"LIVE  |  {ms['note']}"
-    return f"{ms['status_text']}  |  {ms['note']}"
+    return f"LIVE  |  {ms['note']}" if ms["is_open"] else f"{ms['status_text']}  |  {ms['note']}"
 
 
-def _closed_banner() -> str:
-    ms = market_status()
-    if ms["is_open"]:
-        return ""
-    return f"! {ms['status_text']} — {ms['note']}"
+def _win_bar(pct: int) -> str:
+    filled = round(pct / 10)
+    return "[" + "█" * filled + "░" * (10 - filled) + f"] {pct}%"
 
 
-def _indicator_bar(indicators) -> str:
-    lines = []
-    for ind in indicators:
-        arrow = "^" if ind.signal == "BUY" else ("v" if ind.signal == "SELL" else "-")
+def _struct_label(s: str) -> str:
+    return {"HH_HL": "HH / HL  (Bullish)", "LH_LL": "LH / LL  (Bearish)",
+            "TRANSITION": "Structure Breaking", "RANGING": "Ranging"}.get(s, s)
+
+
+def _trade_type_label(a: MarketAnalysis) -> str:
+    return {"Scalp": "SCALP (minutes-hours)", "Intraday": "INTRADAY (same session)",
+            "Swing": "SWING (1-5 days)", "Position": "POSITION (weeks)"}.get(a.trade_type, a.trade_type)
+
+
+_TF_MINUTES = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+
+
+def _estimate_time(a: MarketAnalysis, target: float) -> str:
+    atr = a.atr if a.atr and a.atr > 0 else None
+    if atr is None:
+        return "N/A"
+    dist = abs(target - a.entry)
+    if dist <= 0:
+        return "N/A"
+    candle_min = _TF_MINUTES.get(a.timeframe, 60)
+    minutes = (dist / atr) * 1.5 * candle_min
+    if minutes < 60:
+        return f"~{max(1, round(minutes))}m"
+    if minutes < 1440:
+        hrs = minutes / 60
+        return f"~{round(hrs, 1)}h"
+    days = minutes / 1440
+    return f"~{round(days, 1)}d"
+
+
+def _indicator_rows(a: MarketAnalysis) -> str:
+    rows = []
+    for ind in a.indicators:
+        arrow = "BUY" if ind.signal == "BUY" else ("SELL" if ind.signal == "SELL" else "----")
         if ind.name == "BB %B":
             val_str = f"{ind.value:.1f}%"
         elif ind.name == "MACD":
             val_str = f"{ind.value:+.3f}"
         else:
             val_str = f"{ind.value:.1f}"
-        lines.append(f"{ind.name:<12} {val_str:>8}  [{arrow}] {ind.signal}")
-    return "\n".join(lines)
+        rows.append(f"  {ind.name:<12} {val_str:>8}   {arrow}")
+    return "\n".join(rows)
 
 
-def _verdict_block(a: MarketAnalysis) -> str:
-    if a.action == "BUY":
-        trade_line = f"Type:  {a.trade_type}"
-        return (
-            "[ BUY  ]  ENTRY CONFIRMED\n"
-            f"Confidence: {a.confidence}%   ADX: {a.adx:.0f}\n"
-            f"{trade_line}"
-        )
-    if a.action == "SELL":
-        trade_line = f"Type:  {a.trade_type}"
-        return (
-            "[ SELL ]  ENTRY CONFIRMED\n"
-            f"Confidence: {a.confidence}%   ADX: {a.adx:.0f}\n"
-            f"{trade_line}"
-        )
-    return (
-        "[  --  ]  WAIT — NO SIGNAL\n"
-        f"Reason: {(a.wait_reason or a.verdict_reason)[:44]}"
-    )
-
-
-def _consensus_bar(a: MarketAnalysis) -> str:
-    total   = max(a.buy_votes + a.sell_votes + a.wait_votes, 1)
-    b_blks  = round(a.buy_votes  / total * 16)
-    s_blks  = round(a.sell_votes / total * 16)
-    n_blks  = 16 - b_blks - s_blks
-    bar     = ("+" * b_blks) + ("-" * s_blks) + ("." * max(n_blks, 0))
-    b_pct   = int(a.buy_votes  / total * 100)
-    s_pct   = int(a.sell_votes / total * 100)
-    n_pct   = 100 - b_pct - s_pct
-    return f"[{bar}]\nBUY {b_pct}%   SELL {s_pct}%   WAIT {n_pct}%"
-
-
-_TF_MINUTES = {
-    "M5": 5, "M15": 15, "M30": 30,
-    "H1": 60, "H4": 240, "D1": 1440,
-}
-
-
-def _estimate_time(a: MarketAnalysis, target: float) -> str:
-    """
-    Estimate how long it should take price to reach `target` from entry.
-
-    Method: distance / ATR gives the number of candles of full-ATR movement needed.
-    Multiply by 1.5 to account for non-linear / retracement movement, then
-    multiply by candle duration in minutes.
-    Returns a human-readable string like '~15 min', '~2.5 hrs', '~3 days'.
-    """
-    atr = a.atr if a.atr and a.atr > 0 else None
-    if atr is None:
-        return "N/A"
-
-    dist = abs(target - a.entry)
-    if dist <= 0:
-        return "N/A"
-
-    candle_min = _TF_MINUTES.get(a.timeframe, 60)
-    candles    = (dist / atr) * 1.5       # 1.5x factor for real-world noise/retrace
-    minutes    = candles * candle_min
-
-    if minutes < 60:
-        return f"~{max(1, round(minutes))} min"
-    if minutes < 1440:
-        hrs = minutes / 60
-        if hrs < 2:
-            mins_rem = round((hrs - int(hrs)) * 60)
-            return f"~{int(hrs)}h {mins_rem}m" if mins_rem else f"~{int(hrs)}h"
-        return f"~{round(hrs, 1)}h"
-    days = minutes / 1440
-    if days < 7:
-        return f"~{round(days, 1)} days"
-    return f"~{round(days / 7, 1)} weeks"
-
-
-def _trade_type_label(a: MarketAnalysis) -> str:
-    labels = {
-        "Scalp":    "SCALP    (minutes–hours)",
-        "Intraday": "INTRADAY (same session)",
-        "Swing":    "SWING    (1–5 days)",
-        "Position": "POSITION (weeks)",
-    }
-    return labels.get(a.trade_type, a.trade_type)
-
-
-def recommend_card(a: MarketAnalysis) -> str:
-    ms = market_status()
-    if not ms["is_open"]:
-        mkt_line = f"! {ms['status_text']} — {ms['note']}"
-    else:
-        mkt_line = f"Market: {ms['note']}"
-
-    lines = [
-        "XAU/USD  RECOMMENDATION",
-        "=" * 30,
-        _verdict_block(a),
-        "=" * 30,
-        f"Price:    {fmt_price(a.price)}",
-        f"TF:       {a.timeframe}",
-        f"Bias:     {a.bias}   Strength: {a.strength}",
-        mkt_line,
-        "─" * 30,
-        "INDICATOR CONSENSUS",
-        _consensus_bar(a),
-        "─" * 30,
-        _indicator_bar(a.indicators),
-        "─" * 30,
-    ]
-
-    if a.action in ("BUY", "SELL"):
-        t1 = _estimate_time(a, a.tp1)
-        t2 = _estimate_time(a, a.tp2)
-        lines += [
-            f"Entry:    {fmt_price(a.entry)}",
-        ]
-        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-            lines.append(f"Limit:    {fmt_price(a.limit_entry)}  *better fill")
-        lines += [
-            f"SL:       {fmt_price(a.stop_loss)}",
-            f"TP1:      {fmt_price(a.tp1)}  ({t1})",
-            f"TP2:      {fmt_price(a.tp2)}  ({t2})",
-            f"R:R       1:{a.rr_ratio}",
-            "─" * 30,
-            f"Type:     {_trade_type_label(a)}",
-            f"Reason: {a.verdict_reason[:48]}",
-        ]
-        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Inside Bar", "Spinning Top"):
-            lines.append(f"Pattern:  {a.candle_pattern}")
-        if a.breakout:
-            lines.append("Signal:   Breakout confirmed")
-        if a.reversal:
-            lines.append("Signal:   Reversal detected")
-    else:
-        lines += [
-            f"Reason: {(a.wait_reason or a.verdict_reason)[:48]}",
-            "No trade. Monitor for clearer setup.",
-        ]
-        if a.candle_pattern and a.candle_pattern not in ("None",):
-            lines.append(f"Pattern:  {a.candle_pattern}")
-
-    return "<pre>" + "\n".join(lines) + "</pre>"
-
-
-def alert_card(a: MarketAnalysis) -> str:
-    ms  = market_status()
-    mkt = f"[CLOSED] {ms['note']}" if not ms["is_open"] else ms["note"]
-    session_str = f"{a.session}" if a.session else ""
-    htf_str     = f"HTF: {a.htf_bias}" if a.htf_bias and a.htf_bias != "Neutral" else ""
-    context_line = "  |  ".join(filter(None, [session_str, htf_str])) or mkt
-    lines = [
-        "SIGNAL ALERT  |  XAU/USD",
-        "=" * 30,
-        f"[ {a.action} ]  {a.trade_type.upper()}",
-        f"Confidence: {a.confidence}%   ADX: {a.adx:.0f}",
-        "=" * 30,
-        f"TF:         {a.timeframe}",
-        f"Price:      {fmt_price(a.price)}",
-        f"Session:    {context_line}",
-        "─" * 30,
-        f"Entry:      {fmt_price(a.entry)}",
-    ]
-    t1 = _estimate_time(a, a.tp1)
-    t2 = _estimate_time(a, a.tp2)
-    if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-        lines.append(f"Limit:      {fmt_price(a.limit_entry)}  *better fill")
-    lines += [
-        f"SL:         {fmt_price(a.stop_loss)}",
-        f"TP1:        {fmt_price(a.tp1)}  ({t1})",
-        f"TP2:        {fmt_price(a.tp2)}  ({t2})",
-        f"R:R         1:{a.rr_ratio}",
-        "─" * 30,
-        f"Type:       {_trade_type_label(a)}",
-        f"Bias:       {a.bias}   Strength: {a.strength}",
-    ]
-    if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Inside Bar", "Spinning Top"):
-        lines.append(f"Pattern:    {a.candle_pattern}")
-    if a.verdict_reason:
-        lines.append(f"Reason:     {a.verdict_reason[:46]}")
-    return "<pre>" + "\n".join(lines) + "</pre>"
-
-
-def analysis_card(a: MarketAnalysis) -> str:
-    ms  = market_status()
-    mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
-    lines = [
-        f"XAU/USD  |  {a.timeframe}",
-        "─" * 30,
-        f"Price:   {fmt_price(a.price)}",
-        f"Market:  {mkt}",
-        f"Session: {a.session or 'N/A'}",
-        "─" * 30,
-        f"Bias:    {a.bias}",
-        f"HTF:     {a.htf_bias}",
-        f"Trend:   {a.trend}   ({a.strength})",
-        f"ADX:     {a.adx:.1f}   BB%B: {a.bb_pct:.1f}%",
-        f"Votes:   BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
-    ]
-    if a.candle_pattern and a.candle_pattern not in ("None",):
-        lines.append(f"Candle:  {a.candle_pattern}")
-    lines += [
-        "─" * 30,
-        f"Type:    {_trade_type_label(a)}",
-        "─" * 30,
-        f"Entry:   {fmt_price(a.entry)}",
-    ]
-    if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry and a.action in ("BUY", "SELL"):
-        lines.append(f"Limit:   {fmt_price(a.limit_entry)}  *better fill")
-    if a.action in ("BUY", "SELL"):
-        t1 = _estimate_time(a, a.tp1)
-        t2 = _estimate_time(a, a.tp2)
-        lines += [
-            f"SL:      {fmt_price(a.stop_loss)}",
-            f"TP1:     {fmt_price(a.tp1)}  ({t1})",
-            f"TP2:     {fmt_price(a.tp2)}  ({t2})",
-            f"R:R      1:{a.rr_ratio}",
-        ]
-    else:
-        lines += [
-            f"SL:      {fmt_price(a.stop_loss)}",
-            f"TP1:     {fmt_price(a.tp1)}",
-            f"TP2:     {fmt_price(a.tp2)}",
-            f"R:R      1:{a.rr_ratio}",
-        ]
-    lines += [
-        "─" * 30,
-        _verdict_block(a),
-    ]
-    if a.breakout:
-        lines.append("Note:    Breakout detected")
-    if a.reversal:
-        lines.append("Note:    Reversal signal")
-    if not ms["is_open"]:
-        lines += ["─" * 30, f"! {ms['status_text']} — {ms['note']}"]
-    return "<pre>" + "\n".join(lines) + "</pre>"
-
+# ─── SIGNAL CARD ──────────────────────────────────────────────────────────────
 
 def signal_card(a: MarketAnalysis) -> str:
     ms = market_status()
-    if a.action == "WAIT":
-        lines = [
-            "TRADE SIGNAL  |  XAU/USD",
-            "─" * 30,
-        ]
-        if not ms["is_open"]:
-            lines.append(f"! {ms['status_text']} — {ms['note']}")
+
+    lines = ["<pre>"]
+
+    if a.action in ("BUY", "SELL"):
+        dir_str = "BUY  LONG" if a.action == "BUY" else "SELL SHORT"
         lines += [
-            "[ WAIT ]  No entry",
-            f"Reason:  {(a.wait_reason or 'No clear setup')[:46]}",
-            "─" * 30,
-            f"Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
-            f"Session:    {a.session or 'N/A'}",
-            f"HTF Bias:   {a.htf_bias}",
-            f"Votes:      BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+            "╔══════════════════════════════════╗",
+            f"║  XAU/USD  [ {a.action} ]  {a.trade_type.upper():<14}║",
+            "╚══════════════════════════════════╝",
+            "",
+            f"  Win Rate  : {_win_bar(a.win_probability)}",
+            f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            "",
+            f"  Structure : {_struct_label(a.market_structure)}",
+            f"  HTF Align : {a.htf_bias}",
+            f"  Session   : {a.session or 'N/A'}",
+            f"  Price     : {fmt_price(a.price)}",
+            "",
+            "──────────────────────────────────",
+            "  TRADE PLAN",
+            "──────────────────────────────────",
+            f"  Entry     : {fmt_price(a.entry)}",
         ]
-        if a.candle_pattern and a.candle_pattern not in ("None",):
-            lines.append(f"Pattern:    {a.candle_pattern}")
-    else:
-        lines = [
-            "TRADE SIGNAL  |  XAU/USD",
-            "─" * 30,
-        ]
-        if not ms["is_open"]:
-            lines.append(f"! {ms['status_text']} — {ms['note']}")
+        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
+            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
         lines += [
-            f"[ {a.action} ]  {a.bias}  —  {a.trade_type.upper()}",
-            f"Confidence: {a.confidence}%",
-            "─" * 30,
-            f"Entry:   {fmt_price(a.entry)}",
+            f"  Stop Loss : {fmt_price(a.stop_loss)}",
+            "──────────────────────────────────",
         ]
         t1 = _estimate_time(a, a.tp1)
         t2 = _estimate_time(a, a.tp2)
-        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-            lines.append(f"Limit:   {fmt_price(a.limit_entry)}  *better fill")
+        t3 = _estimate_time(a, a.tp3)
+        rr1 = round(abs(a.tp1 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
+        rr2 = round(abs(a.tp2 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
+        rr3 = round(abs(a.tp3 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
         lines += [
-            f"SL:      {fmt_price(a.stop_loss)}",
-            f"TP1:     {fmt_price(a.tp1)}  ({t1})",
-            f"TP2:     {fmt_price(a.tp2)}  ({t2})",
-            f"R:R      1:{a.rr_ratio}",
-            "─" * 30,
-            f"ADX:     {a.adx:.1f}   TF: {a.timeframe}",
-            f"Session: {a.session or 'N/A'}   HTF: {a.htf_bias}",
-            f"Votes:   BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+            f"  TP1       : {fmt_price(a.tp1)}  (1:{rr1} R:R  {t1})",
+            f"  TP2       : {fmt_price(a.tp2)}  (1:{rr2} R:R  {t2})",
+            f"  TP3       : {fmt_price(a.tp3)}  (1:{rr3} R:R  {t3})",
+            "──────────────────────────────────",
         ]
-        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Inside Bar", "Spinning Top"):
-            lines.append(f"Pattern: {a.candle_pattern}")
-        lines.append(f"Reason:  {a.verdict_reason[:46]}")
-    return "<pre>" + "\n".join(lines) + "</pre>"
+        if a.confluence_list:
+            n = len(a.confluence_list)
+            lines.append(f"  CONFLUENCE  ({n} factors)")
+            for cf in a.confluence_list:
+                lines.append(f"    + {cf}")
+            lines.append("")
+        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
+            lines.append(f"  Pattern   : {a.candle_pattern}")
+    else:
+        lines += [
+            "╔══════════════════════════════════╗",
+            "║  XAU/USD  [ WAIT ]               ║",
+            "╚══════════════════════════════════╝",
+            "",
+            f"  No entry. Setup not confirmed.",
+            f"  Reason: {(a.wait_reason or 'Indicators mixed')[:42]}",
+            "",
+            f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            f"  Structure : {_struct_label(a.market_structure)}",
+            f"  HTF Bias  : {a.htf_bias}",
+            f"  Session   : {a.session or 'N/A'}",
+            "",
+            "  INDICATOR SNAPSHOT",
+            "──────────────────────────────────",
+            f"  RSI(14)  : {a.rsi_value:.1f}",
+            f"  Stoch K/D: {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
+            f"  MACD Hist: {a.macd_hist:+.3f}",
+            f"  +DI/-DI  : {a.plus_di:.1f} / {a.minus_di:.1f}",
+            f"  BB%B     : {a.bb_pct:.1f}%",
+            f"  Votes    : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+        ]
 
+    if not ms["is_open"]:
+        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── ANALYSIS CARD ────────────────────────────────────────────────────────────
+
+def analysis_card(a: MarketAnalysis) -> str:
+    ms = market_status()
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  FULL ANALYSIS         ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Price     : {fmt_price(a.price)}",
+        f"  Timeframe : {a.timeframe}   {_mkt_line()}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "──────────────────────────────────",
+        "  MARKET STRUCTURE",
+        "──────────────────────────────────",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Bias      : {a.bias}   ({a.strength})",
+        f"  HTF Bias  : {a.htf_bias}",
+        f"  Trend     : {a.trend}",
+        f"  Momentum  : {a.momentum}",
+        f"  ADX       : {a.adx:.1f}",
+        "",
+        "──────────────────────────────────",
+        "  INDICATORS",
+        "──────────────────────────────────",
+        _indicator_rows(a),
+        f"  MACD Hist : {a.macd_hist:+.3f}",
+        f"  +DI / -DI : {a.plus_di:.1f} / {a.minus_di:.1f}",
+        f"  Stoch K/D : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
+        f"  BB%B      : {a.bb_pct:.1f}%",
+        f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+    ]
+
+    if a.candle_pattern and a.candle_pattern != "None":
+        lines.append(f"  Pattern   : {a.candle_pattern}")
+
+    lines += ["",
+        "──────────────────────────────────",
+        "  KEY LEVELS",
+        "──────────────────────────────────",
+        f"  R2        : {fmt_price(a.resistance2)}",
+        f"  R1        : {fmt_price(a.resistance1)}",
+        f"  BB Upper  : {fmt_price(a.bb_upper)}",
+        f"  -- Price  : {fmt_price(a.price)}",
+        f"  BB Lower  : {fmt_price(a.bb_lower)}",
+        f"  S1        : {fmt_price(a.support1)}",
+        f"  S2        : {fmt_price(a.support2)}",
+        f"  ATR(14)   : {fmt_price(a.atr)}",
+        "",
+        "──────────────────────────────────",
+    ]
+
+    if a.action in ("BUY", "SELL"):
+        t1 = _estimate_time(a, a.tp1)
+        t2 = _estimate_time(a, a.tp2)
+        lines += [
+            f"  SIGNAL    : {a.action}   {_trade_type_label(a)}",
+            f"  Win Rate  : {_win_bar(a.win_probability)}",
+            "",
+            f"  Entry     : {fmt_price(a.entry)}",
+        ]
+        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
+            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}")
+        lines += [
+            f"  Stop Loss : {fmt_price(a.stop_loss)}",
+            f"  TP1       : {fmt_price(a.tp1)}  ({t1})",
+            f"  TP2       : {fmt_price(a.tp2)}  ({t2})",
+            f"  TP3       : {fmt_price(a.tp3)}",
+            f"  R:R       : 1:{a.rr_ratio}",
+        ]
+        if a.confluence_list:
+            lines.append("")
+            lines.append(f"  Confluence ({len(a.confluence_list)} factors):")
+            for cf in a.confluence_list:
+                lines.append(f"    + {cf}")
+    else:
+        lines += [
+            f"  SIGNAL    : WAIT",
+            f"  Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
+        ]
+
+    if not ms["is_open"]:
+        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── RECOMMEND CARD ───────────────────────────────────────────────────────────
+
+def recommend_card(a: MarketAnalysis) -> str:
+    ms = market_status()
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  RECOMMENDATION        ║",
+        "╚══════════════════════════════════╝",
+        "",
+    ]
+
+    if a.action in ("BUY", "SELL"):
+        lines += [
+            f"  [ {a.action} ]  {_trade_type_label(a)}",
+            f"  Win Rate  : {_win_bar(a.win_probability)}",
+            f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            "",
+            f"  Price     : {fmt_price(a.price)}   TF: {a.timeframe}",
+            f"  Structure : {_struct_label(a.market_structure)}",
+            f"  HTF Align : {a.htf_bias}",
+            f"  Session   : {a.session or 'N/A'}",
+            "",
+            "──────────────────────────────────",
+            "  INDICATOR CONSENSUS",
+            "──────────────────────────────────",
+            _indicator_rows(a),
+            "",
+            "──────────────────────────────────",
+            "  TRADE PLAN",
+            "──────────────────────────────────",
+            f"  Entry     : {fmt_price(a.entry)}",
+        ]
+        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
+            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
+        t1 = _estimate_time(a, a.tp1)
+        t2 = _estimate_time(a, a.tp2)
+        lines += [
+            f"  Stop Loss : {fmt_price(a.stop_loss)}",
+            f"  TP1       : {fmt_price(a.tp1)}  ({t1})",
+            f"  TP2       : {fmt_price(a.tp2)}  ({t2})",
+            f"  TP3       : {fmt_price(a.tp3)}",
+            f"  R:R       : 1:{a.rr_ratio}",
+        ]
+        if a.confluence_list:
+            lines += ["", f"  CONFLUENCE ({len(a.confluence_list)} factors)"]
+            for cf in a.confluence_list:
+                lines.append(f"    + {cf}")
+        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
+            lines.append(f"  Pattern   : {a.candle_pattern}")
+    else:
+        lines += [
+            "  [ WAIT ]  No trade setup",
+            f"  Reason: {(a.wait_reason or a.verdict_reason)[:44]}",
+            "",
+            "  INDICATOR CONSENSUS",
+            "──────────────────────────────────",
+            _indicator_rows(a),
+            "",
+            f"  Structure : {_struct_label(a.market_structure)}",
+            f"  HTF Bias  : {a.htf_bias}",
+            f"  Session   : {a.session or 'N/A'}",
+            f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+        ]
+
+    if not ms["is_open"]:
+        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── TREND CARD ───────────────────────────────────────────────────────────────
 
 def trend_card(a: MarketAnalysis) -> str:
     ms  = market_status()
     mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
-    lines = [
-        "XAU/USD  TREND",
-        "─" * 28,
-        f"Timeframe: {a.timeframe}",
-        f"Market:    {mkt}",
-        "─" * 28,
-        f"Trend:     {a.trend}",
-        f"Bias:      {a.bias}",
-        f"HTF Bias:  {a.htf_bias}",
-        f"Strength:  {a.strength}",
-        f"Momentum:  {a.momentum}",
-        f"ADX:       {a.adx:.1f}",
-        f"Session:   {a.session or 'N/A'}",
-        "─" * 28,
-        f"Price:     {fmt_price(a.price)}",
-        f"EMA Votes: BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  TREND ANALYSIS        ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Timeframe : {a.timeframe}   {mkt}",
+        f"  Price     : {fmt_price(a.price)}",
+        "",
+        "──────────────────────────────────",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Trend     : {a.trend}   ({a.strength})",
+        f"  Bias      : {a.bias}",
+        f"  HTF Bias  : {a.htf_bias}",
+        f"  Momentum  : {a.momentum}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "──────────────────────────────────",
+        "  INDICATORS",
+        "──────────────────────────────────",
+        f"  ADX       : {a.adx:.1f}   +DI: {a.plus_di:.1f}  -DI: {a.minus_di:.1f}",
+        f"  RSI(14)   : {a.rsi_value:.1f}",
+        f"  Stoch K/D : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
+        f"  MACD Hist : {a.macd_hist:+.3f}",
+        f"  BB%B      : {a.bb_pct:.1f}%",
+        f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
     ]
-    if a.candle_pattern and a.candle_pattern not in ("None",):
-        lines.append(f"Pattern:   {a.candle_pattern}")
+    if a.candle_pattern and a.candle_pattern != "None":
+        lines.append(f"  Pattern   : {a.candle_pattern}")
     if a.breakout:
-        lines.append("Note:      Breakout in progress")
+        lines.append("  Note      : Breakout in progress")
     if a.reversal:
-        lines.append("Note:      Reversal signal present")
-    return "<pre>" + "\n".join(lines) + "</pre>"
+        lines.append("  Note      : Divergence reversal signal")
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
 
+
+# ─── LEVELS CARD ──────────────────────────────────────────────────────────────
 
 def levels_card(a: MarketAnalysis) -> str:
     ms  = market_status()
     mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
-    bb_upper = a.bb_upper if a.bb_upper else 0.0
-    bb_lower = a.bb_lower if a.bb_lower else 0.0
-    atr_val = a.atr if a.atr else 0.0
-    lines = [
-        f"KEY LEVELS  |  {a.timeframe}",
-        "─" * 28,
-        f"Market:       {mkt}",
-        "─" * 28,
-        f"Resistance 2: {fmt_price(a.resistance2)}",
-        f"Resistance 1: {fmt_price(a.resistance1)}",
-        f"BB Upper:     {fmt_price(bb_upper)}",
-        "─" * 12,
-        f"  Price:      {fmt_price(a.price)}",
-        f"  BB%B:       {a.bb_pct:.1f}%",
-        "─" * 12,
-        f"BB Lower:     {fmt_price(bb_lower)}",
-        f"Support 1:    {fmt_price(a.support1)}",
-        f"Support 2:    {fmt_price(a.support2)}",
-        "─" * 28,
-        f"Liquidity Zone: {a.liquidity_zone}",
-        f"ATR:          {fmt_price(atr_val)}",
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  KEY LEVELS            ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  TF: {a.timeframe}   {mkt}",
+        "",
+        "──────────────────────────────────",
+        f"  RESISTANCE 2 : {fmt_price(a.resistance2)}",
+        f"  RESISTANCE 1 : {fmt_price(a.resistance1)}",
+        f"  BB Upper     : {fmt_price(a.bb_upper)}",
+        "  ──────────────────────────────",
+        f"     Price     : {fmt_price(a.price)}",
+        f"     BB%B      : {a.bb_pct:.1f}%",
+        "  ──────────────────────────────",
+        f"  BB Lower     : {fmt_price(a.bb_lower)}",
+        f"  SUPPORT 1    : {fmt_price(a.support1)}",
+        f"  SUPPORT 2    : {fmt_price(a.support2)}",
+        "",
+        "──────────────────────────────────",
+        f"  ATR(14)      : {fmt_price(a.atr)}",
+        f"  Liq Zone     : {a.liquidity_zone}",
+        f"  Structure    : {_struct_label(a.market_structure)}",
+        "",
+        "  Not financial advice.", "</pre>",
     ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return "\n".join(lines)
 
+
+# ─── OUTLOOK CARD ─────────────────────────────────────────────────────────────
 
 def outlook_card(a: MarketAnalysis) -> str:
-    tf_label = {
-        "M5": "5-Min", "M15": "15-Min", "M30": "30-Min",
-        "H1": "1-Hour", "H4": "4-Hour", "D1": "Daily"
-    }.get(a.timeframe, a.timeframe)
-
-    if a.bias == "Bullish":
-        outlook_text = (
-            f"Price targeting {fmt_price(a.tp1)}, extension {fmt_price(a.tp2)}. "
-            f"Key support at {fmt_price(a.support1)}."
-        )
-    elif a.bias == "Bearish":
-        outlook_text = (
-            f"Price targeting {fmt_price(a.tp1)}, extension {fmt_price(a.tp2)}. "
-            f"Key resistance at {fmt_price(a.resistance1)}."
-        )
-    else:
-        outlook_text = (
-            f"Ranging between {fmt_price(a.support1)} and {fmt_price(a.resistance1)}. "
-            "Wait for directional break."
-        )
-
     ms  = market_status()
     mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
 
-    lines = [
-        f"MARKET OUTLOOK  |  {tf_label}",
-        "─" * 32,
-        f"Market:     {mkt}",
-        "─" * 32,
-        f"Bias:       {a.bias}",
-        f"HTF Bias:   {a.htf_bias}",
-        f"Trend:      {a.trend}  ({a.strength})",
-        f"Momentum:   {a.momentum}   ADX: {a.adx:.1f}",
-        f"Session:    {a.session or 'N/A'}",
-        "─" * 32,
-        "Outlook:",
-        outlook_text,
-        "─" * 32,
-        f"Confidence: {a.confidence}%",
-        f"Action:     {a.action}",
-        f"Type:       {_trade_type_label(a)}",
-    ]
-    if a.candle_pattern and a.candle_pattern not in ("None",):
-        lines.append(f"Pattern:    {a.candle_pattern}")
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    if a.bias == "Bullish":
+        scenario = (f"Targeting {fmt_price(a.tp1)}, extension {fmt_price(a.tp2)}."
+                    f" Key support at {fmt_price(a.support1)}."
+                    f" Invalidation below {fmt_price(a.stop_loss)}.")
+    elif a.bias == "Bearish":
+        scenario = (f"Targeting {fmt_price(a.tp1)}, extension {fmt_price(a.tp2)}."
+                    f" Key resistance at {fmt_price(a.resistance1)}."
+                    f" Invalidation above {fmt_price(a.stop_loss)}.")
+    else:
+        scenario = (f"Ranging {fmt_price(a.support1)} — {fmt_price(a.resistance1)}."
+                    f" Wait for a clean directional break with volume confirmation.")
 
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  MARKET OUTLOOK        ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  TF: {a.timeframe}   {mkt}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "──────────────────────────────────",
+        f"  Bias      : {a.bias}   ({a.strength})",
+        f"  HTF Bias  : {a.htf_bias}",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Momentum  : {a.momentum}   ADX: {a.adx:.1f}",
+        f"  Action    : {a.action}",
+    ]
+    if a.action in ("BUY", "SELL"):
+        lines.append(f"  Win Rate  : {_win_bar(a.win_probability)}")
+    lines += [
+        "",
+        "──────────────────────────────────",
+        "  SCENARIO",
+        "──────────────────────────────────",
+    ]
+    # Word-wrap scenario at ~36 chars
+    words, buf, wrapped = scenario.split(), [], []
+    for w in words:
+        if sum(len(x) + 1 for x in buf) + len(w) > 36:
+            wrapped.append("  " + " ".join(buf))
+            buf = [w]
+        else:
+            buf.append(w)
+    if buf:
+        wrapped.append("  " + " ".join(buf))
+    lines += wrapped
+
+    if a.confluence_list:
+        lines += ["", f"  Confluence ({len(a.confluence_list)} factors):"]
+        for cf in a.confluence_list:
+            lines.append(f"    + {cf}")
+
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── ALERT CARD ───────────────────────────────────────────────────────────────
+
+def alert_card(a: MarketAnalysis) -> str:
+    ms  = market_status()
+    mkt = f"[CLOSED] {ms['note']}" if not ms["is_open"] else ms["note"]
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        f"║  SIGNAL ALERT  XAU/USD  {a.action:<9}║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Win Rate  : {_win_bar(a.win_probability)}",
+        f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+        f"  Type      : {_trade_type_label(a)}",
+        "",
+        f"  Price     : {fmt_price(a.price)}",
+        f"  Session   : {a.session or 'N/A'}   {mkt}",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  HTF Align : {a.htf_bias}",
+        "",
+        "──────────────────────────────────",
+        f"  Entry     : {fmt_price(a.entry)}",
+    ]
+    if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
+        lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
+    t1 = _estimate_time(a, a.tp1)
+    t2 = _estimate_time(a, a.tp2)
+    rr1 = round(abs(a.tp1 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
+    rr2 = round(abs(a.tp2 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
+    lines += [
+        f"  Stop Loss : {fmt_price(a.stop_loss)}",
+        f"  TP1       : {fmt_price(a.tp1)}  (1:{rr1}  {t1})",
+        f"  TP2       : {fmt_price(a.tp2)}  (1:{rr2}  {t2})",
+        f"  TP3       : {fmt_price(a.tp3)}",
+        "──────────────────────────────────",
+    ]
+    if a.confluence_list:
+        lines.append(f"  CONFLUENCE ({len(a.confluence_list)} factors)")
+        for cf in a.confluence_list:
+            lines.append(f"    + {cf}")
+    if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
+        lines.append(f"  Pattern   : {a.candle_pattern}")
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
+
+
+# ─── MISC CARDS (unchanged structure) ─────────────────────────────────────────
 
 def market_open_card(a: MarketAnalysis) -> str:
-    lines = [
+    lines = ["<pre>",
         "MARKET NOW OPEN  |  XAU/USD",
-        "=" * 30,
-        "New week. Fresh analysis.",
-        "=" * 30,
-        f"Price:      {fmt_price(a.price)}",
-        f"Bias:       {a.bias}",
-        f"HTF Bias:   {a.htf_bias}",
-        f"Trend:      {a.trend}  ({a.strength})",
-        f"ADX:        {a.adx:.1f}   BB%B: {a.bb_pct:.1f}%",
-        "─" * 30,
-        _verdict_block(a),
-        "─" * 30,
+        "=" * 32,
+        f"Price     : {fmt_price(a.price)}",
+        f"Structure : {_struct_label(a.market_structure)}",
+        f"Bias      : {a.bias}   ({a.strength})",
+        f"HTF Bias  : {a.htf_bias}",
+        f"ADX       : {a.adx:.1f}",
+        "─" * 32,
     ]
     if a.action in ("BUY", "SELL"):
         lines += [
-            f"Entry:      {fmt_price(a.entry)}",
+            f"SIGNAL    : {a.action}   {_trade_type_label(a)}",
+            f"Win Rate  : {_win_bar(a.win_probability)}",
+            f"Entry     : {fmt_price(a.entry)}",
+            f"Stop Loss : {fmt_price(a.stop_loss)}",
+            f"TP1       : {fmt_price(a.tp1)}",
+            f"TP2       : {fmt_price(a.tp2)}",
+            f"R:R       : 1:{a.rr_ratio}",
         ]
-        if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-            lines.append(f"Limit:      {fmt_price(a.limit_entry)}  *better fill")
-        lines += [
-            f"SL:         {fmt_price(a.stop_loss)}",
-            f"TP1:        {fmt_price(a.tp1)}",
-            f"TP2:        {fmt_price(a.tp2)}",
-            f"R:R         1:{a.rr_ratio}",
-            "─" * 30,
-            f"Type:       {_trade_type_label(a)}",
-            f"Reason: {a.verdict_reason[:48]}",
-        ]
-        if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Inside Bar", "Spinning Top"):
-            lines.append(f"Pattern:    {a.candle_pattern}")
+        if a.confluence_list:
+            for cf in a.confluence_list:
+                lines.append(f"  + {cf}")
     else:
         lines += [
-            f"Reason: {(a.wait_reason or a.verdict_reason)[:48]}",
-            "No immediate setup. Monitor price action.",
+            "SIGNAL    : WAIT",
+            f"Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
+            "Monitor for a clean directional setup.",
         ]
     lines += [
-        "─" * 30,
+        "─" * 32,
         f"R1: {fmt_price(a.resistance1)}   R2: {fmt_price(a.resistance2)}",
         f"S1: {fmt_price(a.support1)}   S2: {fmt_price(a.support2)}",
+        "</pre>",
     ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return "\n".join(lines)
 
 
 def weekly_closed_recap_text() -> str:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%A %d %b %Y  %H:%M UTC")
-    lines = [
+    lines = ["<pre>",
         "MARKET CLOSED  |  XAU/USD",
         "─" * 30,
         f"Time:   {now}",
@@ -484,41 +538,35 @@ def weekly_closed_recap_text() -> str:
         "Analysis resumes Sunday 6:00 PM ET.",
         "─" * 30,
         "Active trades remain tracked.",
+        "</pre>",
     ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return "\n".join(lines)
 
 
 def news_card(items: list) -> str:
-    """Format fetched gold news headlines into a monospace card."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
-    lines = [
+    lines = ["<pre>",
         "GOLD NEWS  |  XAU/USD",
         "=" * 32,
         f"Updated: {now}",
         "=" * 32,
     ]
     if not items:
-        lines += [
-            "No headlines available right now.",
-            "Try again in a few minutes.",
-        ]
+        lines += ["No headlines available right now.", "Try again in a few minutes."]
     else:
         for i, item in enumerate(items, 1):
             date_part = f"  [{item['date']}]" if item.get("date") else ""
-            # Wrap long titles at 34 chars
             title = item.get("title", "")
             words = title.split()
             wrapped, line = [], ""
             for w in words:
                 if len(line) + len(w) + 1 > 34:
-                    if line:
-                        wrapped.append(line)
+                    if line: wrapped.append(line)
                     line = w
                 else:
                     line = f"{line} {w}".strip()
-            if line:
-                wrapped.append(line)
+            if line: wrapped.append(line)
             first_line = f"{i}. {wrapped[0]}" if wrapped else f"{i}. {title}"
             lines.append(first_line)
             for extra in wrapped[1:]:
@@ -527,18 +575,14 @@ def news_card(items: list) -> str:
             lines.append(f"   {src}{date_part}")
             if i < len(items):
                 lines.append("─" * 32)
-    lines += [
-        "=" * 32,
-        "Source: Yahoo Finance / RSS",
-        "Refreshes every 30 minutes.",
-    ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    lines += ["=" * 32, "Source: Yahoo Finance / RSS", "Refreshes every 30 minutes.", "</pre>"]
+    return "\n".join(lines)
 
 
 def welcome_text(name: str) -> str:
-    ms  = market_status()
+    ms = market_status()
     if ms["is_open"]:
-        mkt = f"Market is OPEN — {ms['note']}. Live analysis available."
+        mkt = f"Market is OPEN — {ms['note']}. Live signals available."
     else:
         mkt = f"Market is CLOSED — {ms['note']}."
     return (
@@ -552,15 +596,16 @@ def welcome_text(name: str) -> str:
 
 def help_text() -> str:
     cmds = [
-        ("/recommend", "BUY / SELL verdict with indicator breakdown"),
-        ("/analyze",   "Full market analysis — bias, trend, entry, SL, TP"),
-        ("/signal",    "Trade setup (Scalp / Intraday / Swing / Position)"),
-        ("/trend",     "Current trend direction and strength"),
-        ("/levels",    "Support, resistance, BB, and liquidity zones"),
-        ("/outlook",   "Market outlook report"),
+        ("/signal",    "Trade signal — BUY/SELL with full trade plan"),
+        ("/analyze",   "Full analysis — structure, indicators, levels, entry"),
+        ("/recommend", "Verdict with indicator breakdown"),
+        ("/chart",     "Live chart + AI vision analysis"),
+        ("/trend",     "Trend direction, structure, momentum"),
+        ("/levels",    "Support, resistance, BB, ATR levels"),
+        ("/outlook",   "Market outlook and scenario"),
         ("/news",      "Latest gold market headlines"),
-        ("/alerts",    "Toggle automatic entry notifications"),
-        ("/settings",  "Change timeframe"),
+        ("/alerts",    "Toggle automatic signal notifications"),
+        ("/settings",  "Change timeframe (M5 to D1)"),
         ("/help",      "This message"),
     ]
     lines = ["<b>Available Commands</b>\n"]
@@ -573,9 +618,9 @@ def help_text() -> str:
         f"<b>Market:</b> {mkt_status} — {ms['note']}",
         "",
         "<b>Trade Types:</b>",
-        "Scalp    — M5/M15 (minutes–hours)",
+        "Scalp    — M5/M15 (minutes-hours)",
         "Intraday — M30/H1 (same session)",
-        "Swing    — H1/H4  (1–5 days)",
+        "Swing    — H1/H4  (1-5 days)",
         "Position — D1     (weeks)",
     ]
     return "\n".join(lines)
