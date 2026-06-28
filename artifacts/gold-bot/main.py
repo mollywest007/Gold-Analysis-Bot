@@ -22,31 +22,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALERT_INTERVAL_SECONDS  = 300   # 5 minutes — auto alert scanner
-CACHE_REFRESH_SECONDS   = 180   # 3 minutes — keeps analysis cache warm
+ALERT_INTERVAL_SECONDS  = 60    # 1 minute — fast alert scanner
+CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Pre-fetch H1 analysis 15 s after startup so first user request is instant."""
+    """Pre-fetch M15 + H1 analysis 15 s after startup so first request is instant."""
     from src.market_hours import market_status
     from src.analysis.cache import warm
     if not market_status()["is_open"]:
         logger.info("Cache warm skipped — market closed.")
         return
-    await warm(["H1"])
+    await warm(["M15", "H1"])
 
 
 async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Silently refresh H1 analysis cache every 3 minutes while market is open."""
+    """Refresh M15 + H1 cache every minute while market is open."""
     from src.market_hours import market_status
     from src.analysis.cache import get_analysis
+    import asyncio
     if not market_status()["is_open"]:
         return
     try:
-        a = await get_analysis("H1", max_age=0)   # force fresh fetch
+        m15, h1 = await asyncio.gather(
+            get_analysis("M15", max_age=0),
+            get_analysis("H1",  max_age=0),
+        )
         logger.info(
-            f"Cache refreshed — action={a.action} conf={a.confidence}% "
-            f"adx={a.adx:.1f} session={a.session}"
+            f"Cache refreshed — M15:{m15.action}/{m15.confidence}% "
+            f"H1:{h1.action}/{h1.confidence}% adx={h1.adx:.1f}"
         )
     except Exception as e:
         logger.warning(f"Cache refresh failed: {e}")

@@ -1,14 +1,17 @@
+import asyncio
+import io
 import json
 import logging
 import os
 import time
 from typing import Set, Dict, Tuple, Optional
 
+from telegram import InputFile
 from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache
-from src.utils.formatting import alert_card
+from src.utils.formatting import early_entry_card, alert_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
 
@@ -17,13 +20,15 @@ logger = logging.getLogger(__name__)
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "subscribers.json")
 
 _last_sent: Dict[str, Tuple[str, float]] = {}
-RESEND_AFTER_SECONDS = 55 * 60
+RESEND_AFTER_SECONDS = 20 * 60   # don't repeat same signal within 20 minutes
+
+SCAN_TIMEFRAMES = ["M15", "H1"]  # fastest + reliable — scan both every minute
 
 # ── Market open/close transition tracking ─────────────────────────────────────
-_prev_market_open: Optional[bool] = None   # None = unknown (first scan)
-_open_notif_sent_at: float = 0.0           # timestamp of last opening notification
-_close_notif_sent_at: float = 0.0          # timestamp of last closing notification
-NOTIF_COOLDOWN = 30 * 60                   # don't re-fire within 30 min
+_prev_market_open: Optional[bool] = None
+_open_notif_sent_at: float  = 0.0
+_close_notif_sent_at: float = 0.0
+NOTIF_COOLDOWN = 30 * 60
 
 
 def _load() -> Set[int]:
@@ -72,36 +77,48 @@ def _should_send(tf: str, signal_key: str) -> bool:
     last_key, last_ts = _last_sent[tf]
     age = time.time() - last_ts
     if last_key != signal_key:
-        return True
+        return True          # direction flipped or price moved — new signal
     if age >= RESEND_AFTER_SECONDS:
-        return True
+        return True          # same signal but 20 min passed — re-alert
     remaining = int((RESEND_AFTER_SECONDS - age) / 60)
-    logger.info(f"Alert suppressed — same signal {int(age/60)}m ago. Next in ~{remaining}m.")
+    logger.info(f"[{tf}] Alert suppressed — same signal {int(age/60)}m ago, next in ~{remaining}m.")
     return False
 
 
-async def _broadcast(bot, subs: Set[int], text: str, parse_mode: str = "HTML") -> Set[int]:
-    """Send a text message to all subscribers. Returns set of dead chat IDs."""
+async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
     dead: Set[int] = set()
     for chat_id in list(subs):
         try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
                 dead.add(chat_id)
-                logger.warning(f"Removing dead subscriber {chat_id}")
             else:
-                logger.warning(f"Broadcast failed for {chat_id}: {e}")
+                logger.warning(f"Text send failed for {chat_id}: {e}")
+    return dead
+
+
+async def _broadcast_photo(bot, subs: Set[int], img_bytes: bytes, caption: str) -> Set[int]:
+    dead: Set[int] = set()
+    for chat_id in list(subs):
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_alert.jpg"),
+                caption=caption,
+            )
+        except Exception as e:
+            err = str(e).lower()
+            if "blocked" in err or "not found" in err or "deactivated" in err:
+                dead.add(chat_id)
+            else:
+                logger.warning(f"Photo send failed for {chat_id}: {e}")
     return dead
 
 
 async def _send_result_image(
-    bot,
-    subs: Set[int],
-    trade: dict,
-    event: str,
-    exit_price: float,
+    bot, subs: Set[int], trade: dict, event: str, exit_price: float,
 ) -> None:
     direction  = trade["direction"]
     entry      = trade["entry"]
@@ -114,25 +131,19 @@ async def _send_result_image(
 
     if event == "SL":
         result  = "LOSS"
-        caption = (
-            f"STOP LOSS HIT  |  XAU/USD\n"
-            f"Direction: {direction}  |  Entry: {entry:,.2f}  |  Exit: {exit_price:,.2f}\n"
-            f"Loss: {abs(entry - exit_price):,.2f} pts"
-        )
+        caption = (f"STOP LOSS HIT  |  XAU/USD\n"
+                   f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
+                   f"Loss: {abs(entry - exit_price):,.2f} pts")
     elif event == "TP2":
         result  = "WIN_TP2"
-        caption = (
-            f"ALL TARGETS HIT  |  XAU/USD\n"
-            f"Direction: {direction}  |  Entry: {entry:,.2f}  |  TP2: {tp2:,.2f}\n"
-            f"Full profit: +{abs(entry - exit_price):,.2f} pts"
-        )
+        caption = (f"ALL TARGETS HIT  |  XAU/USD\n"
+                   f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
+                   f"Full profit: +{abs(entry - exit_price):,.2f} pts")
     else:
         result  = "WIN_TP1"
-        caption = (
-            f"TP1 HIT  |  XAU/USD\n"
-            f"Direction: {direction}  |  Entry: {entry:,.2f}  |  TP1: {tp1:,.2f}\n"
-            f"Partial profit: +{abs(entry - exit_price):,.2f} pts"
-        )
+        caption = (f"TP1 HIT  |  XAU/USD\n"
+                   f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
+                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts")
 
     try:
         img_bytes = generate_result_image(
@@ -141,14 +152,13 @@ async def _send_result_image(
             confidence=confidence, timeframe=timeframe, rr_ratio=rr_ratio,
         )
     except Exception as e:
-        logger.error(f"Image generation failed: {e}")
+        logger.error(f"Result image generation failed: {e}")
         img_bytes = None
 
     dead: Set[int] = set()
     for chat_id in list(subs):
         try:
             if img_bytes:
-                import io
                 await bot.send_photo(
                     chat_id=chat_id,
                     photo=io.BytesIO(img_bytes),
@@ -162,66 +172,96 @@ async def _send_result_image(
             if "blocked" in err or "not found" in err or "deactivated" in err:
                 dead.add(chat_id)
             else:
-                logger.warning(f"Image send failed for {chat_id}: {e}")
+                logger.warning(f"Result send failed for {chat_id}: {e}")
 
     if dead:
         subs -= dead
         _save(subs)
-
-    logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)-len(dead)} sub(s)")
+    logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)} sub(s)")
 
 
 async def _send_market_open_notification(bot, subs: Set[int]) -> None:
-    """Run fresh analysis and broadcast the weekly market-open card."""
     from src.utils.formatting import market_open_card
-    logger.info("Sending market-open notification to subscribers...")
+    logger.info("Sending market-open notification...")
     try:
         a    = await analyze("H1")
         text = market_open_card(a)
-        dead = await _broadcast(bot, subs, text)
+        dead = await _broadcast_text(bot, subs, text)
         if dead:
             subs -= dead
             _save(subs)
-        logger.info(f"Market-open notification sent to {len(subs)} subscriber(s).")
+        logger.info(f"Market-open sent to {len(subs)} subscriber(s).")
     except Exception as e:
         logger.error(f"Market-open notification failed: {e}")
 
 
 async def _send_market_close_notification(bot, subs: Set[int]) -> None:
-    """Broadcast a brief market-closed recap card."""
     from src.utils.formatting import weekly_closed_recap_text
     logger.info("Sending market-close notification...")
     try:
         text = weekly_closed_recap_text()
-        dead = await _broadcast(bot, subs, text)
+        dead = await _broadcast_text(bot, subs, text)
         if dead:
             subs -= dead
             _save(subs)
-        logger.info(f"Market-close notification sent to {len(subs)} subscriber(s).")
+        logger.info(f"Market-close sent to {len(subs)} subscriber(s).")
     except Exception as e:
         logger.error(f"Market-close notification failed: {e}")
+
+
+async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
+    """Broadcast an entry signal: full entry card + live chart."""
+    # 1. Send the entry card (same format as /recommend Part 2)
+    text = early_entry_card(a)
+    dead = await _broadcast_text(bot, subs, text)
+    if dead:
+        subs -= dead
+        _save(subs)
+
+    # 2. Generate and broadcast the chart
+    try:
+        from src.chart_generator import generate_chart_image
+        img_bytes = await generate_chart_image(tf)
+        if img_bytes:
+            sl_dist = abs(a.entry - a.stop_loss)
+            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+            rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+            entry_display = a.early_entry if a.early_entry and a.early_entry != a.entry else a.entry
+            caption = (
+                f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
+                f"Limit Entry: {entry_display:,.2f}  SL: {a.stop_loss:,.2f}\n"
+                f"TP1: {a.tp1:,.2f} (1:{rr1})  TP3: {a.tp3:,.2f} (1:{rr3})"
+            )
+            dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
+            if dead2:
+                subs -= dead2
+                _save(subs)
+    except Exception as e:
+        logger.warning(f"Alert chart failed ({tf}): {e}")
+
+    logger.info(
+        f"[{tf}] Alert fired: {a.action} @ {a.entry:.2f} "
+        f"grade={a.setup_quality} win={a.win_probability}% "
+        f"to {len(subs)} sub(s)"
+    )
 
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
 
     from src.market_hours import market_status
-    ms        = market_status()
-    now_open  = ms["is_open"]
-    bot       = context.application.bot
-    subs      = _load()
-    now_ts    = time.time()
+    ms       = market_status()
+    now_open = ms["is_open"]
+    bot      = context.application.bot
+    subs     = _load()
+    now_ts   = time.time()
 
-    # ── Detect market state transitions ───────────────────────────────────────
+    # ── Market open/close transitions ─────────────────────────────────────────
     if _prev_market_open is not None and subs:
-
-        # Closed → Open: fire opening notification
         if not _prev_market_open and now_open:
             if (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN:
                 _open_notif_sent_at = now_ts
                 await _send_market_open_notification(bot, subs)
-
-        # Open → Closed: fire closing recap
         elif _prev_market_open and not now_open:
             if (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN:
                 _close_notif_sent_at = now_ts
@@ -229,16 +269,15 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _prev_market_open = now_open
 
-    # ── Skip rest of scan while market is closed ──────────────────────────────
     if not now_open:
-        logger.info(f"Alert scan skipped — {ms['status_text']} ({ms['note']})")
+        logger.info(f"Alert scan skipped — {ms['status_text']}")
         return
 
     if not subs:
         logger.info("Alert scan: no subscribers.")
         return
 
-    # ── 1. Check open trades for TP/SL hits ───────────────────────────────────
+    # ── Check open trades for TP/SL hits ──────────────────────────────────────
     try:
         current_price = await get_gold_price()
         if current_price > 0:
@@ -248,57 +287,35 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 
-    # ── 2. Scan for new entry signals ─────────────────────────────────────────
-    tf = "H1"
-    try:
-        a = await analyze(tf)
-    except Exception as e:
-        logger.error(f"Alert scan — analysis failed: {e}")
-        return
-
-    logger.info(
-        f"Alert scan: action={a.action} confidence={a.confidence}% "
-        f"rr={a.rr_ratio} adx={a.adx:.1f} buy={a.buy_votes} sell={a.sell_votes}"
+    # ── Scan timeframes for entry signals ─────────────────────────────────────
+    analyses = await asyncio.gather(
+        *[_safe_analyze(tf) for tf in SCAN_TIMEFRAMES],
+        return_exceptions=False,
     )
 
-    if a.action not in ("BUY", "SELL"):
-        logger.info(f"Alert scan: no signal (action={a.action})")
-        return
+    for tf, a in zip(SCAN_TIMEFRAMES, analyses):
+        if a is None:
+            continue
 
-    # Session gate: don't broadcast during Asian session unless confidence is very high
-    if a.session == "Asian" and a.confidence < 82:
         logger.info(
-            f"Alert scan: Asian session gate — conf={a.confidence}% < 82%. "
-            "Waiting for London open."
+            f"[{tf}] scan: action={a.action} grade={a.setup_quality} "
+            f"conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
         )
-        return
 
-    signal_key = f"{a.action}:{tf}:{round(a.entry, 0)}"
-    if not _should_send(tf, signal_key):
-        return
+        if a.action not in ("BUY", "SELL"):
+            logger.info(f"[{tf}] No signal.")
+            continue
 
-    # ── 3. Send signal card ───────────────────────────────────────────────────
-    text = alert_card(a)
-    sent = 0
-    dead: Set[int] = set()
+        # Deduplicate: same direction + same price zone within 20 min
+        signal_key = f"{a.action}:{tf}:{round(a.entry, -1)}"
+        if not _should_send(tf, signal_key):
+            continue
 
-    for chat_id in list(subs):
-        try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
-            sent += 1
-        except Exception as e:
-            err = str(e).lower()
-            if "blocked" in err or "not found" in err or "deactivated" in err:
-                dead.add(chat_id)
-                logger.warning(f"Removing dead subscriber {chat_id}")
-            else:
-                logger.warning(f"Alert send failed for {chat_id}: {e}")
-
-    if sent > 0:
+        # Fire the signal
+        await _fire_signal(bot, subs, a, tf)
         _last_sent[tf] = (signal_key, time.time())
-        logger.info(f"Alert sent to {sent} subscriber(s): {a.action} @ {a.entry:.2f}")
 
-        # ── 4. Register trade in tracker ──────────────────────────────────────
+        # Register in trade tracker
         try:
             invalidate_cache(tf)
             trade_tracker.open_trade(
@@ -307,8 +324,12 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 confidence=a.confidence, rr_ratio=a.rr_ratio,
             )
         except Exception as e:
-            logger.error(f"Trade open failed: {e}")
+            logger.error(f"Trade open failed ({tf}): {e}")
 
-    if dead:
-        subs -= dead
-        _save(subs)
+
+async def _safe_analyze(tf: str):
+    try:
+        return await analyze(tf)
+    except Exception as e:
+        logger.error(f"Alert scan — analysis failed for {tf}: {e}")
+        return None
