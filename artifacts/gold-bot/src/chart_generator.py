@@ -3,6 +3,7 @@ Professional XAU/USD chart generator.
 
 Layout (top to bottom):
   - Main panel  : Candlesticks + EMA9/21/50/200 + Bollinger Bands + swing H/L markers
+                  + optional trade levels (Entry, SL, TP1, TP2, TP3)
   - Volume panel: Colour-coded volume bars
   - RSI panel   : RSI(14) with 70/50/30 reference lines
 
@@ -88,9 +89,68 @@ def _swing_points(df: pd.DataFrame, lookback: int = 5):
     return highs, lows
 
 
+# ── Trade-level overlay colours ───────────────────────────────────────────────
+ENTRY_C = "#ffffff"   # white
+SL_C    = "#ef5350"   # red
+TP1_C   = "#26a69a"   # teal
+TP2_C   = "#00e676"   # bright green
+TP3_C   = "#69f0ae"   # mint
+
+
+def _draw_trade_levels(
+    ax,
+    x_end: int,
+    entry:     Optional[float] = None,
+    sl:        Optional[float] = None,
+    tp1:       Optional[float] = None,
+    tp2:       Optional[float] = None,
+    tp3:       Optional[float] = None,
+    direction: Optional[str]   = None,
+) -> None:
+    """Overlay horizontal trade-level lines with price labels on the right edge."""
+
+    def _hline(price: float, color: str, label: str, lw: float = 1.2, ls: str = "--") -> None:
+        ax.axhline(price, color=color, linewidth=lw, linestyle=ls, alpha=0.9, zorder=6)
+        ax.annotate(
+            f" {label}  {price:,.2f}",
+            xy=(x_end, price),
+            xycoords=("data", "data"),
+            fontsize=7.5,
+            color=color,
+            va="center",
+            ha="left",
+            fontfamily="monospace",
+            fontweight="bold",
+            zorder=7,
+        )
+
+    # Shaded risk/reward zones
+    if entry is not None and sl is not None:
+        ax.axhspan(min(entry, sl), max(entry, sl),
+                   alpha=0.06, color=SL_C, zorder=1)
+    if entry is not None and tp1 is not None:
+        ax.axhspan(min(entry, tp1), max(entry, tp1),
+                   alpha=0.06, color=TP1_C, zorder=1)
+
+    # Lines — draw from furthest target inward so labels don't collide
+    if tp3 is not None:   _hline(tp3,   TP3_C,  "TP3", lw=1.0, ls=":")
+    if tp2 is not None:   _hline(tp2,   TP2_C,  "TP2", lw=1.1, ls="-.")
+    if tp1 is not None:   _hline(tp1,   TP1_C,  "TP1", lw=1.3, ls="--")
+    if sl  is not None:   _hline(sl,    SL_C,   "SL",  lw=1.3, ls="--")
+    if entry is not None: _hline(entry, ENTRY_C, "ENTRY", lw=1.5, ls="-")
+
+
 # ── Main chart builder ────────────────────────────────────────────────────────
 
-async def generate_chart_image(timeframe: str = "H1") -> Optional[bytes]:
+async def generate_chart_image(
+    timeframe:  str            = "H1",
+    entry:      Optional[float] = None,
+    sl:         Optional[float] = None,
+    tp1:        Optional[float] = None,
+    tp2:        Optional[float] = None,
+    tp3:        Optional[float] = None,
+    direction:  Optional[str]   = None,
+) -> Optional[bytes]:
     data = await fetch_ohlcv(timeframe)
     if data is None or len(data) < 15:
         logger.error(f"No OHLCV data for {timeframe}")
@@ -119,9 +179,12 @@ async def generate_chart_image(timeframe: str = "H1") -> Optional[bytes]:
     swing_hi_idx, swing_lo_idx = _swing_points(df, lookback=4)
 
     # ── Figure layout ─────────────────────────────────────────────────────────
+    # right=0.78 leaves room for the trade-level price labels on the right edge
+    has_levels = any(v is not None for v in (entry, sl, tp1, tp2, tp3))
+    right_margin = 0.78 if has_levels else 0.93
     fig = plt.figure(figsize=(16, 10), facecolor=BG)
     gs  = GridSpec(3, 1, figure=fig, height_ratios=[5, 1.2, 1.5],
-                   hspace=0.04, left=0.04, right=0.93, top=0.94, bottom=0.05)
+                   hspace=0.04, left=0.04, right=right_margin, top=0.94, bottom=0.05)
 
     ax_main = fig.add_subplot(gs[0])
     ax_vol  = fig.add_subplot(gs[1], sharex=ax_main)
@@ -174,6 +237,15 @@ async def generate_chart_image(timeframe: str = "H1") -> Optional[bytes]:
                           xytext=(si, lows[si] - (highs.max() - lows.min()) * 0.008),
                           fontsize=6, color=SWL_C, ha="center", va="top",
                           fontweight="bold")
+
+    # Trade levels (Entry / SL / TP1 / TP2 / TP3)
+    if has_levels:
+        _draw_trade_levels(
+            ax_main,
+            x_end=len(x) - 0.5,
+            entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3,
+            direction=direction,
+        )
 
     # Legend
     ax_main.legend(loc="upper left", fontsize=6.5, framealpha=0.25,

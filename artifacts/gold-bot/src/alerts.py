@@ -218,19 +218,27 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
         subs -= dead
         _save(subs)
 
-    # 2. Generate and broadcast the chart
+    # 2. Generate and broadcast the chart with trade levels drawn on it
     try:
         from src.chart_generator import generate_chart_image
-        img_bytes = await generate_chart_image(tf)
+        entry_display = a.early_entry if a.early_entry and a.early_entry != a.entry else a.entry
+        img_bytes = await generate_chart_image(
+            timeframe=tf,
+            entry=entry_display,
+            sl=a.stop_loss,
+            tp1=a.tp1,
+            tp2=a.tp2,
+            tp3=a.tp3,
+            direction=a.action,
+        )
         if img_bytes:
-            sl_dist = abs(a.entry - a.stop_loss)
-            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-            rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-            entry_display = a.early_entry if a.early_entry and a.early_entry != a.entry else a.entry
+            sl_dist = abs(entry_display - a.stop_loss)
+            rr1 = round(abs(a.tp1 - entry_display) / sl_dist, 1) if sl_dist > 0 else 0
+            rr3 = round(abs(a.tp3 - entry_display) / sl_dist, 1) if sl_dist > 0 else 0
             caption = (
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
-                f"Limit Entry: {entry_display:,.2f}  SL: {a.stop_loss:,.2f}\n"
-                f"TP1: {a.tp1:,.2f} (1:{rr1})  TP3: {a.tp3:,.2f} (1:{rr3})"
+                f"Entry: {entry_display:,.2f}   SL: {a.stop_loss:,.2f}\n"
+                f"TP1: {a.tp1:,.2f} (1:{rr1})   TP3: {a.tp3:,.2f} (1:{rr3})"
             )
             dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
             if dead2:
