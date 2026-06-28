@@ -512,6 +512,15 @@ def early_entry_card(a: MarketAnalysis) -> str:
     if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
         lines += ["", f"  Candle Pattern : {a.candle_pattern}"]
 
+    # Show any signal caveats (stored in wait_reason when action is BUY/SELL)
+    if a.wait_reason and a.action in ("BUY", "SELL"):
+        lines += ["", "══════════════════════════════════",
+                  "  CAUTIONS (read before trading)",
+                  "══════════════════════════════════"]
+        for note in a.wait_reason.split(" | "):
+            if note.strip():
+                lines.append(f"  ! {note.strip()}")
+
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
 

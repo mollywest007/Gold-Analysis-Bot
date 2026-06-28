@@ -939,51 +939,49 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         direction, price, atr, ema20, ema50, s1, r1, trade_type
     )
 
-    # ── Signal gating — quality filters applied in priority order ────────────
-    wait_reason = ""
+    # ── Signal gating ─────────────────────────────────────────────────────────
+    # Policy: always emit BUY/SELL when there is a directional bias.
+    # Only two things produce WAIT:
+    #   1. Truly no direction (NEUTRAL bias — indicators split evenly)
+    #   2. Hard HTF block (confirmed opposite macro trend)
+    # Everything else (ADX, session, confidence, R:R, wall) lowers the
+    # setup_quality grade but does NOT suppress the signal.
+    wait_reason  = ""
+    signal_notes = []   # collected caveats shown on the entry card
 
-    # Check for entry too close to opposing S/R (wall check)
     near_resistance = direction == "BUY"  and (r1 - price) < atr * 0.5
     near_support    = direction == "SELL" and (price - s1) < atr * 0.5
 
     if direction != "NEUTRAL" and htf_reason and "Hard block" in htf_reason:
-        # Already forced to NEUTRAL above — just set the wait reason
+        # Hard HTF block — genuinely do not trade against a confirmed macro trend
         action      = "WAIT"
         wait_reason = htf_reason
     elif direction != "NEUTRAL":
-        if adx < 20 and timeframe not in ("H4", "D1"):
-            # Ranging market — no reliable signals on short/medium TFs
-            action      = "WAIT"
-            wait_reason = f"ADX {adx:.1f} — market ranging, no clear trend"
-        elif adx < 15:
-            # Extremely low ADX even on H4/D1 = no trade
-            action      = "WAIT"
-            wait_reason = f"ADX {adx:.1f} — extreme chop, skipping all TFs"
-        elif near_resistance:
-            action      = "WAIT"
-            wait_reason = f"BUY entry within {atr*0.5:.1f} pts of resistance {r1:.2f} — too close to wall"
-        elif near_support:
-            action      = "WAIT"
-            wait_reason = f"SELL entry within {atr*0.5:.1f} pts of support {s1:.2f} — too close to wall"
-        elif session_label == "Asian" and timeframe in ("M5", "M15", "M30", "H1"):
-            action      = "WAIT"
-            wait_reason = "Asian session — low liquidity on short TF, wait for London open"
-        elif confidence < CONFIDENCE_THRESHOLD:
-            action      = "WAIT"
-            wait_reason = f"Confidence {confidence}% below {CONFIDENCE_THRESHOLD}% threshold"
-            if htf_reason:
-                wait_reason += f" — {htf_reason}"
-        elif rr_ratio < MIN_RR_RATIO:
-            action      = "WAIT"
-            wait_reason = f"R:R 1:{rr_ratio} — minimum is 1:{int(MIN_RR_RATIO)}"
-        elif max(buy_votes, sell_votes) < MIN_VOTES:
-            action      = "WAIT"
-            wait_reason = f"Only {max(buy_votes, sell_votes)}/5 indicators agree — need {MIN_VOTES}"
-        else:
-            action = direction
+        # Always give the signal; collect any caveats as notes
+        action = direction
+        if adx < 15:
+            signal_notes.append(f"ADX {adx:.1f} — extreme ranging, use wider SL")
+        elif adx < 20 and timeframe not in ("H4", "D1"):
+            signal_notes.append(f"ADX {adx:.1f} — weak trend, reduce size")
+        if near_resistance:
+            signal_notes.append(f"Entry near R1 {r1:.2f} — tight space above")
+        if near_support:
+            signal_notes.append(f"Entry near S1 {s1:.2f} — tight space below")
+        if session_label == "Asian" and timeframe in ("M5", "M15", "M30", "H1"):
+            signal_notes.append("Asian session — lower liquidity, expect wider spreads")
+        if confidence < CONFIDENCE_THRESHOLD:
+            signal_notes.append(f"Confidence {confidence}% — lower conviction setup")
+        if rr_ratio < MIN_RR_RATIO:
+            signal_notes.append(f"R:R 1:{rr_ratio} — below ideal 1:{int(MIN_RR_RATIO)}, use limit")
+        if max(buy_votes, sell_votes) < MIN_VOTES:
+            signal_notes.append(f"Only {max(buy_votes, sell_votes)}/5 indicators agree")
+        if htf_reason:
+            signal_notes.append(htf_reason)
+        # Attach notes to wait_reason field (repurposed as signal context)
+        wait_reason = " | ".join(signal_notes) if signal_notes else ""
     else:
         action      = "WAIT"
-        wait_reason = htf_reason or verdict_reason or "Indicators mixed — no edge"
+        wait_reason = htf_reason or verdict_reason or "Indicators split — no directional edge"
 
     liq_zone = (
         f"{s1:.2f} — {round(s1 + atr, 2)}"

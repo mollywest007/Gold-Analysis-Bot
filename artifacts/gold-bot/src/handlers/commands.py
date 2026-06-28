@@ -82,18 +82,18 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # ── Part 1: Full professional market analysis ──────────────────────────
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML")
 
-        # ── Part 2: Early entry signal OR explanation of what is missing ───────
-        if a.action in ("BUY", "SELL") and a.setup_quality in ("A+", "A"):
-            # Grade A/A+: send the early entry card
+        # ── Part 2: Entry signal for every BUY/SELL, WAIT gets explanation ───────
+        if a.action in ("BUY", "SELL"):
+            # Always send the entry card — grade shown as context, not a gate
             await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
 
-            # Auto-attach live chart with entry details in caption
+            # Always attach the live chart for every BUY/SELL signal
             try:
                 import io
                 from telegram import InputFile
                 from src.chart_generator import generate_chart_image
                 chart_msg = await update.message.reply_text(
-                    f"Generating {tf} chart for {a.setup_quality} setup..."
+                    f"Generating {tf} chart..."
                 )
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
@@ -116,12 +116,8 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             except Exception as chart_err:
                 logger.warning(f"recommend chart failed: {chart_err}")
 
-        elif a.action in ("BUY", "SELL"):
-            # Has a direction but grade is B/C — explain what is missing
-            await update.message.reply_text(no_early_entry_card(a), parse_mode="HTML")
-
         else:
-            # Truly no signal — explain
+            # Genuinely no direction — engine gated it (ranging, Asian session, HTF block, etc.)
             await update.message.reply_text(no_early_entry_card(a), parse_mode="HTML")
 
     except Exception as e:
