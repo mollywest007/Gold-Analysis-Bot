@@ -212,17 +212,29 @@ async def analyse_chart_bytes(
     }
 
     logger.info("Sending chart to Gemini Vision (pro analysis)…")
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            _GEMINI_URL,
-            params={"key": api_key},
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            if resp.status != 200:
+    last_err: Exception | None = None
+    for attempt in range(3):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _GEMINI_URL,
+                params={"key": api_key},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    break
                 body = await resp.text()
+                if resp.status == 429:
+                    wait = 5 * (attempt + 1)
+                    logger.warning(f"Gemini 429 quota — waiting {wait}s (attempt {attempt+1}/3)")
+                    import asyncio as _aio
+                    await _aio.sleep(wait)
+                    last_err = RuntimeError(f"Gemini API quota exceeded (429). Try again in a few minutes.")
+                    continue
                 raise RuntimeError(f"Gemini API error {resp.status}: {body[:300]}")
-            data = await resp.json()
+    else:
+        raise last_err
 
     # Extract text — gemini-2.5-flash may include a "thought" part before the
     # actual JSON output, so scan all parts for the one that contains JSON.

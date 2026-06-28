@@ -323,26 +323,46 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await msg.edit_text(f"Chart image could not be sent. Try again shortly.")
             return
 
-    # ── Step 3: Gemini Vision analysis ────────────────────────────────────────
+    # ── Step 3: Gemini Vision analysis (with engine fallback on quota) ────────
     await msg.edit_text("Analysing chart with AI... this takes 15-30 seconds.")
+    gemini_ok = False
     try:
         result = await analyse_chart_bytes(img_bytes)
+        gemini_ok = True
     except Exception as e:
+        err_str = str(e)
         logger.error(f"cmd_chart — Gemini analysis error: {e}", exc_info=True)
-        short = _html.escape(str(e)[:200])
-        await msg.edit_text(
-            f"Chart sent. AI analysis failed — try again shortly.\n"
-            f"<i>{short}</i>",
-            parse_mode="HTML",
-        )
-        return
+        is_quota = "429" in err_str or "quota" in err_str.lower()
+        if is_quota:
+            logger.info("cmd_chart — Gemini quota hit, falling back to engine analysis.")
+            await msg.edit_text("AI vision quota reached — sending engine analysis instead.")
+        else:
+            short = _html.escape(err_str[:200])
+            await msg.edit_text(
+                f"Chart sent. AI analysis failed — try again shortly.\n<i>{short}</i>",
+                parse_mode="HTML",
+            )
+            return
 
     # ── Step 4: Send analysis card ────────────────────────────────────────────
-    try:
-        await update.message.reply_text(_result_card(result), parse_mode="HTML")
-        await msg.delete()
-    except Exception as e:
-        logger.warning(f"cmd_chart — result card send failed: {e}")
+    if gemini_ok:
+        try:
+            await update.message.reply_text(_result_card(result), parse_mode="HTML")
+            await msg.delete()
+        except Exception as e:
+            logger.warning(f"cmd_chart — result card send failed: {e}")
+    else:
+        # Engine fallback — same cards as /recommend
+        try:
+            from src.analysis import analyze
+            from src.utils.formatting import pro_analysis_card, early_entry_card
+            a = await analyze(tf)
+            await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML")
+            await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
+            await msg.delete()
+        except Exception as e:
+            logger.error(f"cmd_chart — engine fallback failed: {e}")
+            await msg.edit_text("Chart sent. Analysis unavailable right now — try /recommend instead.")
 
 
 def register_command_handlers(app: Application) -> None:
