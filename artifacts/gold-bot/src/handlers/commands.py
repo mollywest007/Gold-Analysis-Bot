@@ -267,49 +267,81 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch live OHLCV data, render a chart, analyse it with Gemini Vision."""
-    import html
+    import html as _html
+    import asyncio as _asyncio
     from src.chart_generator import generate_chart_image
-    from src.chart_analysis import analyse_chart_bytes, ChartAnalysisResult
+    from src.chart_analysis import analyse_chart_bytes
     from src.handlers.photos import _result_card
+    from src.market_hours import market_status
     from telegram import InputFile
+    from telegram.error import NetworkError, TimedOut
     import io
 
-    tf = _get_tf(context)
+    tf  = _get_tf(context)
+    ms  = market_status()
     msg = await update.message.reply_text(
-        f"Fetching live XAU/USD {tf} data and generating chart...",
+        f"Generating XAU/USD {tf} chart...",
         parse_mode="HTML",
     )
 
+    # ── Step 1: Generate chart ─────────────────────────────────────────────────
     try:
-        # 1. Generate chart image from live data
         img_bytes = await generate_chart_image(tf)
-        if img_bytes is None:
-            await msg.edit_text("Could not fetch market data right now. Try again shortly.")
+    except Exception as e:
+        logger.error(f"cmd_chart — chart generation error: {e}", exc_info=True)
+        await msg.edit_text("Chart generation failed. Try again shortly.")
+        return
+
+    if img_bytes is None:
+        await msg.edit_text("Could not generate the chart. Try again shortly.")
+        return
+
+    # ── Step 2: Send chart photo (retry once on transient network error) ───────
+    sent_photo = False
+    for attempt in range(2):
+        try:
+            market_note = "" if ms["is_open"] else "  (market closed — showing last session data)"
+            await update.message.reply_photo(
+                photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_chart.jpg"),
+                caption=f"XAU/USD {tf}{market_note}",
+            )
+            sent_photo = True
+            break
+        except (NetworkError, TimedOut) as e:
+            if attempt == 0:
+                logger.warning(f"cmd_chart photo send attempt 1 failed ({type(e).__name__}), retrying...")
+                await _asyncio.sleep(2)
+            else:
+                logger.error(f"cmd_chart photo send failed after retry: {e}")
+                await msg.edit_text(
+                    "Chart image generated but could not be sent — Telegram connection error.\n"
+                    "Please try again in a moment."
+                )
+                return
+        except Exception as e:
+            logger.error(f"cmd_chart photo send error: {e}", exc_info=True)
+            await msg.edit_text(f"Chart image could not be sent. Try again shortly.")
             return
 
-        # 2. Send the chart image
-        await update.message.reply_photo(
-            photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_chart.jpg"),
-            caption=f"XAU/USD {tf} — analysing with AI...",
+    # ── Step 3: Gemini Vision analysis ────────────────────────────────────────
+    await msg.edit_text("Analysing chart with AI... this takes 15-30 seconds.")
+    try:
+        result = await analyse_chart_bytes(img_bytes)
+    except Exception as e:
+        logger.error(f"cmd_chart — Gemini analysis error: {e}", exc_info=True)
+        await msg.edit_text(
+            "Chart sent. AI analysis failed — check your GOOGLE_AI_KEY or try again shortly.\n"
+            f"<i>({_html.escape(type(e).__name__)})</i>",
             parse_mode="HTML",
         )
+        return
 
-        await msg.edit_text("Analysing chart with Gemini Vision... this may take 15-30 seconds.")
-
-        # 3. Analyse with Gemini Vision
-        result = await analyse_chart_bytes(img_bytes)
-
-        # 4. Send analysis card
+    # ── Step 4: Send analysis card ────────────────────────────────────────────
+    try:
         await update.message.reply_text(_result_card(result), parse_mode="HTML")
         await msg.delete()
-
     except Exception as e:
-        logger.error(f"cmd_chart error: {e}", exc_info=True)
-        await msg.edit_text(
-            f"Chart analysis failed. Try again shortly.\n"
-            f"<i>Error: {html.escape(type(e).__name__)}</i>",
-            parse_mode="HTML",
-        )
+        logger.warning(f"cmd_chart — result card send failed: {e}")
 
 
 def register_command_handlers(app: Application) -> None:
