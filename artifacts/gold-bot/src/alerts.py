@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import Set, Dict, Tuple, Optional
+from typing import Set, Dict, Optional
 
 from telegram import InputFile
 from telegram.ext import ContextTypes
@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "subscribers.json")
 
-_last_sent: Dict[str, Tuple[str, float]] = {}
-RESEND_AFTER_SECONDS = 20 * 60   # don't repeat same signal within 20 minutes
+# Tracks the last fired direction per timeframe.
+# Structure: { "H1": "SELL", "M15": "BUY", ... }
+# A new alert fires only when the direction changes or the trade closes.
+_active_signal: Dict[str, str] = {}
 
 SCAN_TIMEFRAMES = ["M15", "H1"]  # fastest + reliable — scan both every minute
 
@@ -71,18 +73,19 @@ def subscriber_count() -> int:
     return len(_load())
 
 
-def _should_send(tf: str, signal_key: str) -> bool:
-    if tf not in _last_sent:
-        return True
-    last_key, last_ts = _last_sent[tf]
-    age = time.time() - last_ts
-    if last_key != signal_key:
-        return True          # direction flipped or price moved — new signal
-    if age >= RESEND_AFTER_SECONDS:
-        return True          # same signal but 20 min passed — re-alert
-    remaining = int((RESEND_AFTER_SECONDS - age) / 60)
-    logger.info(f"[{tf}] Alert suppressed — same signal {int(age/60)}m ago, next in ~{remaining}m.")
-    return False
+def _should_send(tf: str, action: str) -> bool:
+    """Fire only when the direction changes. One card per signal, held until it flips."""
+    prev = _active_signal.get(tf)
+    if prev == action:
+        logger.info(f"[{tf}] Alert suppressed — {action} already active, no change.")
+        return False
+    return True
+
+
+def clear_signal_lock(tf: str) -> None:
+    """Call after a trade closes so the next signal on this timeframe fires freely."""
+    _active_signal.pop(tf, None)
+    logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
 
 
 async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
@@ -323,6 +326,10 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             events = trade_tracker.check_trades(current_price)
             for ev in events:
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
+                # Trade closed — unlock this timeframe so the next entry signal fires fresh
+                closed_tf = ev["trade"].get("timeframe")
+                if closed_tf:
+                    clear_signal_lock(closed_tf)
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 
@@ -344,17 +351,21 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
         if a.action not in ("BUY", "SELL"):
-            logger.info(f"[{tf}] No signal.")
+            # Signal went neutral/WAIT — clear the lock so if it comes back we alert again
+            if tf in _active_signal:
+                logger.info(f"[{tf}] Signal cleared (now {a.action}) — lock released.")
+                _active_signal.pop(tf)
+            else:
+                logger.info(f"[{tf}] No signal.")
             continue
 
-        # Deduplicate: same direction + same price zone within 20 min
-        signal_key = f"{a.action}:{tf}:{round(a.entry, -1)}"
-        if not _should_send(tf, signal_key):
+        # Deduplicate: only fire when direction changes
+        if not _should_send(tf, a.action):
             continue
 
-        # Fire the signal
+        # Fire the signal and lock this direction
         await _fire_signal(bot, subs, a, tf)
-        _last_sent[tf] = (signal_key, time.time())
+        _active_signal[tf] = a.action
 
         # Register in trade tracker
         try:
