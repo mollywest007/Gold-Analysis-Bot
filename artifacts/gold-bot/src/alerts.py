@@ -180,6 +180,35 @@ async def _send_result_image(
     logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)} sub(s)")
 
 
+async def send_market_conditions_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Broadcast a market conditions update every 4 hours to all subscribers."""
+    from src.market_hours import market_status
+    from src.utils.formatting import market_conditions_card
+
+    ms  = market_status()
+    bot = context.application.bot
+    subs = _load()
+
+    if not subs:
+        logger.info("Market conditions summary: no subscribers.")
+        return
+
+    if not ms["is_open"]:
+        logger.info("Market conditions summary skipped — market closed.")
+        return
+
+    try:
+        a    = await analyze("H1")
+        text = market_conditions_card(a)
+        dead = await _broadcast_text(bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(f"Market conditions summary sent to {len(subs)} subscriber(s).")
+    except Exception as e:
+        logger.error(f"Market conditions summary failed: {e}")
+
+
 async def _send_market_open_notification(bot, subs: Set[int]) -> None:
     from src.utils.formatting import market_open_card
     logger.info("Sending market-open notification...")

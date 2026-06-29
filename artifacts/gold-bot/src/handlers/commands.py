@@ -265,6 +265,14 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.edit_text("Could not fetch news right now. Try again shortly.")
 
 
+async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src import trade_tracker
+    from src.utils.formatting import history_card
+    trades = trade_tracker.get_all_trades()
+    stats  = trade_tracker.get_stats()
+    await update.message.reply_text(history_card(trades, stats), parse_mode="HTML")
+
+
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch live OHLCV data, render a chart, analyse it with Gemini Vision."""
     import html as _html
@@ -378,3 +386,4 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("settings",  cmd_settings))
     app.add_handler(CommandHandler("news",      cmd_news))
     app.add_handler(CommandHandler("chart",     cmd_chart))
+    app.add_handler(CommandHandler("history",   cmd_history))

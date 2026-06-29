@@ -13,7 +13,7 @@ from src.handlers import (
     register_message_handlers,
     register_photo_handlers,
 )
-from src.alerts import check_and_alert
+from src.alerts import check_and_alert, send_market_conditions_summary
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -95,10 +95,19 @@ def main() -> None:
         name="alert_scanner",
     )
 
+    # Market conditions summary — broadcast every 4 hours during market hours
+    app.job_queue.run_repeating(
+        send_market_conditions_summary,
+        interval=4 * 3600,
+        first=30,
+        name="market_conditions",
+    )
+
     logger.info(
         f"Jobs scheduled — cache warm: 15s | "
         f"cache refresh: {CACHE_REFRESH_SECONDS}s | "
-        f"alert scan: {ALERT_INTERVAL_SECONDS}s"
+        f"alert scan: {ALERT_INTERVAL_SECONDS}s | "
+        f"market conditions: 4h"
     )
 
     logger.info("Bot is running. Press Ctrl+C to stop.")

@@ -855,6 +855,170 @@ def news_card(items: list) -> str:
     return "\n".join(lines)
 
 
+def market_conditions_card(a: MarketAnalysis) -> str:
+    """Auto-broadcast every 4 hours explaining current market state."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%d %b  %H:%M UTC")
+    ms  = market_status()
+
+    if a.adx >= 40:
+        adx_desc = "Strong trend"
+    elif a.adx >= 25:
+        adx_desc = "Trending"
+    elif a.adx >= 18:
+        adx_desc = "Weak trend"
+    else:
+        adx_desc = "Ranging / Choppy"
+
+    if a.rsi_value >= 70:
+        rsi_zone = "Overbought"
+    elif a.rsi_value <= 30:
+        rsi_zone = "Oversold"
+    elif a.rsi_value >= 55:
+        rsi_zone = "Bullish zone"
+    elif a.rsi_value <= 45:
+        rsi_zone = "Bearish zone"
+    else:
+        rsi_zone = "Neutral"
+
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  MARKET UPDATE         ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  {now}",
+        f"  Price     : {fmt_price(a.price)}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "──────────────────────────────────",
+        "  CURRENT CONDITIONS",
+        "──────────────────────────────────",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Bias      : {a.bias}   ({a.strength})",
+        f"  HTF Bias  : {a.htf_bias}",
+        f"  Momentum  : {a.momentum}",
+        "",
+        f"  ADX  {a.adx:>5.1f}   {adx_desc}",
+        f"  RSI  {a.rsi_value:>5.1f}   {rsi_zone}",
+        f"  Stoch     : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
+        f"  +DI / -DI : {a.plus_di:.1f} / {a.minus_di:.1f}",
+        f"  Votes     : BUY {a.buy_votes}/5   SELL {a.sell_votes}/5",
+        "",
+        "──────────────────────────────────",
+        "  SIGNAL STATUS",
+        "──────────────────────────────────",
+    ]
+
+    if a.action in ("BUY", "SELL"):
+        lines += [
+            f"  Direction : {a.action}",
+            f"  Confidence: {a.confidence}%",
+            f"  Grade     : {a.setup_quality}",
+            f"  Entry     : {fmt_price(a.entry)}",
+            f"  Stop Loss : {fmt_price(a.stop_loss)}",
+            f"  TP1 / TP2 : {fmt_price(a.tp1)} / {fmt_price(a.tp2)}",
+        ]
+    else:
+        reason = (a.wait_reason or a.verdict_reason or "Indicators mixed")[:42]
+        lines += [
+            "  Status    : WAIT — no entry yet",
+            f"  Reason    : {reason}",
+            "",
+            "  Watching for:",
+        ]
+        if a.buy_votes >= a.sell_votes:
+            lines.append("  - BUY setup: bullish breakout + ADX > 25")
+        else:
+            lines.append("  - SELL setup: bearish break + ADX > 25")
+        lines.append("  - Confidence >= 75% + R:R >= 1:2")
+
+    lines += [
+        "",
+        f"  Key levels:",
+        f"  R1: {fmt_price(a.resistance1)}   R2: {fmt_price(a.resistance2)}",
+        f"  S1: {fmt_price(a.support1)}   S2: {fmt_price(a.support2)}",
+        "",
+        "  Next update in ~4 hours.",
+        "  Use /signal for on-demand scan.",
+        "</pre>",
+    ]
+    return "\n".join(lines)
+
+
+def history_card(trades: list, stats: dict) -> str:
+    """Signal history panel — last 20 trades with outcomes and summary stats."""
+    from datetime import datetime, timezone
+
+    def _status_label(t: dict) -> str:
+        s = t.get("status", "")
+        if s == "open":
+            return "OPEN  "
+        if s == "tp2_hit":
+            return "WIN   TP2"
+        if s == "tp1_hit":
+            return "WIN   TP1"
+        if s == "sl_hit":
+            return "LOSS  SL "
+        if s == "expired":
+            return "EXPIRED  "
+        return s.upper()[:9]
+
+    def _fmt_date(ts) -> str:
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M")
+        except Exception:
+            return "------"
+
+    lines = ["<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  SIGNAL HISTORY        ║",
+        "╚══════════════════════════════════╝",
+        "",
+        "  SUMMARY",
+        "──────────────────────────────────",
+        f"  Total signals : {stats['total']}",
+        f"  Wins          : {stats['wins']}",
+        f"  Losses        : {stats['losses']}",
+        f"  Open          : {stats['open']}",
+        f"  Win rate      : {stats['win_rate']}%"
+        + ("" if stats['total_closed'] == 0 else f"  ({stats['total_closed']} closed)"),
+        "──────────────────────────────────",
+    ]
+
+    if not trades:
+        lines += [
+            "",
+            "  No signals recorded yet.",
+            "  Alerts fire automatically when",
+            "  a BUY or SELL is detected.",
+            "</pre>",
+        ]
+        return "\n".join(lines)
+
+    lines += ["", "  RECENT SIGNALS  (newest first)", "──────────────────────────────────"]
+
+    shown = trades[:20]
+    for t in shown:
+        date     = _fmt_date(t.get("opened_at", 0))
+        dir_     = t.get("direction", "???")
+        tf       = t.get("timeframe", "??")
+        entry    = t.get("entry", 0)
+        conf     = t.get("confidence", 0)
+        outcome  = _status_label(t)
+        lines += [
+            f"  {date}  {dir_:<4} {tf:<3}",
+            f"  Entry: {entry:,.2f}   Conf: {conf}%",
+            f"  Result: {outcome}",
+            "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
+        ]
+
+    if len(trades) > 20:
+        lines.append(f"  ... and {len(trades) - 20} older signals")
+
+    lines += ["", "  Use /alerts to enable auto-signals.", "</pre>"]
+    return "\n".join(lines)
+
+
 def welcome_text(name: str) -> str:
     ms = market_status()
     if ms["is_open"]:

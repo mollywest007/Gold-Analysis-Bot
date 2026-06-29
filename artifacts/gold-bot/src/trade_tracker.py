@@ -128,3 +128,29 @@ def check_trades(current_price: float) -> List[Dict[str, Any]]:
 
 def open_trade_count() -> int:
     return sum(1 for t in _load() if t.get("status") == "open")
+
+
+def get_all_trades() -> List[Dict[str, Any]]:
+    """Return all trades, newest first."""
+    trades = _load()
+    return sorted(trades, key=lambda t: t.get("opened_at", 0), reverse=True)
+
+
+def get_stats() -> Dict[str, Any]:
+    """Return win/loss/open counts and win rate across all closed trades."""
+    trades = _load()
+    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit"))
+    losses = sum(1 for t in trades if t.get("status") == "sl_hit")
+    open_  = sum(1 for t in trades if t.get("status") == "open")
+    expired = sum(1 for t in trades if t.get("status") == "expired")
+    total_closed = wins + losses
+    win_rate = round((wins / total_closed) * 100) if total_closed > 0 else 0
+    return {
+        "wins": wins,
+        "losses": losses,
+        "open": open_,
+        "expired": expired,
+        "total": len(trades),
+        "total_closed": total_closed,
+        "win_rate": win_rate,
+    }
