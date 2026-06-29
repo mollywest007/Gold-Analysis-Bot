@@ -85,6 +85,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Back / navigation ─────────────────────────────────────────────────────
     if data in ("back:main", "settings:back"):
+        from telegram import InlineKeyboardMarkup
         tf  = _get_tf(context)
         ms  = market_status()
         mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
@@ -94,7 +95,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Use the menu below to continue."
         )
         try:
-            await query.edit_message_text(text, parse_mode="HTML")
+            # Pass empty reply_markup to clear the inline keyboard
+            await query.edit_message_text(
+                text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([])
+            )
         except Exception:
             pass   # message may be identical — Telegram rejects no-op edits
         return

@@ -134,7 +134,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"Market is currently <b>{mkt_status}</b> — {ms['note']}.\n\n"
             "When alerts are ON, you will receive automatic notifications whenever "
             "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
-            "Checks run every 5 minutes. Alerts only fire when all conditions are met."
+            "Checks run every 1 minute. Alerts fire as soon as a signal is detected."
         )
         await update.message.reply_text(
             text_out, parse_mode="HTML", reply_markup=alerts_keyboard(subscribed)
