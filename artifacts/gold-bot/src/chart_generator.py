@@ -165,7 +165,16 @@ async def generate_chart_image(
     closes = np.array(data.closes[-n:],  dtype=float)
     vols   = np.array(data.volumes[-n:], dtype=float) if data.volumes else np.zeros(len(closes))
 
-    idx = pd.date_range(end="now", periods=len(closes), freq=_tf_to_freq(timeframe))
+    # Guard: each series may differ by a candle or two after _clean() filtering —
+    # truncate everything to the shortest array so the DataFrame never mismatches.
+    actual_n = min(len(opens), len(highs), len(lows), len(closes), len(vols))
+    opens  = opens[-actual_n:]
+    highs  = highs[-actual_n:]
+    lows   = lows[-actual_n:]
+    closes = closes[-actual_n:]
+    vols   = vols[-actual_n:]
+
+    idx = pd.date_range(end="now", periods=actual_n, freq=_tf_to_freq(timeframe))
     df  = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
                          "Close": closes, "Volume": vols}, index=idx)
 
