@@ -744,6 +744,29 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     stoch_sig, stoch_conf = _score_stoch(stoch_k, stoch_d, prev_stoch_k, prev_stoch_d)
     bb_sig,    bb_conf    = _score_bb(bb_pct)
 
+    # ── Trend-aware oscillator override ───────────────────────────────────────
+    # In a confirmed trend (ADX >= 25 + price on correct side of EMA stack),
+    # mid-zone RSI/Stoch/BB should read as continuation, not neutral.
+    # This prevents the common failure where a clean downtrend gets 2/5 SELL
+    # votes because oscillators sit neutral in oversold-but-trending territory.
+    if adx >= 25:
+        in_downtrend = price < ema20 and ema20 < ema50
+        in_uptrend   = price > ema20 and ema20 > ema50
+        if in_downtrend:
+            if rsi_sig == "NEUTRAL" and 35 <= rsi <= 58:
+                rsi_sig, rsi_conf = "SELL", 0.60
+            if stoch_sig == "NEUTRAL" and stoch_k <= 65:
+                stoch_sig, stoch_conf = "SELL", 0.55
+            if bb_sig == "NEUTRAL" and 5 <= bb_pct <= 45:
+                bb_sig, bb_conf = "SELL", 0.55
+        elif in_uptrend:
+            if rsi_sig == "NEUTRAL" and 42 <= rsi <= 65:
+                rsi_sig, rsi_conf = "BUY", 0.60
+            if stoch_sig == "NEUTRAL" and stoch_k >= 35:
+                stoch_sig, stoch_conf = "BUY", 0.55
+            if bb_sig == "NEUTRAL" and 55 <= bb_pct <= 95:
+                bb_sig, bb_conf = "BUY", 0.55
+
     # ── No adx_mult weighting — ADX is used as a hard gate below ──────────────
     indicators = [
         Indicator("RSI(14)",   rsi,       rsi_sig,   0.20),
