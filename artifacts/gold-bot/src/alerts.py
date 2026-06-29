@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache
-from src.utils.formatting import early_entry_card, alert_card
+from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
 
@@ -233,12 +233,14 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
         )
         if img_bytes:
             sl_dist = abs(entry_display - a.stop_loss)
-            rr1 = round(abs(a.tp1 - entry_display) / sl_dist, 1) if sl_dist > 0 else 0
-            rr3 = round(abs(a.tp3 - entry_display) / sl_dist, 1) if sl_dist > 0 else 0
+            rr1 = round(abs(a.tp1 - entry_display) / sl_dist, 1) if sl_dist > 0 and a.tp1 else 0
+            tp3_val = getattr(a, "tp3", None)
+            rr3 = round(abs(tp3_val - entry_display) / sl_dist, 1) if sl_dist > 0 and tp3_val else 0
+            tp3_str = f"   TP3: {tp3_val:,.2f} (1:{rr3})" if tp3_val else ""
             caption = (
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                 f"Entry: {entry_display:,.2f}   SL: {a.stop_loss:,.2f}\n"
-                f"TP1: {a.tp1:,.2f} (1:{rr1})   TP3: {a.tp3:,.2f} (1:{rr3})"
+                f"TP1: {a.tp1:,.2f} (1:{rr1}){tp3_str}"
             )
             dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
             if dead2:
@@ -298,11 +300,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Scan timeframes for entry signals ─────────────────────────────────────
     analyses = await asyncio.gather(
         *[_safe_analyze(tf) for tf in SCAN_TIMEFRAMES],
-        return_exceptions=False,
+        return_exceptions=True,
     )
 
     for tf, a in zip(SCAN_TIMEFRAMES, analyses):
-        if a is None:
+        if a is None or isinstance(a, Exception):
+            if isinstance(a, Exception):
+                logger.error(f"[{tf}] Analysis raised: {a}")
             continue
 
         logger.info(

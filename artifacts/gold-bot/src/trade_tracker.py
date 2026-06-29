@@ -38,6 +38,7 @@ def open_trade(
     timeframe: str,
     confidence: int,
     rr_ratio: float,
+    tp3: float = None,
 ) -> None:
     trades = _load()
     # Only one open trade at a time per direction — replace if same direction exists
@@ -49,6 +50,7 @@ def open_trade(
         "sl":          sl,
         "tp1":         tp1,
         "tp2":         tp2,
+        "tp3":         tp3,
         "timeframe":   timeframe,
         "confidence":  confidence,
         "rr_ratio":    rr_ratio,
@@ -56,10 +58,12 @@ def open_trade(
         "status":      "open",
         "tp1_hit":     False,
         "tp2_hit":     False,
+        "tp3_hit":     False,
     }
     trades.append(trade)
     _save(trades)
-    logger.info(f"Trade opened: {direction} @ {entry:.2f}  SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}")
+    tp3_str = f"  TP3={tp3:.2f}" if tp3 else ""
+    logger.info(f"Trade opened: {direction} @ {entry:.2f}  SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}{tp3_str}")
 
 
 def check_trades(current_price: float) -> List[Dict[str, Any]]:
