@@ -535,8 +535,84 @@ def no_early_entry_card(a: MarketAnalysis) -> str:
 
 
 def recommend_card(a: MarketAnalysis) -> str:
-    """Legacy single-card fallback — not used by /recommend but kept for alerts."""
+    """Single-TF fallback (kept for internal use)."""
     return pro_analysis_card(a)
+
+
+def recommend_multi_card(analyses: list) -> str:
+    """
+    All-timeframe recommendation card.
+    Shows a quick signal matrix for all TFs, then full trade plans for
+    any TF that has an actionable BUY or SELL.
+    """
+    if not analyses:
+        return "<pre>No analysis data available. Please try again.</pre>"
+
+    price  = analyses[0].price if analyses else 0.0
+    ms     = market_status()
+    mkt    = ms["note"]
+
+    TF_ORDER = ["M5", "M15", "M30", "H1", "H4", "D1"]
+    tf_map   = {a.timeframe: a for a in analyses}
+
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  ALL TIMEFRAMES        ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Price : {fmt_price(price)}    {mkt}",
+        "",
+        "──────────────────────────────────",
+        "  TF    SIGNAL  CONF  GRADE  BIAS",
+        "──────────────────────────────────",
+    ]
+
+    active_tfs = []
+    for tf in TF_ORDER:
+        a = tf_map.get(tf)
+        if a is None:
+            lines.append(f"  {tf:<4}  ------  ---   ----")
+            continue
+        action = a.action if a.action in ("BUY", "SELL") else "WAIT"
+        grade  = a.setup_quality or "-"
+        bias   = a.bias[:7] if a.bias else "Neutral"
+        marker = "  <--" if action in ("BUY", "SELL") else ""
+        lines.append(
+            f"  {tf:<4}  {action:<6}  {a.confidence}%  {grade:<5} {bias}{marker}"
+        )
+        if action in ("BUY", "SELL"):
+            active_tfs.append(a)
+
+    lines.append("──────────────────────────────────")
+
+    if not active_tfs:
+        lines += [
+            "",
+            "  No actionable signals across",
+            "  any timeframe right now.",
+            "  Market is ranging — wait for",
+            "  a clean directional setup.",
+        ]
+    else:
+        lines += ["", "  ACTIVE SIGNALS", "──────────────────────────────────"]
+        for a in active_tfs:
+            sl_dist  = abs(a.entry - a.stop_loss)
+            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+            rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+            lines += [
+                f"  {a.timeframe}  {a.action}  {a.confidence}%  Grade: {a.setup_quality or '-'}",
+                f"  Entry   : {fmt_price(a.entry)}",
+                f"  SL      : {fmt_price(a.stop_loss)}",
+                f"  TP1     : {fmt_price(a.tp1)}  (1:{rr1})",
+                f"  TP2     : {fmt_price(a.tp2)}  (1:{rr2})",
+            ]
+            if a.verdict_reason:
+                lines.append(f"  Reason  : {a.verdict_reason[:34]}")
+            lines.append("  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·")
+
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return "\n".join(lines)
 
 
 # ─── TREND CARD ───────────────────────────────────────────────────────────────

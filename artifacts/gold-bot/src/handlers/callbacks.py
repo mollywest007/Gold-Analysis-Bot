@@ -89,10 +89,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data["timeframe"] = tf
 
     if data.startswith("recommend:"):
-        await query.edit_message_text("Scanning indicators...")
+        import asyncio as _asyncio
+        from src.utils.formatting import recommend_multi_card
+        await query.edit_message_text("Scanning all timeframes...")
         try:
-            a = await analyze(tf)
-            await query.edit_message_text(recommend_card(a), parse_mode="HTML")
+            results = await _asyncio.gather(
+                analyze("M5"), analyze("M15"), analyze("M30"),
+                analyze("H1"), analyze("H4"), analyze("D1"),
+                return_exceptions=True,
+            )
+            analyses = [r for r in results if not isinstance(r, Exception)]
+            await query.edit_message_text(recommend_multi_card(analyses), parse_mode="HTML")
         except Exception as e:
             logger.error(f"callback recommend: {e}")
             await query.edit_message_text("Recommendation failed. Please try again.")

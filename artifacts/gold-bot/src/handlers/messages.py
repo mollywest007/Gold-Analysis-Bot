@@ -62,11 +62,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
     if text == "recommend":
-        msg = await update.message.reply_text("Scanning indicators...")
+        import asyncio as _asyncio
+        from src.utils.formatting import recommend_multi_card
+        msg = await update.message.reply_text("Scanning all timeframes...")
         try:
-            tf = _get_tf(context)
-            a = await analyze(tf)
-            await msg.edit_text(recommend_card(a), parse_mode="HTML")
+            results = await _asyncio.gather(
+                analyze("M5"), analyze("M15"), analyze("M30"),
+                analyze("H1"), analyze("H4"), analyze("D1"),
+                return_exceptions=True,
+            )
+            analyses = [r for r in results if not isinstance(r, Exception)]
+            await msg.edit_text(recommend_multi_card(analyses), parse_mode="HTML")
         except Exception as e:
             logger.error(f"msg recommend error: {e}")
             await msg.edit_text("Recommendation failed. Please try again.")

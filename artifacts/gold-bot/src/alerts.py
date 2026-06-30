@@ -24,7 +24,7 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 # A new alert fires only when the direction changes or the trade closes.
 _active_signal: Dict[str, str] = {}
 
-SCAN_TIMEFRAMES = ["M15", "H1"]  # fastest + reliable — scan both every minute
+SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"]  # all timeframes
 
 # ── Market open/close transition tracking ─────────────────────────────────────
 _prev_market_open: Optional[bool] = None
