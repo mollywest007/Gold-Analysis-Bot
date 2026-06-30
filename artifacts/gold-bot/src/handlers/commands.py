@@ -131,15 +131,17 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
-    note = _age_note(tf)
-    msg  = await update.message.reply_text(f"Analyzing...{' (' + note + ')' if note else ''}")
+    import asyncio
+    from src.analysis import analyze as _analyze
+    from src.utils.formatting import multi_timeframe_card
+    msg = await update.message.reply_text("Analyzing all timeframes...")
     try:
-        a = await get_analysis(tf)
-        await msg.edit_text(analysis_card(a), parse_mode="HTML")
-        # Auto-follow with signal if there is an actionable entry
-        if a.action in ("BUY", "SELL"):
-            await update.message.reply_text(signal_card(a), parse_mode="HTML")
+        results = await asyncio.gather(
+            _analyze("M15"), _analyze("H1"), _analyze("H4"),
+            return_exceptions=True,
+        )
+        analyses = [r for r in results if not isinstance(r, Exception)]
+        await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML")
     except Exception as e:
         logger.error(f"analyze error: {e}")
         await msg.edit_text("Analysis failed. Please try again.")

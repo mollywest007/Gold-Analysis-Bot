@@ -120,10 +120,11 @@ def main() -> None:
     )
 
     # Market conditions summary — broadcast every 4 hours during market hours
+    # first=4*3600 so it never fires on startup/restart, only on schedule
     app.job_queue.run_repeating(
         send_market_conditions_summary,
         interval=4 * 3600,
-        first=30,
+        first=4 * 3600,
         name="market_conditions",
     )
 

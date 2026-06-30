@@ -72,14 +72,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await msg.edit_text("Recommendation failed. Please try again.")
 
     elif text == "analyze":
-        msg = await update.message.reply_text("Analyzing XAU/USD...")
+        import asyncio
+        from src.utils.formatting import multi_timeframe_card
+        msg = await update.message.reply_text("Analyzing all timeframes...")
         try:
-            tf = _get_tf(context)
-            a = await analyze(tf)
-            await msg.edit_text(analysis_card(a), parse_mode="HTML")
-            # Auto-follow with signal if there is an actionable entry
-            if a.action in ("BUY", "SELL"):
-                await update.message.reply_text(signal_card(a), parse_mode="HTML")
+            results = await asyncio.gather(
+                analyze("M15"), analyze("H1"), analyze("H4"),
+                return_exceptions=True,
+            )
+            analyses = [r for r in results if not isinstance(r, Exception)]
+            await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML")
         except Exception as e:
             logger.error(f"msg analyze error: {e}")
             await msg.edit_text("Analysis failed. Please try again.")

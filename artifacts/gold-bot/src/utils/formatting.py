@@ -815,6 +815,52 @@ def news_card(items: list) -> str:
     return "\n".join(lines)
 
 
+def multi_timeframe_card(analyses: list) -> str:
+    """Compact all-timeframe analysis card — one block per TF."""
+    SEP  = "─" * 34
+    WIDE = "═" * 34
+    if not analyses:
+        return "<pre>No analysis available.</pre>"
+
+    first = analyses[0]
+    ms = market_status()
+    session = first.session or "N/A"
+    mkt_line = "LIVE" if ms["is_open"] else ms["status_text"]
+
+    lines = [
+        "<pre>",
+        "XAU/USD  MULTI-TIMEFRAME ANALYSIS",
+        WIDE,
+        f"Price   : {fmt_price(first.price)}  |  {mkt_line}",
+        f"Session : {session}",
+        WIDE,
+    ]
+
+    for a in analyses:
+        action = a.action
+        grade  = a.setup_quality if action in ("BUY", "SELL") else ""
+        conf   = f"{a.confidence}%"
+        label  = f"{a.timeframe}  {action}" + (f"  ({grade})" if grade else "") + f"  |  {conf}"
+        lines += [
+            label,
+            SEP,
+            f"Bias    : {a.bias}  ({a.strength})",
+            f"Trend   : {a.trend}  |  ADX {a.adx:.0f}",
+            f"RSI     : {a.rsi_value:.0f}  |  Stoch {a.stoch_k_val:.0f}",
+        ]
+        if action in ("BUY", "SELL"):
+            lines += [
+                f"Entry   : {fmt_price(a.entry)}",
+                f"SL      : {fmt_price(a.stop_loss)}",
+                f"TP1     : {fmt_price(a.tp1)}",
+                f"TP2     : {fmt_price(a.tp2)}",
+            ]
+        lines.append(WIDE)
+
+    lines.append("</pre>")
+    return "\n".join(lines)
+
+
 def market_conditions_card(a: MarketAnalysis) -> str:
     """Auto-broadcast every 4 hours explaining current market state."""
     from datetime import datetime, timezone
