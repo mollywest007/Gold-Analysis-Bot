@@ -5,6 +5,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from telegram import BotCommand
 from telegram.ext import Application, ContextTypes
 from src.config import TELEGRAM_BOT_TOKEN
 from src.handlers import (
@@ -56,6 +57,28 @@ async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning(f"Cache refresh failed: {e}")
 
 
+BOT_COMMANDS = [
+    BotCommand("start",     "Open the bot and register for alerts"),
+    BotCommand("recommend", "Full analysis with entry, SL, and targets"),
+    BotCommand("active",    "View open trades with live P&L"),
+    BotCommand("signal",    "Current BUY / SELL / WAIT signal"),
+    BotCommand("analyze",   "Detailed market analysis"),
+    BotCommand("trend",     "Trend direction and momentum"),
+    BotCommand("levels",    "Key support and resistance levels"),
+    BotCommand("outlook",   "Market outlook report"),
+    BotCommand("chart",     "Send a chart image for AI analysis"),
+    BotCommand("history",   "Recent closed trade results"),
+    BotCommand("news",      "Latest gold market headlines"),
+    BotCommand("settings",  "Change your analysis timeframe"),
+    BotCommand("help",      "Show all commands"),
+]
+
+
+async def _set_commands(app: Application) -> None:
+    await app.bot.set_my_commands(BOT_COMMANDS)
+    logger.info("Bot commands registered with Telegram.")
+
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
@@ -66,6 +89,7 @@ def main() -> None:
     app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
+        .post_init(_set_commands)
         .build()
     )
 
