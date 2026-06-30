@@ -14,7 +14,7 @@ from src.handlers import (
     register_message_handlers,
     register_photo_handlers,
 )
-from src.alerts import check_and_alert, send_market_conditions_summary
+from src.alerts import check_and_alert, send_market_conditions_summary, send_startup_summary
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -103,6 +103,9 @@ def main() -> None:
     # One-time cache warm shortly after startup
     app.job_queue.run_once(_warm_cache, when=15, name="cache_warm")
 
+    # One-time startup summary — sent 30s after boot so cache is warm
+    app.job_queue.run_once(send_startup_summary, when=30, name="startup_summary")
+
     # Recurring background cache refresh (keeps commands fast)
     app.job_queue.run_repeating(
         _refresh_cache,
@@ -136,25 +139,7 @@ def main() -> None:
     )
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
-
-    from telegram.error import Conflict
-    import time as _time
-    max_attempts = 6
-    for attempt in range(max_attempts):
-        try:
-            app.run_polling(drop_pending_updates=True)
-            break
-        except Conflict:
-            if attempt < max_attempts - 1:
-                wait = 5 * (attempt + 1)
-                logger.warning(
-                    f"Startup conflict with Telegram (attempt {attempt + 1}/{max_attempts}) "
-                    f"— waiting {wait}s for old session to expire..."
-                )
-                _time.sleep(wait)
-            else:
-                logger.error("Could not resolve Telegram polling conflict after all retries.")
-                raise
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":

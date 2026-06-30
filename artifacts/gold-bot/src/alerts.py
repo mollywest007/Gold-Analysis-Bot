@@ -296,6 +296,33 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
     )
 
 
+async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Broadcast a reconnect card to all subscribers when the bot starts up."""
+    from src.utils.formatting import restart_summary_card
+
+    bot  = context.application.bot
+    subs = _load()
+
+    if not subs:
+        logger.info("Startup summary: no subscribers.")
+        return
+
+    try:
+        all_trades   = trade_tracker.get_all_trades()
+        open_trades  = [t for t in all_trades if t.get("status") == "open"]
+        # last 5 closed/expired signals (skip open ones for the history section)
+        recent       = [t for t in all_trades if t.get("status") != "open"][:5]
+        stats        = trade_tracker.get_stats()
+        text         = restart_summary_card(open_trades, recent, stats)
+        dead         = await _broadcast_text(bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(f"Startup summary sent to {len(subs)} subscriber(s).")
+    except Exception as e:
+        logger.error(f"Startup summary failed: {e}")
+
+
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
 

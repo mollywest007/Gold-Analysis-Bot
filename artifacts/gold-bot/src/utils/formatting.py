@@ -1025,6 +1025,88 @@ def history_card(trades: list, stats: dict) -> str:
     return "\n".join(lines)
 
 
+def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) -> str:
+    """Sent to all subscribers when the bot restarts — shows open positions + last 5 signals."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%d %b  %H:%M UTC")
+
+    def _status_label(s: str) -> str:
+        return {
+            "open":    "OPEN",
+            "tp2_hit": "WIN  TP2",
+            "tp1_hit": "WIN  TP1",
+            "sl_hit":  "LOSS SL",
+            "expired": "EXPIRED",
+        }.get(s, s.upper())
+
+    def _fmt_date(ts) -> str:
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M")
+        except Exception:
+            return "------"
+
+    ms  = market_status()
+    mkt = "OPEN" if ms["is_open"] else "CLOSED"
+
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD BOT  |  BACK ONLINE   ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  {now}",
+        f"  Market : {mkt}  —  {ms['note']}",
+        "──────────────────────────────────",
+    ]
+
+    if open_trades:
+        lines += ["  OPEN POSITIONS", "──────────────────────────────────"]
+        for t in open_trades:
+            d      = t.get("direction", "?")
+            tf     = t.get("timeframe", "?")
+            entry  = t.get("entry", 0)
+            sl     = t.get("sl", 0)
+            tp1    = t.get("tp1", 0)
+            tp2    = t.get("tp2", 0)
+            conf   = t.get("confidence", 0)
+            opened = _fmt_date(t.get("opened_at", 0))
+            lines += [
+                f"  {d}  {tf}   opened {opened}",
+                f"  Entry : {entry:,.2f}   Conf: {conf}%",
+                f"  SL    : {sl:,.2f}",
+                f"  TP1   : {tp1:,.2f}   TP2: {tp2:,.2f}",
+                "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
+            ]
+    else:
+        lines += ["  No open positions.", "──────────────────────────────────"]
+
+    if recent_trades:
+        lines += ["", "  LAST 5 SIGNALS", "──────────────────────────────────"]
+        for t in recent_trades[:5]:
+            d      = t.get("direction", "?")
+            tf     = t.get("timeframe", "?")
+            entry  = t.get("entry", 0)
+            conf   = t.get("confidence", 0)
+            opened = _fmt_date(t.get("opened_at", 0))
+            result = _status_label(t.get("status", ""))
+            lines += [
+                f"  {opened}  {d:<4} {tf:<3}  {result}",
+                f"  Entry: {entry:,.2f}   Conf: {conf}%",
+                "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
+            ]
+
+    lines += [
+        "",
+        f"  Signals  W:{stats['wins']}  L:{stats['losses']}  "
+        f"Rate:{stats['win_rate']}%",
+        "──────────────────────────────────",
+        "  Use /signal for live scan.",
+        "  Use /history for full log.",
+        "</pre>",
+    ]
+    return "\n".join(lines)
+
+
 def welcome_text(name: str) -> str:
     ms = market_status()
     if ms["is_open"]:
