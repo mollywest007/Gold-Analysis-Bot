@@ -6,19 +6,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ["Recommend", "Analyze"],
         ["Signal", "Trend"],
         ["Levels", "Outlook"],
-        ["News", "Alerts"],
-        ["Settings"],
+        ["News", "Settings"],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
-
-
-def alerts_keyboard(subscribed: bool) -> InlineKeyboardMarkup:
-    label  = "Turn OFF Alerts" if subscribed else "Turn ON Alerts"
-    action = "alerts:off" if subscribed else "alerts:on"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(label, callback_data=action)],
-        [InlineKeyboardButton("Back", callback_data="back:main")],
-    ])
 
 
 def settings_keyboard(current_tf: str) -> InlineKeyboardMarkup:

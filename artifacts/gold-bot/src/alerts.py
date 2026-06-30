@@ -17,7 +17,7 @@ from src.image_gen import generate_result_image
 
 logger = logging.getLogger(__name__)
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "subscribers.json")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 
 # Tracks the last fired direction per timeframe.
 # Structure: { "H1": "SELL", "M15": "BUY", ... }
@@ -47,29 +47,16 @@ def _save(subs: Set[int]) -> None:
         json.dump({"subscribers": list(subs)}, f)
 
 
-def is_subscribed(chat_id: int) -> bool:
-    return chat_id in _load()
+def register_user(chat_id: int) -> None:
+    """Auto-register a user when they start the bot. Alerts are free for everyone."""
+    users = _load()
+    if chat_id not in users:
+        users.add(chat_id)
+        _save(users)
+        logger.info(f"New user registered: {chat_id} (total: {len(users)})")
 
 
-def subscribe(chat_id: int) -> bool:
-    subs = _load()
-    if chat_id in subs:
-        return False
-    subs.add(chat_id)
-    _save(subs)
-    return True
-
-
-def unsubscribe(chat_id: int) -> bool:
-    subs = _load()
-    if chat_id not in subs:
-        return False
-    subs.discard(chat_id)
-    _save(subs)
-    return True
-
-
-def subscriber_count() -> int:
+def user_count() -> int:
     return len(_load())
 
 

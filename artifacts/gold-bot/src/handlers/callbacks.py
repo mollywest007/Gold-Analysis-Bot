@@ -3,13 +3,12 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, Application
 
 from src.analysis import analyze
-from src.alerts import is_subscribed, subscribe, unsubscribe
 from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card
 )
-from src.utils.keyboards import settings_keyboard, alerts_keyboard, main_menu_keyboard
+from src.utils.keyboards import settings_keyboard, main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -44,32 +43,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     data = query.data or ""
-
-    # ── Alert toggles (always available) ──────────────────────────────────────
-    if data == "alerts:on":
-        subscribe(update.effective_chat.id)
-        ms  = market_status()
-        mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
-        mkt = f"Market is currently {mkt_status} — {ms['note']}."
-        text = (
-            "<b>Alerts</b>\n\n"
-            f"Status: <b>ON</b>\n"
-            f"{mkt}\n\n"
-            "You will receive automatic notifications whenever a high-confidence "
-            "BUY or SELL is detected. Alerts only fire during market hours."
-        )
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(True))
-        return
-
-    if data == "alerts:off":
-        unsubscribe(update.effective_chat.id)
-        text = (
-            "<b>Alerts</b>\n\n"
-            "Status: <b>OFF</b>\n\n"
-            "Automatic notifications disabled."
-        )
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=alerts_keyboard(False))
-        return
 
     # ── Timeframe settings (always available) ─────────────────────────────────
     if data.startswith("set_tf:"):

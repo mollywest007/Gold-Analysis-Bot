@@ -3,13 +3,12 @@ from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters, Application
 
 from src.analysis import analyze
-from src.alerts import is_subscribed, subscribe, unsubscribe
 from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card, news_card
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -121,24 +120,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error(f"msg news error: {e}")
             await msg.edit_text("Could not fetch news right now. Try again shortly.")
-
-    elif text == "alerts":
-        chat_id = update.effective_chat.id
-        subscribed = is_subscribed(chat_id)
-        status = "ON" if subscribed else "OFF"
-        ms = market_status()
-        mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
-        text_out = (
-            "<b>Alerts</b>\n\n"
-            f"Status: <b>{status}</b>\n"
-            f"Market is currently <b>{mkt_status}</b> — {ms['note']}.\n\n"
-            "When alerts are ON, you will receive automatic notifications whenever "
-            "a high-confidence BUY or SELL entry is detected on XAU/USD.\n\n"
-            "Checks run every 1 minute. Alerts fire as soon as a signal is detected."
-        )
-        await update.message.reply_text(
-            text_out, parse_mode="HTML", reply_markup=alerts_keyboard(subscribed)
-        )
 
     elif text == "settings":
         tf = _get_tf(context)

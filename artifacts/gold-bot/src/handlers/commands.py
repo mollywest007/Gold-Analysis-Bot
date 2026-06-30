@@ -3,14 +3,14 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
 from src.analysis import get_analysis
-from src.alerts import is_subscribed, subscribe, unsubscribe, subscriber_count
+from src.alerts import register_user
 from src.market_hours import market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card, news_card,
     pro_analysis_card, early_entry_card, no_early_entry_card,
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard, alerts_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,9 @@ def _age_note(tf: str) -> str:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    name = update.effective_user.first_name or "Trader"
+    name    = update.effective_user.first_name or "Trader"
+    chat_id = update.effective_chat.id
+    register_user(chat_id)
     await update.message.reply_text(
         welcome_text(name),
         parse_mode="HTML",
@@ -225,24 +227,6 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text("Outlook generation failed. Please try again.")
 
 
-async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id    = update.effective_chat.id
-    subscribed = is_subscribed(chat_id)
-    status     = "ON" if subscribed else "OFF"
-    ms         = market_status()
-    mkt_note   = f"\nMarket is currently <b>{'OPEN' if ms['is_open'] else 'CLOSED'}</b> — {ms['note']}."
-    text = (
-        "<b>Alerts</b>\n\n"
-        f"Status: <b>{status}</b>\n"
-        f"{mkt_note}\n\n"
-        "When alerts are ON you receive automatic notifications "
-        "whenever a high-confidence BUY or SELL is detected.\n\n"
-        "Alerts only fire during market hours. Checks run every 5 minutes."
-    )
-    await update.message.reply_text(
-        text, parse_mode="HTML", reply_markup=alerts_keyboard(subscribed)
-    )
-
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tf   = _get_tf(context)
@@ -382,7 +366,6 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("trend",     cmd_trend))
     app.add_handler(CommandHandler("levels",    cmd_levels))
     app.add_handler(CommandHandler("outlook",   cmd_outlook))
-    app.add_handler(CommandHandler("alerts",    cmd_alerts))
     app.add_handler(CommandHandler("settings",  cmd_settings))
     app.add_handler(CommandHandler("news",      cmd_news))
     app.add_handler(CommandHandler("chart",     cmd_chart))
