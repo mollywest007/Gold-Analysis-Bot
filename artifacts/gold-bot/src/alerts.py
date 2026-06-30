@@ -19,22 +19,35 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 
-# Tracks the last fired direction per timeframe.
+# Tracks the last fired direction per timeframe — persisted to disk.
 # Structure: { "H1": "SELL", "M15": "BUY", ... }
-# A new alert fires only when the direction changes or the trade closes.
 _active_signal: Dict[str, str] = {}
+# Timestamp of when each TF last fired an alert
+_tf_last_fired: Dict[str, float] = {}
 
 SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"]  # all timeframes
+
+# ── Per-timeframe cooldown — minimum gap between alerts on the same TF ────────
+TF_SIGNAL_COOLDOWNS: Dict[str, int] = {
+    "M5":  30 * 60,       # 30 min  — M5 candles are only 5 min, must throttle
+    "M15": 60 * 60,       # 1 hour
+    "M30": 2 * 60 * 60,   # 2 hours
+    "H1":  4 * 60 * 60,   # 4 hours
+    "H4":  12 * 60 * 60,  # 12 hours
+    "D1":  24 * 60 * 60,  # 24 hours
+}
+
+# Confluence alert — fires ONE grouped card when this many TFs agree
+CONFLUENCE_MIN_TFS = 3
+
+# File that persists signal state across bot restarts
+SIGNAL_STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "signal_state.json")
 
 # ── Market open/close transition tracking ─────────────────────────────────────
 _prev_market_open: Optional[bool] = None
 _open_notif_sent_at: float  = 0.0
 _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
-
-# ── Signal broadcast cooldown — prevents back-to-back chart spam ──────────────
-_last_signal_broadcast_ts: float = 0.0
-SIGNAL_BROADCAST_COOLDOWN = 5 * 60  # 5 minutes between signal broadcasts
 
 
 def _load() -> Set[int]:
@@ -64,18 +77,54 @@ def user_count() -> int:
     return len(_load())
 
 
+def _load_signal_state() -> None:
+    """Load persisted signal state from disk — survives bot restarts."""
+    global _active_signal, _tf_last_fired
+    try:
+        with open(SIGNAL_STATE_PATH) as f:
+            s = json.load(f)
+            _active_signal = s.get("active_signal", {})
+            _tf_last_fired = s.get("last_fired", {})
+            logger.info(f"Signal state loaded: {_active_signal}")
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+
+def _save_signal_state() -> None:
+    """Write signal state to disk so restarts don't re-fire stale signals."""
+    os.makedirs(os.path.dirname(SIGNAL_STATE_PATH), exist_ok=True)
+    with open(SIGNAL_STATE_PATH, "w") as f:
+        json.dump({"active_signal": _active_signal, "last_fired": _tf_last_fired}, f)
+
+
 def _should_send(tf: str, action: str) -> bool:
-    """Fire only when the direction changes. One card per signal, held until it flips."""
-    prev = _active_signal.get(tf)
-    if prev == action:
-        logger.info(f"[{tf}] Alert suppressed — {action} already active, no change.")
+    """
+    Fire alert only when:
+      (a) direction is new for this TF, OR
+      (b) same direction but the per-TF cooldown has expired.
+    This prevents spam on short TFs (M5 fires every 5 min) and on restarts.
+    """
+    prev       = _active_signal.get(tf)
+    last_fired = _tf_last_fired.get(tf, 0.0)
+    cooldown   = TF_SIGNAL_COOLDOWNS.get(tf, 4 * 60 * 60)
+    elapsed    = time.time() - last_fired
+
+    if prev == action and elapsed < cooldown:
+        logger.info(
+            f"[{tf}] Suppressed — same direction, "
+            f"{int(elapsed // 60)}m / {int(cooldown // 60)}m cooldown."
+        )
         return False
+    if prev == action:
+        logger.info(f"[{tf}] Cooldown expired ({int(elapsed // 60)}m) — re-firing {action}.")
     return True
 
 
 def clear_signal_lock(tf: str) -> None:
     """Call after a trade closes so the next signal on this timeframe fires freely."""
     _active_signal.pop(tf, None)
+    _tf_last_fired.pop(tf, None)
+    _save_signal_state()
     logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
 
 
@@ -243,19 +292,7 @@ async def _send_market_close_notification(bot, subs: Set[int]) -> None:
 
 
 async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
-    """Broadcast an entry signal: full entry card + live chart."""
-    global _last_signal_broadcast_ts
-
-    # Rate-limit: skip if another signal was broadcast very recently
-    now_ts = time.time()
-    if (now_ts - _last_signal_broadcast_ts) < SIGNAL_BROADCAST_COOLDOWN:
-        logger.info(
-            f"[{tf}] Signal broadcast suppressed — another signal sent "
-            f"{int(now_ts - _last_signal_broadcast_ts)}s ago (cooldown {SIGNAL_BROADCAST_COOLDOWN}s)."
-        )
-        return
-    _last_signal_broadcast_ts = now_ts
-
+    """Broadcast a single-TF entry signal: entry card + live chart."""
     # 1. Send the entry card (same format as /recommend Part 2)
     text = early_entry_card(a)
     dead = await _broadcast_text(bot, subs, text)
@@ -298,6 +335,59 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
         f"[{tf}] Alert fired: {a.action} @ {a.entry:.2f} "
         f"grade={a.setup_quality} win={a.win_probability}% "
         f"to {len(subs)} sub(s)"
+    )
+
+
+async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: str) -> None:
+    """
+    Broadcast ONE grouped alert when 3+ timeframes align on the same direction.
+    signal_list: list of (tf, MarketAnalysis) tuples — all same direction.
+    """
+    from src.utils.formatting import confluence_alert_card
+
+    # Reference TF priority for the trade plan (most reliable intraday TF first)
+    tf_priority = ["H4", "H1", "M30", "D1", "M15", "M5"]
+    tfs_present = {tf for tf, _ in signal_list}
+    ref_tf = next((tf for tf in tf_priority if tf in tfs_present), signal_list[0][0])
+    ref_a  = next(a for tf, a in signal_list if tf == ref_tf)
+
+    text = confluence_alert_card(signal_list, direction, ref_tf)
+    dead = await _broadcast_text(bot, subs, text)
+    if dead:
+        subs -= dead
+        _save(subs)
+
+    # One chart using the reference TF
+    try:
+        from src.chart_generator import generate_chart_image
+        img_bytes = await generate_chart_image(
+            timeframe=ref_tf,
+            entry=ref_a.entry,
+            sl=ref_a.stop_loss,
+            tp1=ref_a.tp1,
+            tp2=ref_a.tp2,
+            tp3=getattr(ref_a, "tp3", None),
+            direction=direction,
+        )
+        if img_bytes:
+            sl_dist = abs(ref_a.entry - ref_a.stop_loss)
+            rr1 = round(abs(ref_a.tp1 - ref_a.entry) / sl_dist, 1) if sl_dist else 0
+            tfs_str = " + ".join(tf for tf, _ in signal_list)
+            caption = (
+                f"CONFLUENCE {direction}  |  XAU/USD  |  {len(signal_list)} TFs\n"
+                f"{tfs_str}\n"
+                f"Ref {ref_tf}  Entry: {ref_a.entry:,.2f}   SL: {ref_a.stop_loss:,.2f}   TP1: {ref_a.tp1:,.2f} (1:{rr1})"
+            )
+            dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
+            if dead2:
+                subs -= dead2
+                _save(subs)
+    except Exception as e:
+        logger.warning(f"Confluence chart failed: {e}")
+
+    logger.info(
+        f"Confluence {direction} alert fired — TFs: {[tf for tf, _ in signal_list]} "
+        f"ref={ref_tf}  to {len(subs)} sub(s)"
     )
 
 
@@ -381,6 +471,10 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         return_exceptions=True,
     )
 
+    # Pass 1 — log all results, collect newly-triggered signals
+    new_signals: list = []   # (tf, MarketAnalysis) pairs that should fire this cycle
+    state_changed = False
+
     for tf, a in zip(SCAN_TIMEFRAMES, analyses):
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
@@ -396,26 +490,51 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             if tf in _active_signal:
                 logger.info(f"[{tf}] Signal cleared (now {a.action}) — lock released.")
                 _active_signal.pop(tf)
+                state_changed = True
             else:
                 logger.info(f"[{tf}] No signal.")
             continue
 
-        # Only fire when direction is new for this timeframe
-        if not _should_send(tf, a.action):
-            continue
+        if _should_send(tf, a.action):
+            new_signals.append((tf, a))
 
-        await _fire_signal(bot, subs, a, tf)
-        _active_signal[tf] = a.action
+    if state_changed:
+        _save_signal_state()
 
-        try:
-            invalidate_cache(tf)
-            trade_tracker.open_trade(
-                direction=a.action, entry=a.entry, sl=a.stop_loss,
-                tp1=a.tp1, tp2=a.tp2, timeframe=tf,
-                confidence=a.confidence, rr_ratio=a.rr_ratio,
-            )
-        except Exception as e:
-            logger.error(f"Trade open failed ({tf}): {e}")
+    if not new_signals:
+        return
+
+    # Pass 2 — confluence check: group same-direction signals into one alert
+    buy_new  = [(tf, a) for tf, a in new_signals if a.action == "BUY"]
+    sell_new = [(tf, a) for tf, a in new_signals if a.action == "SELL"]
+
+    async def _process(sig_list: list, direction: str) -> None:
+        """Fire alert (confluence or individual) and record state + open trades."""
+        if len(sig_list) >= CONFLUENCE_MIN_TFS:
+            await _fire_confluence(bot, subs, sig_list, direction)
+        else:
+            for tf, a in sig_list:
+                await _fire_signal(bot, subs, a, tf)
+
+        now_ts = time.time()
+        for tf, a in sig_list:
+            _active_signal[tf] = direction
+            _tf_last_fired[tf] = now_ts
+            try:
+                invalidate_cache(tf)
+                trade_tracker.open_trade(
+                    direction=a.action, entry=a.entry, sl=a.stop_loss,
+                    tp1=a.tp1, tp2=a.tp2, timeframe=tf,
+                    confidence=a.confidence, rr_ratio=a.rr_ratio,
+                )
+            except Exception as e:
+                logger.error(f"Trade open failed ({tf}): {e}")
+        _save_signal_state()
+
+    if buy_new:
+        await _process(buy_new, "BUY")
+    if sell_new:
+        await _process(sell_new, "SELL")
 
 
 async def _safe_analyze(tf: str):
@@ -424,3 +543,7 @@ async def _safe_analyze(tf: str):
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")
         return None
+
+
+# Load persisted signal state on module import
+_load_signal_state()
