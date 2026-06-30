@@ -24,12 +24,12 @@ args = "Gold Analysis Bot"
 name = "Gold Analysis Bot"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/gold-bot && python main.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pkill -f 'python main.py' 2>/dev/null; sleep 1; cd artifacts/gold-bot && python main.py"
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
