@@ -136,7 +136,25 @@ def main() -> None:
     )
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
-    app.run_polling(drop_pending_updates=True)
+
+    from telegram.error import Conflict
+    import time as _time
+    max_attempts = 6
+    for attempt in range(max_attempts):
+        try:
+            app.run_polling(drop_pending_updates=True)
+            break
+        except Conflict:
+            if attempt < max_attempts - 1:
+                wait = 5 * (attempt + 1)
+                logger.warning(
+                    f"Startup conflict with Telegram (attempt {attempt + 1}/{max_attempts}) "
+                    f"— waiting {wait}s for old session to expire..."
+                )
+                _time.sleep(wait)
+            else:
+                logger.error("Could not resolve Telegram polling conflict after all retries.")
+                raise
 
 
 if __name__ == "__main__":

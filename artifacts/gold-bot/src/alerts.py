@@ -32,6 +32,10 @@ _open_notif_sent_at: float  = 0.0
 _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
 
+# ── Signal broadcast cooldown — prevents back-to-back chart spam ──────────────
+_last_signal_broadcast_ts: float = 0.0
+SIGNAL_BROADCAST_COOLDOWN = 5 * 60  # 5 minutes between signal broadcasts
+
 
 def _load() -> Set[int]:
     try:
@@ -187,6 +191,11 @@ async def send_market_conditions_summary(context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info("Market conditions summary skipped — market closed.")
         return
 
+    # Skip if a market-open notification was sent very recently (avoids double-up)
+    if (time.time() - _open_notif_sent_at) < NOTIF_COOLDOWN:
+        logger.info("Market conditions summary skipped — market-open notification sent recently.")
+        return
+
     try:
         a    = await analyze("H1")
         text = market_conditions_card(a)
@@ -230,6 +239,18 @@ async def _send_market_close_notification(bot, subs: Set[int]) -> None:
 
 async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
     """Broadcast an entry signal: full entry card + live chart."""
+    global _last_signal_broadcast_ts
+
+    # Rate-limit: skip if another signal was broadcast very recently
+    now_ts = time.time()
+    if (now_ts - _last_signal_broadcast_ts) < SIGNAL_BROADCAST_COOLDOWN:
+        logger.info(
+            f"[{tf}] Signal broadcast suppressed — another signal sent "
+            f"{int(now_ts - _last_signal_broadcast_ts)}s ago (cooldown {SIGNAL_BROADCAST_COOLDOWN}s)."
+        )
+        return
+    _last_signal_broadcast_ts = now_ts
+
     # 1. Send the entry card (same format as /recommend Part 2)
     text = early_entry_card(a)
     dead = await _broadcast_text(bot, subs, text)

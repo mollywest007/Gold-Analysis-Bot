@@ -77,7 +77,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         msg = await update.message.reply_text("Analyzing all timeframes...")
         try:
             results = await asyncio.gather(
-                analyze("M15"), analyze("H1"), analyze("H4"),
+                analyze("M5"), analyze("M15"), analyze("M30"),
+                analyze("H1"), analyze("H4"), analyze("D1"),
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
