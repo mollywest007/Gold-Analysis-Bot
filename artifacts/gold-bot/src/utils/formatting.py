@@ -1,3 +1,4 @@
+import time
 from src.analysis.engine import MarketAnalysis, Indicator
 from src.market_hours import market_status
 
@@ -1022,4 +1023,74 @@ def help_text() -> str:
         "Swing    — H1/H4  (1-5 days)",
         "Position — D1     (weeks)",
     ]
+    return "\n".join(lines)
+
+
+def active_trades_card(open_trades: list, current_price: float) -> str:
+    SEP  = "─" * 30
+    WIDE = "═" * 30
+    lines = [
+        "<pre>",
+        "ACTIVE TRADES  |  XAU/USD",
+        WIDE,
+        f"Live Price : {current_price:,.2f}",
+        SEP,
+    ]
+
+    if not open_trades:
+        lines += ["No open trades.", WIDE, "</pre>"]
+        return "\n".join(lines)
+
+    for i, t in enumerate(open_trades):
+        direction = t["direction"]
+        entry     = t["entry"]
+        sl        = t["sl"]
+        tp1       = t["tp1"]
+        tp2       = t.get("tp2")
+        tp3       = t.get("tp3")
+        tf        = t.get("timeframe", "?")
+        conf      = t.get("confidence", 0)
+        opened_at = t.get("opened_at", 0)
+
+        # P&L in points
+        if direction == "BUY":
+            pnl = current_price - entry
+        else:
+            pnl = entry - current_price
+        pnl_sign  = "+" if pnl >= 0 else ""
+        pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
+
+        # Distances
+        sl_dist  = abs(current_price - sl)
+        tp1_dist = abs(current_price - tp1) if tp1 else None
+
+        # Age
+        age_secs = time.time() - opened_at if opened_at else 0
+        if age_secs < 3600:
+            age_str = f"{int(age_secs // 60)}m ago"
+        else:
+            age_str = f"{int(age_secs // 3600)}h {int((age_secs % 3600) // 60)}m ago"
+
+        lines += [
+            f"{tf}  {direction}  |  Conf: {conf}%",
+            f"Opened     : {age_str}",
+            f"Entry      : {entry:,.2f}",
+            f"Now        : {current_price:,.2f}",
+            f"P&L        : {pnl_sign}{pnl:,.1f} pts  ({pnl_label})",
+            SEP,
+            f"SL         : {sl:,.2f}  ({sl_dist:,.1f} pts away)",
+        ]
+        if tp1:
+            lines.append(f"TP1        : {tp1:,.2f}  ({tp1_dist:,.1f} pts away)")
+        if tp2:
+            tp2_dist = abs(current_price - tp2)
+            lines.append(f"TP2        : {tp2:,.2f}  ({tp2_dist:,.1f} pts away)")
+        if tp3:
+            tp3_dist = abs(current_price - tp3)
+            lines.append(f"TP3        : {tp3:,.2f}  ({tp3_dist:,.1f} pts away)")
+
+        if i < len(open_trades) - 1:
+            lines.append(WIDE)
+
+    lines += [WIDE, "</pre>"]
     return "\n".join(lines)

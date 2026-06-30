@@ -228,6 +228,20 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 
+async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src import trade_tracker
+    from src.analysis.market_data import get_gold_price
+    from src.utils.formatting import active_trades_card
+    msg   = await update.message.reply_text("Fetching active trades...")
+    open_trades = [t for t in trade_tracker.get_all_trades() if t.get("status") == "open"]
+    try:
+        price = await get_gold_price()
+    except Exception:
+        price = 0.0
+    text = active_trades_card(open_trades, price)
+    await msg.edit_text(text, parse_mode="HTML")
+
+
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tf   = _get_tf(context)
     text = (
@@ -366,6 +380,7 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("trend",     cmd_trend))
     app.add_handler(CommandHandler("levels",    cmd_levels))
     app.add_handler(CommandHandler("outlook",   cmd_outlook))
+    app.add_handler(CommandHandler("active",    cmd_active))
     app.add_handler(CommandHandler("settings",  cmd_settings))
     app.add_handler(CommandHandler("news",      cmd_news))
     app.add_handler(CommandHandler("chart",     cmd_chart))

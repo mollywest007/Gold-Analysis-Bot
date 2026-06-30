@@ -43,6 +43,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = (update.message.text or "").strip().lower()
 
     # ── Analysis commands — require market open ────────────────────────────────
+    if text == "active":
+        from src import trade_tracker
+        from src.analysis.market_data import get_gold_price
+        from src.utils.formatting import active_trades_card
+        msg = await update.message.reply_text("Fetching active trades...")
+        open_trades = [t for t in trade_tracker.get_all_trades() if t.get("status") == "open"]
+        try:
+            price = await get_gold_price()
+        except Exception:
+            price = 0.0
+        await msg.edit_text(active_trades_card(open_trades, price), parse_mode="HTML")
+        return
+
     if text in ("recommend", "analyze", "signal", "trend", "levels", "outlook"):
         if not _is_market_open():
             await update.message.reply_text(_market_closed_reply(), parse_mode="HTML")
