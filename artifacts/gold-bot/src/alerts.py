@@ -133,11 +133,16 @@ async def _send_result_image(
         caption = (f"ALL TARGETS HIT  |  XAU/USD\n"
                    f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
                    f"Full profit: +{abs(entry - exit_price):,.2f} pts")
+    elif event == "TP1_SL":
+        result  = "LOSS"
+        caption = (f"SL HIT (TP1 was captured)  |  XAU/USD\n"
+                   f"{direction}  Entry: {entry:,.2f}  SL: {sl:,.2f}\n"
+                   f"TP1 {tp1:,.2f} was hit — SL then triggered at {exit_price:,.2f}")
     else:
         result  = "WIN_TP1"
         caption = (f"TP1 HIT  |  XAU/USD\n"
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
-                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts")
+                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts  |  Watching for TP2")
 
     try:
         img_bytes = generate_result_image(

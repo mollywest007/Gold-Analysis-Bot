@@ -957,16 +957,12 @@ def history_card(trades: list, stats: dict) -> str:
 
     def _status_label(t: dict) -> str:
         s = t.get("status", "")
-        if s == "open":
-            return "OPEN  "
-        if s == "tp2_hit":
-            return "WIN   TP2"
-        if s == "tp1_hit":
-            return "WIN   TP1"
-        if s == "sl_hit":
-            return "LOSS  SL "
-        if s == "expired":
-            return "EXPIRED  "
+        if s == "open":         return "OPEN     "
+        if s == "tp2_hit":      return "WIN   TP2"
+        if s == "tp1_hit":      return "WIN   TP1"
+        if s == "tp1_sl_hit":   return "TP1 / SL "
+        if s == "sl_hit":       return "LOSS  SL "
+        if s == "expired":      return "EXPIRED  "
         return s.upper()[:9]
 
     def _fmt_date(ts) -> str:
@@ -1032,11 +1028,12 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
 
     def _status_label(s: str) -> str:
         return {
-            "open":    "OPEN",
-            "tp2_hit": "WIN  TP2",
-            "tp1_hit": "WIN  TP1",
-            "sl_hit":  "LOSS SL",
-            "expired": "EXPIRED",
+            "open":        "OPEN",
+            "tp2_hit":     "WIN  TP2",
+            "tp1_hit":     "WIN  TP1",
+            "tp1_sl_hit":  "TP1 / SL",
+            "sl_hit":      "LOSS SL",
+            "expired":     "EXPIRED",
         }.get(s, s.upper())
 
     def _fmt_date(ts) -> str:

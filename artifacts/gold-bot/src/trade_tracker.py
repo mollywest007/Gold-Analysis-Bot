@@ -77,7 +77,9 @@ def check_trades(current_price: float) -> List[Dict[str, Any]]:
     changed = False
 
     for t in trades:
-        if t.get("status") != "open":
+        status = t.get("status", "")
+        # Continue tracking open trades AND trades where TP1 was hit but TP2 not yet reached
+        if status not in ("open", "tp1_hit"):
             continue
 
         age = time.time() - t.get("opened_at", 0)
@@ -102,13 +104,21 @@ def check_trades(current_price: float) -> List[Dict[str, Any]]:
             tp2_hit = current_price <= tp2
 
         if sl_hit:
-            t["status"] = "sl_hit"
-            changed = True
-            events.append({"trade": t, "event": "SL", "exit_price": current_price})
-            logger.info(f"Trade {t['id']} SL hit @ {current_price:.2f}")
+            # If TP1 was already captured, mark distinctly so history shows TP1→SL
+            if t.get("tp1_hit"):
+                t["status"] = "tp1_sl_hit"
+                changed = True
+                events.append({"trade": t, "event": "TP1_SL", "exit_price": current_price})
+                logger.info(f"Trade {t['id']} SL hit after TP1 partial @ {current_price:.2f}")
+            else:
+                t["status"] = "sl_hit"
+                changed = True
+                events.append({"trade": t, "event": "SL", "exit_price": current_price})
+                logger.info(f"Trade {t['id']} SL hit @ {current_price:.2f}")
 
         elif tp2_hit and not t.get("tp2_hit"):
             t["tp2_hit"] = True
+            t["tp1_hit"] = True   # TP1 implicitly cleared if TP2 is reached
             t["status"]  = "tp2_hit"
             changed = True
             events.append({"trade": t, "event": "TP2", "exit_price": current_price})
@@ -116,6 +126,7 @@ def check_trades(current_price: float) -> List[Dict[str, Any]]:
 
         elif tp1_hit and not t.get("tp1_hit"):
             t["tp1_hit"] = True
+            t["status"]  = "tp1_hit"   # record partial win; trade stays tracked for TP2
             changed = True
             events.append({"trade": t, "event": "TP1", "exit_price": current_price})
             logger.info(f"Trade {t['id']} TP1 hit @ {current_price:.2f}")
@@ -139,7 +150,7 @@ def get_all_trades() -> List[Dict[str, Any]]:
 def get_stats() -> Dict[str, Any]:
     """Return win/loss/open counts and win rate across all closed trades."""
     trades = _load()
-    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit"))
+    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp1_sl_hit"))
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
     open_  = sum(1 for t in trades if t.get("status") == "open")
     expired = sum(1 for t in trades if t.get("status") == "expired")
