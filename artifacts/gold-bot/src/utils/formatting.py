@@ -421,110 +421,69 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
 # ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
 
 def early_entry_card(a: MarketAnalysis) -> str:
-    """
-    Step 2 of /recommend — the actual trade setup.
-    Only called when setup_quality is A or A+ (80%+ win rate).
-    """
-    ms = market_status()
+    """Alert card — compact layout, all data preserved."""
+    ms     = market_status()
     sl_dist = abs(a.entry - a.stop_loss)
     rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
     rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
     rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
     t1  = _estimate_time(a, a.tp1)
     t2  = _estimate_time(a, a.tp2)
-
-    # Describe the early entry approach
-    if a.action == "BUY":
-        strategy = "Wait for price to pull back into the zone below, then buy."
-    else:
-        strategy = "Wait for price to retrace up into the zone, then sell."
+    sep = "──────────────────────────────"
 
     lines = ["<pre>",
-        "╔══════════════════════════════════╗",
-        "║   XAU/USD  EARLY ENTRY  Pt.2     ║",
-        "╚══════════════════════════════════╝",
-        "",
-        f"  [ {a.action} ]  Grade: {_quality_label(a.setup_quality)}",
-        f"  Win Rate  : {_win_bar(a.win_probability)}",
-        f"  Type      : {_trade_type_label(a)}",
-        f"  TF        : {a.timeframe}   Session: {a.session or 'N/A'}",
-        "",
-        "══════════════════════════════════",
-        "  FIBONACCI ENTRY ZONE",
-        "══════════════════════════════════",
-        f"  Swing Range:",
-        f"    38.2% : {fmt_price(a.fib_382)}",
-        f"    50.0% : {fmt_price(a.fib_500)}",
-        f"    61.8% : {fmt_price(a.fib_618)}",
-        "",
+        f"XAU/USD  {a.action}  {a.timeframe}  {a.session or 'N/A'}",
+        f"Grade {a.setup_quality}  |  Strength {a.win_probability}%  |  {a.trade_type}",
+        sep,
+        "FIB ZONE",
+        f"  38.2% : {fmt_price(a.fib_382)}",
+        f"  50.0% : {fmt_price(a.fib_500)}",
+        f"  61.8% : {fmt_price(a.fib_618)}",
+        sep,
+        "ENTRY",
     ]
 
-    # Highlight which Fib level is the recommended early entry
     if a.early_entry and a.early_entry != a.entry:
         lines += [
-            "  RECOMMENDED ENTRY ZONE",
-            "──────────────────────────────────",
-            f"  Limit at  : {fmt_price(a.early_entry)}",
-            f"  Reason    : {a.early_entry_reason[:44]}",
-            "",
-            f"  {strategy}",
-            "",
+            f"  Limit : {fmt_price(a.early_entry)}  ({a.early_entry_reason[:30]})",
+            f"  Mkt   : {fmt_price(a.entry)}  (if missed)",
         ]
     else:
-        lines += [
-            "  ENTRY",
-            "──────────────────────────────────",
-            f"  Market at : {fmt_price(a.entry)}",
-            "",
-        ]
+        lines.append(f"  Mkt   : {fmt_price(a.entry)}")
 
     lines += [
-        "══════════════════════════════════",
-        "  TRADE PLAN",
-        "══════════════════════════════════",
-    ]
-
-    if a.early_entry and a.early_entry != a.entry:
-        lines.append(f"  Limit In  : {fmt_price(a.early_entry)}  (preferred)")
-    lines.append(f"  Market In : {fmt_price(a.entry)}  (if missed)")
-
-    lines += [
-        f"  Stop Loss : {fmt_price(a.stop_loss)}",
-        "",
-        f"  TP1 : {fmt_price(a.tp1)}   1:{rr1} R:R   ({t1})",
-        f"  TP2 : {fmt_price(a.tp2)}   1:{rr2} R:R   ({t2})",
-        f"  TP3 : {fmt_price(a.tp3)}   1:{rr3} R:R   (full move)",
-        "",
-        "  Strategy: Close 50% at TP1,",
-        "  move SL to entry, ride TP2/3.",
-        "",
-        "══════════════════════════════════",
-        "  CONFLUENCE FACTORS",
-        "══════════════════════════════════",
+        f"  SL    : {fmt_price(a.stop_loss)}",
+        sep,
+        "TARGETS",
+        f"  TP1 : {fmt_price(a.tp1)}  1:{rr1}  {t1}",
+        f"  TP2 : {fmt_price(a.tp2)}  1:{rr2}  {t2}",
+        f"  TP3 : {fmt_price(a.tp3)}  1:{rr3}  (full move)",
+        sep,
+        "CONFLUENCE",
     ]
 
     for i, cf in enumerate(a.confluence_list, 1):
-        lines.append(f"  {i:>2}. {cf}")
+        lines.append(f"  {i}. {cf}")
 
     if not a.confluence_list:
-        lines.append("  (no factors listed)")
+        lines.append("  (no factors)")
 
     if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
-        lines += ["", f"  Candle Pattern : {a.candle_pattern}"]
+        lines.append(f"  + {a.candle_pattern}")
 
-    # Show any signal caveats (stored in wait_reason when action is BUY/SELL)
     if a.wait_reason and a.action in ("BUY", "SELL"):
-        lines += ["", "══════════════════════════════════",
-                  "  CAUTIONS (read before trading)",
-                  "══════════════════════════════════"]
+        lines += [sep, "CAUTIONS"]
         for note in a.wait_reason.split(" | "):
             if note.strip():
                 lines.append(f"  ! {note.strip()}")
 
     if not ms["is_open"]:
-        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+        lines += [sep, f"  ! {ms['status_text']}"]
 
-    lines += ["", "  Not financial advice.", "</pre>"]
+    lines += [sep,
+        "  50% at TP1. Move SL to entry.",
+        "  Not financial advice.",
+        "</pre>"]
     return "\n".join(lines)
 
 
