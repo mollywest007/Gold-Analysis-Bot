@@ -334,83 +334,48 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Trade check failed: {e}")
 
     # ── Scan timeframes for entry signals ─────────────────────────────────────
-    # Rule: BOTH timeframes must agree on the same direction before any alert
-    # fires. If M15 says BUY but H1 says WAIT or SELL — silence. This prevents
-    # contradictory signals and ensures every alert has multi-timeframe backing.
+    # Each timeframe alerts independently. One card per timeframe per direction
+    # change — lock releases only when the signal flips or the trade closes.
     analyses = await asyncio.gather(
         *[_safe_analyze(tf) for tf in SCAN_TIMEFRAMES],
         return_exceptions=True,
     )
 
-    tf_results = {}
     for tf, a in zip(SCAN_TIMEFRAMES, analyses):
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
                 logger.error(f"[{tf}] Analysis raised: {a}")
             continue
+
         logger.info(
             f"[{tf}] scan: action={a.action} grade={a.setup_quality} "
             f"conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
         )
-        tf_results[tf] = a
 
-    # Collect the direction each timeframe sees (only BUY/SELL count)
-    directions = {
-        tf: a.action
-        for tf, a in tf_results.items()
-        if a.action in ("BUY", "SELL")
-    }
+        if a.action not in ("BUY", "SELL"):
+            if tf in _active_signal:
+                logger.info(f"[{tf}] Signal cleared (now {a.action}) — lock released.")
+                _active_signal.pop(tf)
+            else:
+                logger.info(f"[{tf}] No signal.")
+            continue
 
-    # Clear locks for timeframes that went neutral
-    for tf, a in tf_results.items():
-        if a.action not in ("BUY", "SELL") and tf in _active_signal:
-            logger.info(f"[{tf}] Signal cleared (now {a.action}) — lock released.")
-            _active_signal.pop(tf)
+        # Only fire when direction is new for this timeframe
+        if not _should_send(tf, a.action):
+            continue
 
-    # Require EVERY scan timeframe to have returned a result AND all agree.
-    # If any timeframe is WAIT/NEUTRAL or failed, no alert fires.
-    successful_tfs = set(tf_results.keys())
-    required_tfs   = set(SCAN_TIMEFRAMES)
-    if successful_tfs < required_tfs:
-        missing = required_tfs - successful_tfs
-        logger.info(f"No alert — missing analysis for: {', '.join(missing)}")
-        return
+        await _fire_signal(bot, subs, a, tf)
+        _active_signal[tf] = a.action
 
-    unique_directions = set(directions.values())
-    if len(unique_directions) != 1 or len(directions) != len(SCAN_TIMEFRAMES):
-        # Any timeframe is WAIT, or they disagree — stay out
-        all_actions = ", ".join(f"{tf}={tf_results[tf].action}" for tf in SCAN_TIMEFRAMES)
-        logger.info(f"No alert — timeframes not aligned: {all_actions}")
-        return
-
-    agreed_direction = unique_directions.pop()
-
-    # Use H1 as the primary signal card (more reliable levels); fall back to M15
-    primary_tf = "H1" if "H1" in tf_results and tf_results["H1"].action == agreed_direction else SCAN_TIMEFRAMES[0]
-    primary_a  = tf_results[primary_tf]
-
-    # Deduplicate: only fire when the agreed direction is new
-    if not _should_send(primary_tf, agreed_direction):
-        return
-
-    # Both timeframes agree — fire one alert using the H1 levels
-    confirming = [tf for tf in directions if tf != primary_tf]
-    confirm_str = f"  (confirmed by {', '.join(confirming)})" if confirming else ""
-    logger.info(f"[{primary_tf}] Alert firing: {agreed_direction}{confirm_str}")
-
-    await _fire_signal(bot, subs, primary_a, primary_tf)
-    _active_signal[primary_tf] = agreed_direction
-
-    # Register in trade tracker
-    try:
-        invalidate_cache(primary_tf)
-        trade_tracker.open_trade(
-            direction=primary_a.action, entry=primary_a.entry, sl=primary_a.stop_loss,
-            tp1=primary_a.tp1, tp2=primary_a.tp2, timeframe=primary_tf,
-            confidence=primary_a.confidence, rr_ratio=primary_a.rr_ratio,
-        )
-    except Exception as e:
-        logger.error(f"Trade open failed ({primary_tf}): {e}")
+        try:
+            invalidate_cache(tf)
+            trade_tracker.open_trade(
+                direction=a.action, entry=a.entry, sl=a.stop_loss,
+                tp1=a.tp1, tp2=a.tp2, timeframe=tf,
+                confidence=a.confidence, rr_ratio=a.rr_ratio,
+            )
+        except Exception as e:
+            logger.error(f"Trade open failed ({tf}): {e}")
 
 
 async def _safe_analyze(tf: str):
