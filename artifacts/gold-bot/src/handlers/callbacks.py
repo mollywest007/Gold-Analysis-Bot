@@ -163,18 +163,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data["timeframe"] = tf
 
     if data.startswith("recommend:"):
-        import asyncio as _asyncio
-        import re as _re
-        from src.utils.formatting import recommend_multi_card
         await query.edit_message_text("Scanning all timeframes...")
         try:
-            results = await _asyncio.gather(
+            from src.utils.formatting import recommend_multi_card as _rmc
+            import re as _re
+            results = await asyncio.gather(
                 analyze("M5"), analyze("M15"), analyze("M30"),
                 analyze("H1"), analyze("H4"), analyze("D1"),
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
-            card = recommend_multi_card(analyses)
+            card = _rmc(analyses)
             try:
                 await query.edit_message_text(card, parse_mode="HTML")
             except Exception as html_err:
@@ -186,11 +185,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Scanning failed — please try again in a moment.")
 
     elif data.startswith("analyze:"):
-        import asyncio as _asyncio
-        from src.utils.formatting import multi_timeframe_card
         await query.edit_message_text("Analyzing all timeframes...")
         try:
-            results = await _asyncio.gather(
+            results = await asyncio.gather(
                 analyze("M5"), analyze("M15"), analyze("M30"),
                 analyze("H1"), analyze("H4"), analyze("D1"),
                 return_exceptions=True,
