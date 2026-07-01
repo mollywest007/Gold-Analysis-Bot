@@ -29,16 +29,17 @@ SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"]  # all timeframes
 
 # ── Per-timeframe cooldown — minimum gap between alerts on the same TF ────────
 TF_SIGNAL_COOLDOWNS: Dict[str, int] = {
-    "M5":  30 * 60,       # 30 min  — M5 candles are only 5 min, must throttle
-    "M15": 60 * 60,       # 1 hour
-    "M30": 2 * 60 * 60,   # 2 hours
-    "H1":  4 * 60 * 60,   # 4 hours
-    "H4":  12 * 60 * 60,  # 12 hours
-    "D1":  24 * 60 * 60,  # 24 hours
+    "M5":  20 * 60,       # 20 min
+    "M15": 30 * 60,       # 30 min
+    "M30": 60 * 60,       # 1 hour
+    "H1":  90 * 60,       # 1.5 hours
+    "H4":  4 * 60 * 60,   # 4 hours
+    "D1":  8 * 60 * 60,   # 8 hours
 }
 
-# Confluence alert — fires ONE grouped card when this many TFs agree
-CONFLUENCE_MIN_TFS = 3
+# Confluence alert — fires ONE grouped card when this many TFs agree.
+# Below this threshold each TF fires its own individual card.
+CONFLUENCE_MIN_TFS = 4
 
 # File that persists signal state across bot restarts
 SIGNAL_STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "signal_state.json")
