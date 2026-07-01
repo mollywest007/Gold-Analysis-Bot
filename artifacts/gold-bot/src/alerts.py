@@ -392,9 +392,38 @@ async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: st
     )
 
 
+_STARTUP_STAMP = "/tmp/gold_bot_startup_last.txt"
+_STARTUP_COOLDOWN = 2 * 60 * 60  # 2 hours — suppresses spam on frequent restarts
+
+
+def _startup_cooldown_ok() -> bool:
+    """Return True only if at least 2 hours have passed since the last send."""
+    try:
+        with open(_STARTUP_STAMP) as f:
+            last = float(f.read().strip())
+        if time.time() - last < _STARTUP_COOLDOWN:
+            return False
+    except (FileNotFoundError, ValueError):
+        pass
+    return True
+
+
+def _mark_startup_sent() -> None:
+    try:
+        with open(_STARTUP_STAMP, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
 async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Broadcast a reconnect card to all subscribers when the bot starts up."""
+    """Broadcast a reconnect card to all subscribers when the bot starts up.
+    Suppressed if sent within the last 2 hours to prevent restart spam."""
     from src.utils.formatting import restart_summary_card
+
+    if not _startup_cooldown_ok():
+        logger.info("Startup summary suppressed — sent less than 2 hours ago.")
+        return
 
     bot  = context.application.bot
     subs = _load()
@@ -406,7 +435,6 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         all_trades   = trade_tracker.get_all_trades()
         open_trades  = [t for t in all_trades if t.get("status") == "open"]
-        # last 5 closed/expired signals (skip open ones for the history section)
         recent       = [t for t in all_trades if t.get("status") != "open"][:5]
         stats        = trade_tracker.get_stats()
         text         = restart_summary_card(open_trades, recent, stats)
@@ -414,6 +442,7 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         if dead:
             subs -= dead
             _save(subs)
+        _mark_startup_sent()
         logger.info(f"Startup summary sent to {len(subs)} subscriber(s).")
     except Exception as e:
         logger.error(f"Startup summary failed: {e}")
