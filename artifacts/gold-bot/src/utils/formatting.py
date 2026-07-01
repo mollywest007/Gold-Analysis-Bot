@@ -577,7 +577,7 @@ def recommend_multi_card(analyses: list) -> str:
         action = a.action if a.action in ("BUY", "SELL") else "WAIT"
         grade  = a.setup_quality or "-"
         bias   = a.bias[:7] if a.bias else "Neutral"
-        marker = "  <--" if action in ("BUY", "SELL") else ""
+        marker = "  &lt;--" if action in ("BUY", "SELL") else ""
         lines.append(
             f"  {tf:<4}  {action:<6}  {a.confidence}%  {grade:<5} {bias}{marker}"
         )
@@ -1294,4 +1294,76 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             lines.append(WIDE)
 
     lines += [WIDE, "</pre>"]
+    return "\n".join(lines)
+
+
+def confluence_alert_card(signal_list: list, direction: str, ref_tf: str) -> str:
+    """
+    Single grouped alert card for when 3+ timeframes agree on a direction.
+    signal_list : list of (tf, MarketAnalysis) tuples — all same direction.
+    ref_tf      : the timeframe used for the trade plan section.
+    """
+    SEP  = "─" * 34
+    WIDE = "═" * 34
+
+    n     = len(signal_list)
+    ref_a = next(a for tf, a in signal_list if tf == ref_tf)
+
+    sl_dist = abs(ref_a.entry - ref_a.stop_loss)
+    rr1 = round(abs(ref_a.tp1 - ref_a.entry) / sl_dist, 1) if sl_dist and ref_a.tp1 else 0
+    rr2 = round(abs(ref_a.tp2 - ref_a.entry) / sl_dist, 1) if sl_dist and ref_a.tp2 else 0
+    rr3 = round(abs(ref_a.tp3 - ref_a.entry) / sl_dist, 1) if sl_dist and getattr(ref_a, "tp3", None) else 0
+
+    avg_conf = round(sum(a.confidence for _, a in signal_list) / n)
+    mkt_line = _mkt_line()
+
+    lines = [
+        "<pre>",
+        WIDE,
+        f"  XAU/USD  CONFLUENCE  {direction}",
+        f"  {n} TIMEFRAMES ALIGNED",
+        WIDE,
+        f"  {mkt_line}",
+        "",
+        SEP,
+        f"  {'TF':<5}  {'GRADE':<6}  {'CONF':<5}  BIAS",
+        SEP,
+    ]
+
+    for tf, a in signal_list:
+        grade = a.setup_quality or "-"
+        bias  = (a.bias or "Neutral")[:10]
+        lines.append(f"  {tf:<5}  {grade:<6}  {a.confidence}%    {bias}")
+
+    lines += [
+        SEP,
+        "",
+        f"  TRADE PLAN  ({ref_tf} Reference)",
+        SEP,
+        f"  Entry  : {fmt_price(ref_a.entry)}",
+        f"  SL     : {fmt_price(ref_a.stop_loss)}",
+    ]
+
+    if ref_a.tp1:
+        lines.append(f"  TP1    : {fmt_price(ref_a.tp1)}  (1:{rr1})")
+    if ref_a.tp2:
+        lines.append(f"  TP2    : {fmt_price(ref_a.tp2)}  (1:{rr2})")
+    if getattr(ref_a, "tp3", None):
+        lines.append(f"  TP3    : {fmt_price(ref_a.tp3)}  (1:{rr3})")
+
+    lines += [
+        SEP,
+        f"  Avg Confidence : {avg_conf}%",
+        f"  Setup Grade    : {ref_a.setup_quality}",
+    ]
+
+    if ref_a.verdict_reason:
+        lines.append(f"  Reason         : {ref_a.verdict_reason[:32]}")
+
+    lines += [
+        "",
+        "  Not financial advice.",
+        WIDE,
+        "</pre>",
+    ]
     return "\n".join(lines)
