@@ -87,16 +87,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         command = parts[1] if len(parts) > 1 else ""
         tf_arg  = parts[2] if len(parts) > 2 else _get_tf(context)
         tf      = tf_arg if tf_arg != "all" else _get_tf(context)
-
-        await query.answer("Refreshing...")
-
-        if not _is_open():
-            await query.edit_message_text(_closed_text(), parse_mode="HTML")
-            return
-
         kb = refresh_keyboard(command, tf_arg)
 
         try:
+            if not _is_open():
+                await query.edit_message_text(_closed_text(), parse_mode="HTML",
+                                              reply_markup=kb)
+                return
             if command == "analyze":
                 await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
                 results = await asyncio.gather(
