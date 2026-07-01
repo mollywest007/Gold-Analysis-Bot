@@ -129,6 +129,22 @@ def clear_signal_lock(tf: str) -> None:
     logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
 
 
+def get_signal_lock_info(tf: str) -> str:
+    """Return a human-readable cooldown status for a timeframe, or '' if no lock."""
+    direction = _active_signal.get(tf)
+    if not direction:
+        return ""
+    last_fired = _tf_last_fired.get(tf, 0.0)
+    cooldown   = TF_SIGNAL_COOLDOWNS.get(tf, 4 * 60 * 60)
+    elapsed    = time.time() - last_fired
+    remaining  = cooldown - elapsed
+    if remaining <= 0:
+        return f"Last alert: {int(elapsed // 60)}m ago ({direction}) — ready to re-fire"
+    sent_ago   = int(elapsed // 60)
+    next_in    = int(remaining // 60) + 1
+    return f"Alert sent {sent_ago}m ago ({direction}) — next in ~{next_in}m"
+
+
 async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
     dead: Set[int] = set()
     for chat_id in list(subs):
