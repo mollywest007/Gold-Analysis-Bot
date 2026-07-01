@@ -35,6 +35,48 @@ def _trade_type_label(a: MarketAnalysis) -> str:
 
 _TF_MINUTES = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
 
+_TF_RANK = {"D1": 6, "H4": 5, "H1": 4, "M30": 3, "M15": 2, "M5": 1}
+
+
+def _resolve_direction(analyses: list) -> dict:
+    """
+    Returns a dict with:
+      master      : "BUY" | "SELL" | "WAIT"
+      anchor_tf   : the timeframe that sets the direction (highest with BUY/SELL)
+      conflict    : bool — True when lower TFs disagree with the anchor
+      advice      : one plain-English line the user should act on
+      counter_tfs : list of TF names that are counter-trend
+    """
+    actioned = [a for a in analyses if a.action in ("BUY", "SELL")]
+    if not actioned:
+        return dict(master="WAIT", anchor_tf="", conflict=False,
+                    advice="No setup on any timeframe. Stand aside.", counter_tfs=[])
+
+    # Highest-ranked timeframe with an actionable signal is the anchor
+    anchor = max(actioned, key=lambda a: _TF_RANK.get(a.timeframe, 0))
+    master = anchor.action
+    anchor_tf = anchor.timeframe
+
+    counter_tfs = [
+        a.timeframe for a in actioned
+        if a.action != master and _TF_RANK.get(a.timeframe, 0) < _TF_RANK.get(anchor_tf, 0)
+    ]
+    conflict = len(counter_tfs) > 0
+
+    if not conflict:
+        tfs_aligned = [a.timeframe for a in actioned if a.action == master]
+        advice = f"All active timeframes agree: {master}. Trade with the trend."
+    else:
+        counter_str = " + ".join(counter_tfs)
+        advice = (
+            f"{anchor_tf} says {master} — this is your direction. "
+            f"{counter_str} signal{'s are' if len(counter_tfs) > 1 else ' is'} "
+            f"counter-trend. Skip {'them' if len(counter_tfs) > 1 else 'it'}."
+        )
+
+    return dict(master=master, anchor_tf=anchor_tf, conflict=conflict,
+                advice=advice, counter_tfs=counter_tfs)
+
 
 def _estimate_time(a: MarketAnalysis, target: float) -> str:
     atr = a.atr if a.atr and a.atr > 0 else None
@@ -89,7 +131,29 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  HTF Align : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
             f"  Price     : {fmt_price(a.price)}",
-            "",
+        ]
+
+        htf_lower = a.htf_bias.lower()
+        signal_is_buy = a.action == "BUY"
+        htf_is_against = (
+            (signal_is_buy  and any(w in htf_lower for w in ("bearish", "sell"))) or
+            (not signal_is_buy and any(w in htf_lower for w in ("bullish", "buy")))
+        )
+        if htf_is_against:
+            opposite = "SELL" if signal_is_buy else "BUY"
+            lines += [
+                "",
+                "  ! COUNTER-TREND WARNING",
+                "──────────────────────────────────",
+                f"  HTF says {opposite}. This {a.timeframe} signal",
+                f"  fights the bigger trend. Use",
+                f"  smaller size or skip this trade.",
+                "──────────────────────────────────",
+            ]
+        else:
+            lines.append("")
+
+        lines += [
             "──────────────────────────────────",
             "  TRADE PLAN",
             "──────────────────────────────────",
@@ -909,6 +973,13 @@ def multi_timeframe_card(analyses: list) -> str:
     session = first.session or "N/A"
     mkt_line = "LIVE" if ms["is_open"] else ms["status_text"]
 
+    resolved = _resolve_direction(analyses)
+    master    = resolved["master"]
+    anchor_tf = resolved["anchor_tf"]
+    conflict  = resolved["conflict"]
+    advice    = resolved["advice"]
+    counter   = resolved["counter_tfs"]
+
     lines = [
         "<pre>",
         "XAU/USD  MULTI-TIMEFRAME ANALYSIS",
@@ -916,13 +987,33 @@ def multi_timeframe_card(analyses: list) -> str:
         f"Price   : {fmt_price(first.price)}  |  {mkt_line}",
         f"Session : {session}",
         WIDE,
+        "WHAT TO DO",
+        SEP,
     ]
+
+    if master in ("BUY", "SELL"):
+        lines += [
+            f"Direction : {master}  (set by {anchor_tf})",
+            f"Conflict  : {'YES — see below' if conflict else 'None — all clear'}",
+            "",
+        ]
+        for line in _wrap(advice, 34):
+            lines.append(line)
+    else:
+        lines.append("Direction : WAIT — no clear setup")
+        lines.append("")
+        for line in _wrap(advice, 34):
+            lines.append(line)
+
+    lines.append(WIDE)
 
     for a in analyses:
         action = a.action
         grade  = a.setup_quality if action in ("BUY", "SELL") else ""
         conf   = f"{a.confidence}%"
-        label  = f"{a.timeframe}  {action}" + (f"  ({grade})" if grade else "") + f"  |  {conf}"
+        is_counter = a.timeframe in counter
+        flag   = "  [COUNTER-TREND]" if is_counter else ""
+        label  = f"{a.timeframe}  {action}" + (f"  ({grade})" if grade else "") + f"  |  {conf}" + flag
         lines += [
             label,
             SEP,
@@ -941,6 +1032,21 @@ def multi_timeframe_card(analyses: list) -> str:
 
     lines.append("</pre>")
     return "\n".join(lines)
+
+
+def _wrap(text: str, width: int) -> list:
+    """Word-wrap a string to fit within width characters."""
+    words = text.split()
+    lines, current = [], ""
+    for word in words:
+        if current and len(current) + 1 + len(word) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = (current + " " + word).strip()
+    if current:
+        lines.append(current)
+    return lines
 
 
 def market_conditions_card(a: MarketAnalysis) -> str:
