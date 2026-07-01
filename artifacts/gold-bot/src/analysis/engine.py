@@ -419,27 +419,52 @@ def detect_candlestick(opens: List[float], highs: List[float],
     if h1 <= h2 and l1 >= l2 and body1 > 0:
         return "Inside Bar", 0.0   # directional neutral — breakout pending
 
-    # ── Single-candle patterns ────────────────────────────────────────────────
+    # ── Single-candle patterns (directional checks BEFORE Doji) ──────────────
+    # Use range-based wick thresholds so these fire even when body is tiny.
 
-    # Doji — body < 8% of range
-    if body_ratio1 < 0.08:
-        return "Doji", 0.0
+    lower_wick_pct = lower_wick1 / rng1
+    upper_wick_pct = upper_wick1 / rng1
 
-    # Spinning Top — small body, wicks both sides
-    if body_ratio1 < 0.25 and upper_wick1 > body1 and lower_wick1 > body1:
-        return "Spinning Top", 0.0
-
-    # Hammer: bullish close, long lower wick (>= 2x body), tiny upper wick
-    if c1 > o1 and lower_wick1 >= body1 * 2.0 and upper_wick1 <= body1 * 0.5:
+    # Hammer: long lower wick >= 55% of range, upper wick <= 15%, bullish or
+    # bearish close acceptable (classic hammer doesn't require bullish close)
+    if lower_wick_pct >= 0.55 and upper_wick_pct <= 0.15:
         return "Hammer", 0.72
 
-    # Shooting Star: bearish close, long upper wick (>= 2x body), tiny lower wick
-    if c1 < o1 and upper_wick1 >= body1 * 2.0 and lower_wick1 <= body1 * 0.5:
+    # Shooting Star: long upper wick >= 55% of range, lower wick <= 15%
+    if upper_wick_pct >= 0.55 and lower_wick_pct <= 0.15:
         return "Shooting Star", 0.72
 
-    # Inverted Hammer (bullish reversal context only): bullish close, large upper wick
-    if c1 > o1 and upper_wick1 >= body1 * 2.0 and lower_wick1 <= body1 * 0.5:
+    # Inverted Hammer: large upper wick, bullish close, appears after downtrend
+    if c1 > o1 and upper_wick_pct >= 0.45 and lower_wick_pct <= 0.20:
         return "Inverted Hammer", 0.55
+
+    # Marubozu Bullish: strong bullish candle, tiny wicks both sides
+    if c1 > o1 and body_ratio1 >= 0.80 and upper_wick_pct <= 0.10 and lower_wick_pct <= 0.10:
+        return "Bullish Marubozu", 0.80
+
+    # Marubozu Bearish: strong bearish candle, tiny wicks both sides
+    if c1 < o1 and body_ratio1 >= 0.80 and upper_wick_pct <= 0.10 and lower_wick_pct <= 0.10:
+        return "Bearish Marubozu", 0.80
+
+    # Doji — true doji has body < 3% of range (open ≈ close)
+    if body_ratio1 < 0.03:
+        return "Doji", 0.0
+
+    # Long-legged Doji — small body (3–8%) with large equal wicks on both sides
+    if body_ratio1 < 0.08 and lower_wick_pct >= 0.25 and upper_wick_pct >= 0.25:
+        return "Long-legged Doji", 0.0
+
+    # Spinning Top — small body, notable wicks on both sides
+    if body_ratio1 < 0.30 and upper_wick_pct >= 0.20 and lower_wick_pct >= 0.20:
+        return "Spinning Top", 0.0
+
+    # Bullish candle — solid body, no special pattern
+    if c1 > o1 and body_ratio1 >= 0.50:
+        return "Bullish Candle", 0.0
+
+    # Bearish candle — solid body, no special pattern
+    if c1 < o1 and body_ratio1 >= 0.50:
+        return "Bearish Candle", 0.0
 
     return "None", 0.0
 
@@ -447,11 +472,13 @@ def detect_candlestick(opens: List[float], highs: List[float],
 def candle_signal(pattern: str) -> str:
     bullish = {
         "Bullish Engulfing", "Hammer", "Inverted Hammer", "Morning Star",
-        "Three White Soldiers", "Tweezer Bottom", "Piercing Line", "Bullish Harami"
+        "Three White Soldiers", "Tweezer Bottom", "Piercing Line", "Bullish Harami",
+        "Bullish Marubozu", "Bullish Candle",
     }
     bearish = {
         "Bearish Engulfing", "Shooting Star", "Evening Star",
-        "Three Black Crows", "Tweezer Top", "Dark Cloud Cover", "Bearish Harami"
+        "Three Black Crows", "Tweezer Top", "Dark Cloud Cover", "Bearish Harami",
+        "Bearish Marubozu", "Bearish Candle",
     }
     if pattern in bullish:
         return "BUY"
