@@ -8,7 +8,7 @@ from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card, news_card
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard, refresh_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +75,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             analyses = [r for r in results if not isinstance(r, Exception)]
             card = recommend_multi_card(analyses)
             try:
-                await msg.edit_text(card, parse_mode="HTML")
+                await msg.edit_text(card, parse_mode="HTML",
+                                    reply_markup=refresh_keyboard("recommend", "all"))
             except Exception as html_err:
                 logger.warning(f"msg recommend HTML error (falling back to plain): {html_err}")
                 plain = _re.sub(r"<[^>]+>", "", card).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-                await msg.edit_text(plain)
+                await msg.edit_text(plain, reply_markup=refresh_keyboard("recommend", "all"))
         except Exception as e:
             logger.error(f"msg recommend error: {e}")
             await msg.edit_text("Scanning failed — please try again in a moment.")
@@ -95,7 +96,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
-            await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML")
+            await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML",
+                                reply_markup=refresh_keyboard("analyze", "all"))
         except Exception as e:
             logger.error(f"msg analyze error: {e}")
             await msg.edit_text("Analysis failed. Please try again.")
@@ -105,7 +107,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         try:
             tf = _get_tf(context)
             a = await analyze(tf)
-            await msg.edit_text(signal_card(a), parse_mode="HTML")
+            await msg.edit_text(signal_card(a), parse_mode="HTML",
+                                reply_markup=refresh_keyboard("signal", tf))
         except Exception as e:
             logger.error(f"msg signal error: {e}")
             await msg.edit_text("Signal scan failed. Please try again.")
@@ -115,7 +118,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         try:
             tf = _get_tf(context)
             a = await analyze(tf)
-            await msg.edit_text(trend_card(a), parse_mode="HTML")
+            await msg.edit_text(trend_card(a), parse_mode="HTML",
+                                reply_markup=refresh_keyboard("trend", tf))
         except Exception as e:
             logger.error(f"msg trend error: {e}")
             await msg.edit_text("Trend read failed. Please try again.")
@@ -125,7 +129,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         try:
             tf = _get_tf(context)
             a = await analyze(tf)
-            await msg.edit_text(levels_card(a), parse_mode="HTML")
+            await msg.edit_text(levels_card(a), parse_mode="HTML",
+                                reply_markup=refresh_keyboard("levels", tf))
         except Exception as e:
             logger.error(f"msg levels error: {e}")
             await msg.edit_text("Level calculation failed. Please try again.")
@@ -135,7 +140,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         try:
             tf = _get_tf(context)
             a = await analyze(tf)
-            await msg.edit_text(outlook_card(a), parse_mode="HTML")
+            await msg.edit_text(outlook_card(a), parse_mode="HTML",
+                                reply_markup=refresh_keyboard("outlook", tf))
         except Exception as e:
             logger.error(f"msg outlook error: {e}")
             await msg.edit_text("Outlook generation failed. Please try again.")
