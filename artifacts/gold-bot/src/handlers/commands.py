@@ -10,7 +10,7 @@ from src.utils.formatting import (
     trend_card, levels_card, outlook_card, recommend_card, news_card,
     pro_analysis_card, early_entry_card, no_early_entry_card,
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard
+from src.utils.keyboards import main_menu_keyboard, settings_keyboard, refresh_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,8 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         a = await get_analysis(tf)
 
         # ── Part 1: Full professional market analysis ──────────────────────────
-        await msg.edit_text(pro_analysis_card(a), parse_mode="HTML")
+        await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("recommend", tf))
 
         # ── Part 2: Entry signal for every BUY/SELL, WAIT gets explanation ───────
         if a.action in ("BUY", "SELL"):
@@ -142,7 +143,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return_exceptions=True,
         )
         analyses = [r for r in results if not isinstance(r, Exception)]
-        await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML")
+        await msg.edit_text(
+            multi_timeframe_card(analyses), parse_mode="HTML",
+            reply_markup=refresh_keyboard("analyze", "all"),
+        )
     except Exception as e:
         logger.error(f"analyze error: {e}")
         await msg.edit_text("Analysis failed. Please try again.")
@@ -158,7 +162,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         a = await get_analysis(tf)
         # Send signal card first (always fast)
-        await msg.edit_text(signal_card(a), parse_mode="HTML")
+        await msg.edit_text(signal_card(a), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("signal", tf))
 
         # When there is an actionable signal, attach a live chart automatically
         if a.action in ("BUY", "SELL"):
@@ -194,7 +199,8 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
     try:
         a = await get_analysis(tf)
-        await msg.edit_text(trend_card(a), parse_mode="HTML")
+        await msg.edit_text(trend_card(a), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("trend", tf))
     except Exception as e:
         logger.error(f"trend error: {e}")
         await msg.edit_text("Trend read failed. Please try again.")
@@ -209,7 +215,8 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
     try:
         a = await get_analysis(tf)
-        await msg.edit_text(levels_card(a), parse_mode="HTML")
+        await msg.edit_text(levels_card(a), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("levels", tf))
     except Exception as e:
         logger.error(f"levels error: {e}")
         await msg.edit_text("Level calculation failed. Please try again.")
@@ -224,7 +231,8 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
     try:
         a = await get_analysis(tf)
-        await msg.edit_text(outlook_card(a), parse_mode="HTML")
+        await msg.edit_text(outlook_card(a), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("outlook", tf))
     except Exception as e:
         logger.error(f"outlook error: {e}")
         await msg.edit_text("Outlook generation failed. Please try again.")

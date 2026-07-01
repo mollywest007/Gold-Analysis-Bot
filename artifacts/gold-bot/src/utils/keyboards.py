@@ -1,6 +1,13 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 
+def refresh_keyboard(command: str, tf: str = "all") -> InlineKeyboardMarkup:
+    """Single Refresh button — tapping re-runs the same card in place."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Refresh", callback_data=f"refresh:{command}:{tf}")]
+    ])
+
+
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         ["Recommend", "Analyze"],

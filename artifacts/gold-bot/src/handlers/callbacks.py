@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, Application
@@ -6,9 +7,9 @@ from src.analysis import analyze
 from src.market_hours import market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
-    outlook_card, recommend_card
+    outlook_card, recommend_card, multi_timeframe_card,
 )
-from src.utils.keyboards import settings_keyboard, main_menu_keyboard
+from src.utils.keyboards import settings_keyboard, main_menu_keyboard, refresh_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,82 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Ignore header-only buttons ─────────────────────────────────────────────
     if data in ("settings:tf_header",):
+        return
+
+    # ── Refresh buttons ────────────────────────────────────────────────────────
+    if data.startswith("refresh:"):
+        parts = data.split(":")          # ["refresh", command, tf]
+        command = parts[1] if len(parts) > 1 else ""
+        tf_arg  = parts[2] if len(parts) > 2 else _get_tf(context)
+        tf      = tf_arg if tf_arg != "all" else _get_tf(context)
+
+        await query.answer("Refreshing...")
+
+        if not _is_open():
+            await query.edit_message_text(_closed_text(), parse_mode="HTML")
+            return
+
+        kb = refresh_keyboard(command, tf_arg)
+
+        try:
+            if command == "analyze":
+                await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
+                results = await asyncio.gather(
+                    analyze("M5"), analyze("M15"), analyze("M30"),
+                    analyze("H1"), analyze("H4"), analyze("D1"),
+                    return_exceptions=True,
+                )
+                analyses = [r for r in results if not isinstance(r, Exception)]
+                await query.edit_message_text(
+                    multi_timeframe_card(analyses), parse_mode="HTML", reply_markup=kb
+                )
+
+            elif command == "signal":
+                await query.edit_message_text("Scanning for setup...", reply_markup=kb)
+                a = await analyze(tf)
+                await query.edit_message_text(
+                    signal_card(a), parse_mode="HTML", reply_markup=kb
+                )
+
+            elif command == "trend":
+                await query.edit_message_text("Reading trend...", reply_markup=kb)
+                a = await analyze(tf)
+                await query.edit_message_text(
+                    trend_card(a), parse_mode="HTML", reply_markup=kb
+                )
+
+            elif command == "levels":
+                await query.edit_message_text("Calculating levels...", reply_markup=kb)
+                a = await analyze(tf)
+                await query.edit_message_text(
+                    levels_card(a), parse_mode="HTML", reply_markup=kb
+                )
+
+            elif command == "outlook":
+                await query.edit_message_text("Generating outlook...", reply_markup=kb)
+                a = await analyze(tf)
+                await query.edit_message_text(
+                    outlook_card(a), parse_mode="HTML", reply_markup=kb
+                )
+
+            elif command == "recommend":
+                from src.utils.formatting import recommend_multi_card
+                await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
+                results = await asyncio.gather(
+                    analyze("M5"), analyze("M15"), analyze("M30"),
+                    analyze("H1"), analyze("H4"), analyze("D1"),
+                    return_exceptions=True,
+                )
+                analyses = [r for r in results if not isinstance(r, Exception)]
+                await query.edit_message_text(
+                    recommend_multi_card(analyses), parse_mode="HTML", reply_markup=kb
+                )
+
+        except Exception as e:
+            logger.error(f"refresh:{command} error: {e}")
+            await query.edit_message_text(
+                "Refresh failed — try again in a moment.", reply_markup=kb
+            )
         return
 
     # ── All analysis callbacks — blocked when market is closed ─────────────────
