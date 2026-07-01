@@ -1,6 +1,12 @@
+import html
 import time
 from src.analysis.engine import MarketAnalysis, Indicator
 from src.market_hours import market_status
+
+
+def _esc(s) -> str:
+    """HTML-escape dynamic text before inserting into <pre> blocks."""
+    return html.escape(str(s)) if s else ""
 
 
 def fmt_price(p: float) -> str:
@@ -576,7 +582,7 @@ def recommend_multi_card(analyses: list) -> str:
             continue
         action = a.action if a.action in ("BUY", "SELL") else "WAIT"
         grade  = a.setup_quality or "-"
-        bias   = a.bias[:7] if a.bias else "Neutral"
+        bias   = _esc(a.bias)[:7] if a.bias else "Neutral"
         marker = "  &lt;--" if action in ("BUY", "SELL") else ""
         lines.append(
             f"  {tf:<4}  {action:<6}  {a.confidence}%  {grade:<5} {bias}{marker}"
@@ -598,17 +604,17 @@ def recommend_multi_card(analyses: list) -> str:
         lines += ["", "  ACTIVE SIGNALS", "──────────────────────────────────"]
         for a in active_tfs:
             sl_dist  = abs(a.entry - a.stop_loss)
-            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-            rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
+            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 and a.tp1 else 0
+            rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 and a.tp2 else 0
             lines += [
                 f"  {a.timeframe}  {a.action}  {a.confidence}%  Grade: {a.setup_quality or '-'}",
                 f"  Entry   : {fmt_price(a.entry)}",
                 f"  SL      : {fmt_price(a.stop_loss)}",
-                f"  TP1     : {fmt_price(a.tp1)}  (1:{rr1})",
-                f"  TP2     : {fmt_price(a.tp2)}  (1:{rr2})",
+                f"  TP1     : {fmt_price(a.tp1 or 0)}  (1:{rr1})",
+                f"  TP2     : {fmt_price(a.tp2 or 0)}  (1:{rr2})",
             ]
             if a.verdict_reason:
-                lines.append(f"  Reason  : {a.verdict_reason[:34]}")
+                lines.append(f"  Reason  : {_esc(a.verdict_reason[:34])}")
             lines.append("  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·")
 
     lines += ["", "  Not financial advice.", "</pre>"]

@@ -90,6 +90,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("recommend:"):
         import asyncio as _asyncio
+        import re as _re
         from src.utils.formatting import recommend_multi_card
         await query.edit_message_text("Scanning all timeframes...")
         try:
@@ -99,10 +100,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
-            await query.edit_message_text(recommend_multi_card(analyses), parse_mode="HTML")
+            card = recommend_multi_card(analyses)
+            try:
+                await query.edit_message_text(card, parse_mode="HTML")
+            except Exception as html_err:
+                logger.warning(f"callback recommend HTML error (falling back to plain): {html_err}")
+                plain = _re.sub(r"<[^>]+>", "", card).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+                await query.edit_message_text(plain)
         except Exception as e:
             logger.error(f"callback recommend: {e}")
-            await query.edit_message_text("Recommendation failed. Please try again.")
+            await query.edit_message_text("Scanning failed — please try again in a moment.")
 
     elif data.startswith("analyze:"):
         import asyncio as _asyncio

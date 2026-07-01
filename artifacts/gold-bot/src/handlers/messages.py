@@ -63,6 +63,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if text == "recommend":
         import asyncio as _asyncio
+        import re as _re
         from src.utils.formatting import recommend_multi_card
         msg = await update.message.reply_text("Scanning all timeframes...")
         try:
@@ -72,10 +73,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
-            await msg.edit_text(recommend_multi_card(analyses), parse_mode="HTML")
+            card = recommend_multi_card(analyses)
+            try:
+                await msg.edit_text(card, parse_mode="HTML")
+            except Exception as html_err:
+                logger.warning(f"msg recommend HTML error (falling back to plain): {html_err}")
+                plain = _re.sub(r"<[^>]+>", "", card).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+                await msg.edit_text(plain)
         except Exception as e:
             logger.error(f"msg recommend error: {e}")
-            await msg.edit_text("Recommendation failed. Please try again.")
+            await msg.edit_text("Scanning failed — please try again in a moment.")
 
     elif text == "analyze":
         import asyncio
