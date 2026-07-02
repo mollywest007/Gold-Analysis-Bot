@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 YF_CHART   = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
 GOLDAPI    = "https://api.gold-api.com/price/XAU"
-GOLDPRICE  = "https://data-asg.goldprice.org/dbXRates/USD"
+SWISSQUOTE = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
@@ -86,21 +86,22 @@ async def _fetch_goldapi(session: aiohttp.ClientSession) -> Optional[float]:
     return None
 
 
-async def _fetch_goldprice_org(session: aiohttp.ClientSession) -> Optional[float]:
+async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
     try:
-        import json as _json
-        async with session.get(GOLDPRICE, headers=HEADERS,
+        async with session.get(SWISSQUOTE, headers=HEADERS,
                                timeout=aiohttp.ClientTimeout(total=6)) as r:
             if r.status == 200:
-                text  = await r.text()
-                d     = _json.loads(text)
-                for item in d.get("items", []):
-                    if item.get("curr") == "USD":
-                        p = item.get("xauPrice")
-                        if p and 500 < float(p) < 25000:
-                            return float(p)
+                d = await r.json(content_type=None)
+                if isinstance(d, list) and d:
+                    profiles = d[0].get("spreadProfilePrices", [])
+                    if profiles:
+                        bid = profiles[0].get("bid", 0)
+                        ask = profiles[0].get("ask", 0)
+                        mid = (float(bid) + float(ask)) / 2
+                        if 500 < mid < 25000:
+                            return mid
     except Exception as e:
-        logger.debug(f"goldprice.org: {e}")
+        logger.debug(f"swissquote: {e}")
     return None
 
 
@@ -130,7 +131,7 @@ async def get_gold_price() -> float:
 
     async with aiohttp.ClientSession() as session:
         # Race the two spot sources, fall back to futures
-        tasks = [_fetch_goldapi(session), _fetch_goldprice_org(session)]
+        tasks = [_fetch_goldapi(session), _fetch_swissquote(session)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for res in results:
