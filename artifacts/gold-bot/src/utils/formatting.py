@@ -1039,6 +1039,19 @@ def multi_timeframe_card(analyses: list) -> str:
             ]
         lines.append(WIDE)
 
+    # ── Alert cooldown summary ─────────────────────────────────────────────────
+    try:
+        from src.alerts import get_signal_lock_info
+        alert_rows = []
+        for a in analyses:
+            info = get_signal_lock_info(a.timeframe)
+            if info:
+                alert_rows.append(f"  {a.timeframe:<4} {info}")
+        if alert_rows:
+            lines += ["ALERT STATUS", SEP] + alert_rows + [WIDE]
+    except Exception:
+        pass
+
     lines.append("</pre>")
     return "\n".join(lines)
 
