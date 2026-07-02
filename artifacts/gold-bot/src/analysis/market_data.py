@@ -193,8 +193,21 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         closes  = closes[:min_len]
         volumes = volumes[:min_len] if volumes else [0] * min_len
 
-        # Use spot price for display; historical closes are futures data (fine for TA)
-        effective_spot = (spot_price or 0.0) if (spot_price and spot_price > 0) else closes[-1]
+        # Normalize futures OHLCV to spot prices by subtracting the basis.
+        # Futures trade at a premium (cost of carry). Without this, all
+        # calculated levels (SL, TP, S/R) come out ~$10-15 too high vs spot.
+        futures_last = closes[-1]
+        if spot_price and spot_price > 0 and 0 < (futures_last - spot_price) < 60:
+            basis = futures_last - spot_price
+            opens   = [round(o - basis, 2) for o in opens]
+            highs   = [round(h - basis, 2) for h in highs]
+            lows    = [round(l - basis, 2) for l in lows]
+            closes  = [round(c - basis, 2) for c in closes]
+            logger.info(f"[{timeframe}] Basis-adjusted {basis:+.2f} (futures {futures_last:.2f} → spot {spot_price:.2f})")
+            effective_spot = spot_price
+        else:
+            effective_spot = spot_price if (spot_price and spot_price > 0) else futures_last
+
         data = OHLCVData(opens, highs, lows, closes, volumes, effective_spot)
 
         if aggregate_h4:
@@ -205,7 +218,7 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
 
         logger.info(
             f"Fetched {len(data)} {timeframe} candles | "
-            f"Spot: {data.price:.2f}  Futures close: {closes[-1]:.2f}"
+            f"Spot: {data.price:.2f}  Basis: {futures_last - effective_spot:+.2f}"
         )
         return data
 
