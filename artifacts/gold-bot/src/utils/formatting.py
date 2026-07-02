@@ -209,6 +209,15 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  Votes    : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
         ]
 
+    # ── Alert cooldown status ──────────────────────────────────────────────────
+    try:
+        from src.alerts import get_signal_lock_info
+        lock_info = get_signal_lock_info(a.timeframe)
+        if lock_info:
+            lines += ["──────────────────────────────────", f"  {lock_info}"]
+    except Exception:
+        pass
+
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
 
