@@ -5,9 +5,10 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from telegram import BotCommand
-from telegram.ext import Application, ContextTypes
-from src.config import TELEGRAM_BOT_TOKEN
+from telegram import BotCommand, Update
+from telegram.ext import Application, ContextTypes, TypeHandler
+from telegram.ext import ApplicationHandlerStop
+from src.config import TELEGRAM_BOT_TOKEN, ALLOWED_USERNAME
 from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
@@ -25,6 +26,25 @@ logger = logging.getLogger(__name__)
 
 ALERT_INTERVAL_SECONDS  = 60    # 1 minute — fast alert scanner
 CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
+
+
+async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Block every user who isn't the allowed owner. Runs before all other handlers."""
+    user = update.effective_user
+    if user is None:
+        raise ApplicationHandlerStop
+
+    username = (user.username or "").lower()
+    allowed  = ALLOWED_USERNAME.lstrip("@").lower()
+
+    if username != allowed:
+        logger.warning(f"Blocked unauthorized user: id={user.id} username=@{user.username}")
+        if update.effective_message:
+            await update.effective_message.reply_text("This bot is private.")
+        raise ApplicationHandlerStop
+
+    # Log the owner's numeric ID on first interaction (useful for upgrading to ID-based auth)
+    logger.info(f"Authorized: @{user.username} (id={user.id})")
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -92,6 +112,9 @@ def main() -> None:
         .post_init(_set_commands)
         .build()
     )
+
+    # Access gate — runs before every handler in group -1
+    app.add_handler(TypeHandler(Update, _access_gate), group=-1)
 
     register_command_handlers(app)
     register_callback_handlers(app)

@@ -11,3 +11,7 @@ CONFIDENCE_THRESHOLD = 75
 MIN_RR_RATIO = 2.0
 
 GOLD_SYMBOL = "XAU/USD"
+
+# Access control — only this Telegram username may use the bot.
+# To find your numeric ID (more secure), send /start and check the bot logs.
+ALLOWED_USERNAME = "nailythachad"
