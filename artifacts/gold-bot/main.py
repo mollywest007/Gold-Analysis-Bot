@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from telegram import BotCommand, Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 from telegram.ext import ApplicationHandlerStop
-from src.config import TELEGRAM_BOT_TOKEN, ALLOWED_USERNAME
+from src.config import TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, ALLOWED_USERNAME
 from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
@@ -29,21 +29,30 @@ CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Block every user who isn't the allowed owner. Runs before all other handlers."""
+    """Block every user who isn't the allowed owner. Runs before all other handlers.
+
+    Auth priority:
+      1. Numeric user ID (ALLOWED_USER_ID secret) — immutable, preferred.
+      2. Username fallback (ALLOWED_USERNAME) — only when no ID is configured.
+    """
     user = update.effective_user
     if user is None:
         raise ApplicationHandlerStop
 
-    username = (user.username or "").lower()
-    allowed  = ALLOWED_USERNAME.lstrip("@").lower()
+    if ALLOWED_USER_ID:
+        # Secure path: compare immutable numeric ID
+        authorized = user.id == ALLOWED_USER_ID
+    else:
+        # Fallback: username comparison (set ALLOWED_USER_ID to upgrade)
+        authorized = (user.username or "").lower() == ALLOWED_USERNAME.lstrip("@").lower()
 
-    if username != allowed:
+    if not authorized:
         logger.warning(f"Blocked unauthorized user: id={user.id} username=@{user.username}")
         if update.effective_message:
             await update.effective_message.reply_text("This bot is private.")
         raise ApplicationHandlerStop
 
-    # Log the owner's numeric ID on first interaction (useful for upgrading to ID-based auth)
+    # Log the owner's numeric ID — copy this to the ALLOWED_USER_ID secret for secure auth
     logger.info(f"Authorized: @{user.username} (id={user.id})")
 
 
@@ -94,6 +103,11 @@ BOT_COMMANDS = [
 ]
 
 
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log unhandled exceptions from handlers and jobs so they are never silently swallowed."""
+    logger.error("Unhandled exception in bot handler/job", exc_info=context.error)
+
+
 async def _set_commands(app: Application) -> None:
     await app.bot.set_my_commands(BOT_COMMANDS)
     logger.info("Bot commands registered with Telegram.")
@@ -112,6 +126,9 @@ def main() -> None:
         .post_init(_set_commands)
         .build()
     )
+
+    # Global error handler — logs all uncaught exceptions from handlers/jobs
+    app.add_error_handler(_error_handler)
 
     # Access gate — runs before every handler in group -1
     app.add_handler(TypeHandler(Update, _access_gate), group=-1)

@@ -52,11 +52,18 @@ Users message the bot on Telegram and receive:
 - Mobile-first, minimal, premium trading-terminal appearance
 - Clean monospace card layout with separator lines
 
+## Access control
+
+The bot is private — only the owner can use it. Auth priority:
+
+1. **Numeric user ID (preferred):** Set `ALLOWED_USER_ID` in Replit Secrets. Your numeric ID appears in the bot logs after your first `/start` — look for `Authorized: @username (id=XXXXXXX)`. Numeric IDs are immutable and can't be reclaimed.
+2. **Username fallback:** `ALLOWED_USERNAME` env var (defaults to the config value). Only active when `ALLOWED_USER_ID` is not set. Less secure — Telegram usernames are mutable.
+
 ## Gotchas
 
 - Restart the `Gold Analysis Bot` workflow after any code change in `artifacts/gold-bot/`
 - The bot uses long-polling (not webhook) — only one instance should run at a time
-- `TELEGRAM_BOT_TOKEN` must be set in Replit Secrets before starting the workflow
+- `TELEGRAM_BOT_TOKEN` and `GOOGLE_AI_KEY` must be set in Replit Secrets before starting the workflow
 
 ## Pointers
 
