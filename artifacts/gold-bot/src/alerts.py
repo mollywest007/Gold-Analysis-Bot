@@ -25,7 +25,7 @@ _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
 
-SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"]  # all timeframes
+SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4"]  # D1 removed — conflicts too often
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -39,7 +39,7 @@ CONFLUENCE_MIN_TFS = 3
 
 # Higher timeframes used to determine the master trend bias.
 # Lower-TF signals that disagree with this bias are suppressed.
-HTF_ANCHOR = ["D1", "H4"]   # checked in priority order
+HTF_ANCHOR = ["H4"]   # H4 is the sole trend anchor
 
 # File that persists signal state across bot restarts
 SIGNAL_STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "signal_state.json")
@@ -347,7 +347,7 @@ async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: st
     from src.utils.formatting import confluence_alert_card
 
     # Reference TF priority for the trade plan (most reliable intraday TF first)
-    tf_priority = ["H4", "H1", "M30", "D1", "M15", "M5"]
+    tf_priority = ["H4", "H1", "M30", "M15", "M5"]
     tfs_present = {tf for tf, _ in signal_list}
     ref_tf = next((tf for tf in tf_priority if tf in tfs_present), signal_list[0][0])
     ref_a  = next(a for tf, a in signal_list if tf == ref_tf)
@@ -535,8 +535,8 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # ── Pass 2 — Higher-timeframe bias filter ─────────────────────────────────
-    # D1 and H4 define the master trend direction. Only signals that align with
-    # that direction are sent. If D1 and H4 disagree with each other, everything
+    # H4 defines the master trend direction. Only signals that align with
+    # that direction are sent. If H4 is neutral, everything
     # is suppressed — conflicting signals mean no trade.
     htf_bias = _determine_htf_bias(analyses, SCAN_TIMEFRAMES)
 
@@ -544,13 +544,10 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         # Log which direction each HTF is pointing so this is diagnosable
         tf_map = {tf: a for tf, a in zip(SCAN_TIMEFRAMES, analyses)
                   if a is not None and not isinstance(a, Exception)}
-        d1_dir = tf_map.get("D1")
         h4_dir = tf_map.get("H4")
-        d1_str = d1_dir.action if d1_dir else "N/A"
         h4_str = h4_dir.action if h4_dir else "N/A"
         logger.info(
-            f"Alerts suppressed — higher timeframes show no clear direction "
-            f"(D1={d1_str}, H4={h4_str}). Waiting for alignment."
+            f"Alerts suppressed — H4 shows no clear direction (H4={h4_str}). Waiting for trend."
         )
         return
 
@@ -560,8 +557,8 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     for tf, a in suppressed:
         logger.info(
-            f"[{tf}] {a.action} signal suppressed — conflicts with HTF bias ({htf_bias}). "
-            f"D1/H4 say {htf_bias}; lower TF cannot override."
+            f"[{tf}] {a.action} signal suppressed — conflicts with H4 bias ({htf_bias}). "
+            f"H4 says {htf_bias}; lower TF cannot override."
         )
 
     if not filtered:
@@ -596,16 +593,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _determine_htf_bias(analyses: list, timeframes: list) -> str:
     """
-    Determine the master trend direction from D1 and H4.
+    Determine the master trend direction from H4 alone.
 
-    Rules (D1 > H4 in priority):
-      - D1 BUY  + H4 BUY   → BUY
-      - D1 SELL + H4 SELL  → SELL
-      - D1 BUY  + H4 SELL  → WAIT  (conflict — suppress all)
-      - D1 SELL + H4 BUY   → WAIT  (conflict — suppress all)
-      - D1 BUY/SELL + H4 WAIT → follow D1
-      - D1 WAIT + H4 BUY/SELL → follow H4
-      - both WAIT           → WAIT  (no directional read)
+    Rules:
+      - H4 BUY  → BUY  (only send BUY signals on lower TFs)
+      - H4 SELL → SELL (only send SELL signals on lower TFs)
+      - H4 WAIT → WAIT (no clear trend, suppress all)
+      - H4 WAIT → WAIT (no directional read)
 
     Returns 'BUY', 'SELL', or 'WAIT'.
     """
@@ -613,19 +607,8 @@ def _determine_htf_bias(analyses: list, timeframes: list) -> str:
         tf: a for tf, a in zip(timeframes, analyses)
         if a is not None and not isinstance(a, Exception)
     }
-    d1_action = tf_map["D1"].action if "D1" in tf_map else "WAIT"
     h4_action = tf_map["H4"].action if "H4" in tf_map else "WAIT"
-
-    d1_dir = d1_action if d1_action in ("BUY", "SELL") else None
-    h4_dir = h4_action if h4_action in ("BUY", "SELL") else None
-
-    if d1_dir and h4_dir:
-        return d1_dir if d1_dir == h4_dir else "WAIT"   # conflict → suppress
-    if d1_dir:
-        return d1_dir
-    if h4_dir:
-        return h4_dir
-    return "WAIT"
+    return h4_action if h4_action in ("BUY", "SELL") else "WAIT"
 
 
 async def _safe_analyze(tf: str):
