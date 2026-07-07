@@ -534,37 +534,10 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not new_signals:
         return
 
-    # ── Pass 2 — Higher-timeframe bias filter ─────────────────────────────────
-    # H4 defines the master trend direction. Only signals that align with
-    # that direction are sent. If H4 is neutral, everything
-    # is suppressed — conflicting signals mean no trade.
-    htf_bias = _determine_htf_bias(analyses, SCAN_TIMEFRAMES)
-
-    if htf_bias == "WAIT":
-        # Log which direction each HTF is pointing so this is diagnosable
-        tf_map = {tf: a for tf, a in zip(SCAN_TIMEFRAMES, analyses)
-                  if a is not None and not isinstance(a, Exception)}
-        h4_dir = tf_map.get("H4")
-        h4_str = h4_dir.action if h4_dir else "N/A"
-        logger.info(
-            f"Alerts suppressed — H4 shows no clear direction (H4={h4_str}). Waiting for trend."
-        )
-        return
-
-    # Drop any new signals that go against the master bias
-    filtered   = [(tf, a) for tf, a in new_signals if a.action == htf_bias]
-    suppressed = [(tf, a) for tf, a in new_signals if a.action != htf_bias]
-
-    for tf, a in suppressed:
-        logger.info(
-            f"[{tf}] {a.action} signal suppressed — conflicts with H4 bias ({htf_bias}). "
-            f"H4 says {htf_bias}; lower TF cannot override."
-        )
-
-    if not filtered:
-        return
-
-    # Pass 3 — confluence check: group aligned signals into one alert
+    # ── Pass 2 — fire each timeframe independently, no HTF gate ──────────────
+    # Each TF sends its own alert when it has a new signal. No direction filter.
+    # Anti-spam is handled by _should_send() above: same direction on same TF
+    # is suppressed until the trade closes or reverses.
     async def _process(sig_list: list, direction: str) -> None:
         """Fire alert (confluence or individual) and record state + open trades."""
         if len(sig_list) >= CONFLUENCE_MIN_TFS:
@@ -588,7 +561,14 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.error(f"Trade open failed ({tf}): {e}")
         _save_signal_state()
 
-    await _process(filtered, htf_bias)
+    # Group by direction so confluence alerts bundle same-direction TFs together
+    buys  = [(tf, a) for tf, a in new_signals if a.action == "BUY"]
+    sells = [(tf, a) for tf, a in new_signals if a.action == "SELL"]
+
+    if buys:
+        await _process(buys, "BUY")
+    if sells:
+        await _process(sells, "SELL")
 
 
 def _determine_htf_bias(analyses: list, timeframes: list) -> str:

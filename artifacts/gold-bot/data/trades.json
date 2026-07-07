@@ -330,6 +330,23 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1783430966",
+      "direction": "BUY",
+      "entry": 4168.7,
+      "sl": 4128.78,
+      "tp1": 4248.54,
+      "tp2": 4308.42,
+      "tp3": null,
+      "timeframe": "H1",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1783430966.1764596,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
