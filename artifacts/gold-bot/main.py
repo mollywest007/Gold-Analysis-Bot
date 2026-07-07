@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from telegram import BotCommand, Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 from telegram.ext import ApplicationHandlerStop
-from src.config import TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, ALLOWED_USERNAME
+from src.config import TELEGRAM_BOT_TOKEN
 from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
@@ -29,31 +29,11 @@ CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Block every user who isn't the allowed owner. Runs before all other handlers.
-
-    Auth priority:
-      1. Numeric user ID (ALLOWED_USER_ID secret) — immutable, preferred.
-      2. Username fallback (ALLOWED_USERNAME) — only when no ID is configured.
-    """
+    """Log all incoming users — no access restrictions."""
     user = update.effective_user
     if user is None:
         raise ApplicationHandlerStop
-
-    if ALLOWED_USER_ID:
-        # Secure path: compare immutable numeric ID
-        authorized = user.id == ALLOWED_USER_ID
-    else:
-        # Fallback: username comparison (set ALLOWED_USER_ID to upgrade)
-        authorized = (user.username or "").lower() == ALLOWED_USERNAME.lstrip("@").lower()
-
-    if not authorized:
-        logger.warning(f"Blocked unauthorized user: id={user.id} username=@{user.username}")
-        if update.effective_message:
-            await update.effective_message.reply_text("This bot is private.")
-        raise ApplicationHandlerStop
-
-    # Log the owner's numeric ID — copy this to the ALLOWED_USER_ID secret for secure auth
-    logger.info(f"Authorized: @{user.username} (id={user.id})")
+    logger.info(f"User: @{user.username} (id={user.id})")
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
