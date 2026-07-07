@@ -27,15 +27,11 @@ _tf_last_fired: Dict[str, float] = {}
 
 SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"]  # all timeframes
 
-# ── Per-timeframe cooldown — minimum gap between alerts on the same TF ────────
-TF_SIGNAL_COOLDOWNS: Dict[str, int] = {
-    "M5":  20 * 60,       # 20 min
-    "M15": 30 * 60,       # 30 min
-    "M30": 60 * 60,       # 1 hour
-    "H1":  90 * 60,       # 1.5 hours
-    "H4":  4 * 60 * 60,   # 4 hours
-    "D1":  8 * 60 * 60,   # 8 hours
-}
+# Time-based cooldowns removed — alerts fire on every genuine direction change.
+# A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
+# and then came back (WAIT→SELL), or is firing for the first time.
+# This means no missed entries due to arbitrary timers.
+TF_SIGNAL_COOLDOWNS: Dict[str, int] = {}
 
 # Confluence alert — fires ONE grouped card when this many TFs agree.
 # Below this threshold each TF fires its own individual card.
@@ -104,24 +100,14 @@ def _save_signal_state() -> None:
 
 def _should_send(tf: str, action: str) -> bool:
     """
-    Fire alert only when:
-      (a) direction is new for this TF, OR
-      (b) same direction but the per-TF cooldown has expired.
-    This prevents spam on short TFs (M5 fires every 5 min) and on restarts.
+    Fire alert whenever the direction is new for this TF.
+    Same direction = same trade still open, no re-alert until it resets.
+    Resets happen when: signal flips to WAIT/opposite, or trade closes.
     """
-    prev       = _active_signal.get(tf)
-    last_fired = _tf_last_fired.get(tf, 0.0)
-    cooldown   = TF_SIGNAL_COOLDOWNS.get(tf, 4 * 60 * 60)
-    elapsed    = time.time() - last_fired
-
-    if prev == action and elapsed < cooldown:
-        logger.info(
-            f"[{tf}] Suppressed — same direction, "
-            f"{int(elapsed // 60)}m / {int(cooldown // 60)}m cooldown."
-        )
-        return False
+    prev = _active_signal.get(tf)
     if prev == action:
-        logger.info(f"[{tf}] Cooldown expired ({int(elapsed // 60)}m) — re-firing {action}.")
+        logger.info(f"[{tf}] Suppressed — {action} already active on this TF (same trade).")
+        return False
     return True
 
 
@@ -134,19 +120,13 @@ def clear_signal_lock(tf: str) -> None:
 
 
 def get_signal_lock_info(tf: str) -> str:
-    """Return a human-readable cooldown status for a timeframe, or '' if no lock."""
+    """Return a human-readable lock status for a timeframe, or '' if no lock."""
     direction = _active_signal.get(tf)
     if not direction:
         return ""
     last_fired = _tf_last_fired.get(tf, 0.0)
-    cooldown   = TF_SIGNAL_COOLDOWNS.get(tf, 4 * 60 * 60)
-    elapsed    = time.time() - last_fired
-    remaining  = cooldown - elapsed
-    if remaining <= 0:
-        return f"Last alert: {int(elapsed // 60)}m ago ({direction}) — ready to re-fire"
-    sent_ago   = int(elapsed // 60)
-    next_in    = int(remaining // 60) + 1
-    return f"Alert sent {sent_ago}m ago ({direction}) — next in ~{next_in}m"
+    elapsed    = int((time.time() - last_fired) // 60)
+    return f"Alert sent {elapsed}m ago ({direction}) — waiting for signal to reset"
 
 
 async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
