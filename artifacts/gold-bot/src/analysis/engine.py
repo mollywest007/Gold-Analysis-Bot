@@ -469,6 +469,14 @@ def detect_candlestick(opens: List[float], highs: List[float],
     return "None", 0.0
 
 
+def _score_candle(pattern: str, candle_weight: float) -> Tuple[str, float]:
+    """Score a candlestick pattern as a full indicator vote (not just a bonus)."""
+    sig = candle_signal(pattern)
+    if sig == "NEUTRAL" or candle_weight < 0.65:
+        return "NEUTRAL", 0.0
+    return sig, min(candle_weight, 0.95)
+
+
 def candle_signal(pattern: str) -> str:
     bullish = {
         "Bullish Engulfing", "Hammer", "Inverted Hammer", "Morning Star",
@@ -757,6 +765,13 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     session_label, session_mult = get_trading_session()
     vol_spike = is_volume_spike(volumes, lookback=20, threshold=1.5)
 
+    # ── Pro-grade signal detection (ICT / SMC concepts) ───────────────────────
+    rsi_div                     = detect_rsi_divergence(closes, lookback=20)
+    div_sig, div_conf           = _score_divergence(rsi_div)
+    candle_sig_v, candle_conf_v = _score_candle(candle_pat, candle_wt)
+    fvg_dir, fvg_top, fvg_bot   = detect_fair_value_gap(highs, lows, closes, lookback=30)
+    liq_sweep                   = detect_liquidity_sweep(highs, lows, closes, lookback=15)
+
     logger.info(
         f"[{timeframe}] Price={price:.2f} RSI={rsi} MACD={macd_line:.3f}/{sig_line:.3f} "
         f"EMA20={ema20:.2f} EMA50={ema50:.2f} Stoch={stoch_k:.1f}/{stoch_d:.1f} "
@@ -794,14 +809,20 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             if bb_sig == "NEUTRAL" and 55 <= bb_pct <= 95:
                 bb_sig, bb_conf = "BUY", 0.55
 
-    # ── No adx_mult weighting — ADX is used as a hard gate below ──────────────
+    # ── Indicators — 7 votes (candle + divergence are now full participants) ────
+    # Weights adjusted so all 7 sum to 1.0 when candle + divergence both vote.
+    # Candle and divergence are often NEUTRAL, so effective weight pool is dynamic.
     indicators = [
-        Indicator("RSI(14)",   rsi,       rsi_sig,   0.20),
-        Indicator("MACD",      macd_line, macd_sig,  0.22),
-        Indicator("EMA Stack", ema20,     ema_sig,   0.28),
-        Indicator("Stoch(14)", stoch_k,   stoch_sig, 0.18),
-        Indicator("BB %B",     bb_pct,    bb_sig,    0.12),
+        Indicator("RSI(14)",     rsi,       rsi_sig,      0.18),
+        Indicator("MACD",        macd_line, macd_sig,     0.20),
+        Indicator("EMA Stack",   ema20,     ema_sig,      0.24),
+        Indicator("Stoch(14)",   stoch_k,   stoch_sig,    0.16),
+        Indicator("BB %B",       bb_pct,    bb_sig,       0.10),
+        Indicator("Candle",      candle_wt, candle_sig_v, 0.12),  # full vote, not just a bonus
     ]
+    # RSI divergence — add as 7th indicator when a divergence is detected
+    if div_sig != "NEUTRAL":
+        indicators.append(Indicator("RSI Div", 0.0, div_sig, 0.08))
 
     conf_map = {
         "RSI(14)":   rsi_conf,
@@ -809,6 +830,8 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         "EMA Stack": ema_conf,
         "Stoch(14)": stoch_conf,
         "BB %B":     bb_conf,
+        "Candle":    candle_conf_v,
+        "RSI Div":   div_conf,
     }
 
     buy_votes  = sum(1 for i in indicators if i.signal == "BUY")
@@ -817,12 +840,6 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     buy_score  = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "BUY")
     sell_score = sum(i.weight * conf_map[i.name] for i in indicators if i.signal == "SELL")
-
-    # Candlestick bonus — meaningful weight only for strong confirmed patterns
-    if c_signal == "BUY"  and candle_wt >= 0.75:
-        buy_score  += 0.10 * candle_wt
-    elif c_signal == "SELL" and candle_wt >= 0.75:
-        sell_score += 0.10 * candle_wt
 
     # Volume spike bonus — confirms the move has real participation
     if vol_spike:
@@ -885,6 +902,26 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             htf_reason = f"Counter-trend: {htf} Slightly Bullish"
         elif (direction == "BUY" and htf_bullish) or (direction == "SELL" and htf_bearish):
             confidence = min(97, confidence + 8)   # reward alignment
+
+    # ── Order block detection — now we know direction ─────────────────────────
+    ob_at, ob_high, ob_low = (False, 0.0, 0.0)
+    if direction in ("BUY", "SELL"):
+        ob_at, ob_high, ob_low = detect_order_block(
+            opens, highs, lows, closes, direction, atr, lookback=40
+        )
+        if ob_at:
+            confidence = min(97, confidence + 5)   # OB adds certainty to the setup
+
+    # FVG in same direction = high-probability reaction zone
+    if direction in ("BUY", "SELL"):
+        fvg_aligned = (fvg_dir == "BULLISH" and direction == "BUY") or \
+                      (fvg_dir == "BEARISH" and direction == "SELL")
+        if fvg_aligned:
+            confidence = min(97, confidence + 4)
+
+    # Liquidity sweep in same direction = stop hunt confirmed, real move incoming
+    sweep_aligned = (liq_sweep == "BULLISH_SWEEP" and direction == "BUY") or \
+                    (liq_sweep == "BEARISH_SWEEP" and direction == "SELL")
 
     strength_score = max(buy_votes, sell_votes) / len(indicators)
     if strength_score >= 0.75 or adx >= 30:
@@ -1089,14 +1126,37 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             confluence_list.append("Breakout above recent swing high")
         if reversal:
             confluence_list.append("Divergence reversal signal")
+        # ── ICT / SMC signals ──────────────────────────────────────────────────
+        if ob_at:
+            zone = f"{ob_low:,.2f}–{ob_high:,.2f}"
+            tag  = "Bullish" if direction == "BUY" else "Bearish"
+            confluence_list.append(f"Order Block ({tag}) @ {zone}")
+        fvg_aligned = (fvg_dir == "BULLISH" and direction == "BUY") or \
+                      (fvg_dir == "BEARISH" and direction == "SELL")
+        if fvg_aligned:
+            tag = "Bullish" if direction == "BUY" else "Bearish"
+            confluence_list.append(f"Fair Value Gap ({tag}) {fvg_bot:,.2f}–{fvg_top:,.2f}")
+        if sweep_aligned:
+            tag = "Bullish" if direction == "BUY" else "Bearish"
+            confluence_list.append(f"Liquidity Sweep ({tag}) — stop hunt cleared")
+        if rsi_div == "BULLISH_DIV" and direction == "BUY":
+            confluence_list.append("RSI Bullish Divergence — hidden strength")
+        elif rsi_div == "BEARISH_DIV" and direction == "SELL":
+            confluence_list.append("RSI Bearish Divergence — fading momentum")
 
     # Win probability — starts at confidence, boosted by confluence depth
     raw_wp = confidence
-    raw_wp += min(len(confluence_list) * 2, 10)   # up to +10 for deep confluence
+    raw_wp += min(len(confluence_list) * 2, 12)   # up to +12 for deep confluence
     if session_label == "London/NY Overlap": raw_wp += 3
     if adx >= 30: raw_wp += 3
     if adx >= 40: raw_wp += 2
-    win_probability = max(50, min(92, raw_wp)) if action in ("BUY", "SELL") else 0
+    if ob_at:          raw_wp += 3   # order block = institutional price level
+    if sweep_aligned:  raw_wp += 3   # stop hunt cleared = high-prob reversal
+    if fvg_dir != "NONE" and ((fvg_dir == "BULLISH" and action == "BUY") or
+                               (fvg_dir == "BEARISH" and action == "SELL")):
+        raw_wp += 2   # fair value gap = imbalance magnet
+    if rsi_div != "NONE": raw_wp += 2   # divergence = momentum confirmation
+    win_probability = max(50, min(95, raw_wp)) if action in ("BUY", "SELL") else 0
 
     # ── Fibonacci retracement & early entry ──────────────────────────────────
     eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
@@ -1229,6 +1289,144 @@ def detect_market_structure(highs: List[float], lows: List[float], lookback: int
         if lh and ll:   return "LH_LL"
         if hh or hl or lh or ll: return "TRANSITION"
     return "RANGING"
+
+
+def detect_rsi_divergence(closes: List[float], lookback: int = 20) -> str:
+    """
+    Classic RSI divergence over the recent lookback bars.
+
+    Bearish: price makes a higher high while RSI makes a lower high → momentum fading on rally
+    Bullish: price makes a lower low while RSI makes a higher low  → hidden strength on dip
+
+    Returns 'BULLISH_DIV', 'BEARISH_DIV', or 'NONE'.
+    """
+    if len(closes) < lookback + 16:
+        return "NONE"
+    rsi_now  = compute_rsi(closes,            14)
+    rsi_prev = compute_rsi(closes[:-lookback], 14)
+    price_now  = closes[-1]
+    price_prev = closes[-lookback]
+    if price_now > price_prev and rsi_now < rsi_prev - 3 and rsi_now > 45:
+        return "BEARISH_DIV"
+    if price_now < price_prev and rsi_now > rsi_prev + 3 and rsi_now < 55:
+        return "BULLISH_DIV"
+    return "NONE"
+
+
+def _score_divergence(div: str) -> Tuple[str, float]:
+    """Convert divergence signal to indicator vote."""
+    if div == "BULLISH_DIV":
+        return "BUY",  0.80
+    if div == "BEARISH_DIV":
+        return "SELL", 0.80
+    return "NEUTRAL", 0.0
+
+
+def detect_order_block(
+    opens: List[float], highs: List[float], lows: List[float],
+    closes: List[float], direction: str, atr: float, lookback: int = 40
+) -> Tuple[bool, float, float]:
+    """
+    Detect whether price is currently at an institutional order block.
+
+    Bullish OB: last bearish candle before 3+ consecutive bullish impulse candles.
+                Price returning to this zone = smart-money re-accumulation.
+    Bearish OB: last bullish candle before 3+ consecutive bearish impulse candles.
+                Price returning to this zone = distribution / institutional selling.
+
+    Returns (at_ob, ob_high, ob_low). at_ob is True when current price is
+    within or very close (±0.15 ATR) of the OB zone.
+    """
+    n = len(closes)
+    if n < 8:
+        return False, 0.0, 0.0
+    price  = closes[-1]
+    window = min(lookback, n - 5)
+
+    if direction == "BUY":
+        for i in range(n - window, n - 4):
+            if closes[i] < opens[i]:  # bearish OB candle
+                if all(closes[i+j] > opens[i+j] for j in range(1, 4)):
+                    ob_high, ob_low = highs[i], lows[i]
+                    if ob_low - atr * 0.15 <= price <= ob_high + atr * 0.10:
+                        return True, ob_high, ob_low
+
+    elif direction == "SELL":
+        for i in range(n - window, n - 4):
+            if closes[i] > opens[i]:  # bullish OB candle
+                if all(closes[i+j] < opens[i+j] for j in range(1, 4)):
+                    ob_high, ob_low = highs[i], lows[i]
+                    if ob_low - atr * 0.10 <= price <= ob_high + atr * 0.15:
+                        return True, ob_high, ob_low
+
+    return False, 0.0, 0.0
+
+
+def detect_fair_value_gap(
+    highs: List[float], lows: List[float], closes: List[float], lookback: int = 30
+) -> Tuple[str, float, float]:
+    """
+    Fair Value Gap (FVG / price imbalance): a 3-candle pattern where a gap exists
+    between candle[i-2] and candle[i] that price has not yet filled.
+
+    Bullish FVG: candle[i].low > candle[i-2].high → unfilled area below current price.
+    Bearish FVG: candle[i].high < candle[i-2].low → unfilled area above current price.
+
+    When price trades back into an FVG it is a high-probability reaction zone used
+    by institutional traders. Returns (direction, fvg_top, fvg_bottom) or ('NONE',0,0).
+    """
+    n = len(closes)
+    price  = closes[-1]
+    window = min(lookback, n - 2)
+
+    for i in range(n - 1, n - window, -1):
+        if i < 2:
+            break
+        # Bullish FVG
+        if lows[i] > highs[i - 2]:
+            fvg_bot, fvg_top = highs[i - 2], lows[i]
+            if fvg_bot <= price <= fvg_top:
+                return "BULLISH", fvg_top, fvg_bot
+        # Bearish FVG
+        if highs[i] < lows[i - 2]:
+            fvg_top, fvg_bot = lows[i - 2], highs[i]
+            if fvg_bot <= price <= fvg_top:
+                return "BEARISH", fvg_top, fvg_bot
+
+    return "NONE", 0.0, 0.0
+
+
+def detect_liquidity_sweep(
+    highs: List[float], lows: List[float], closes: List[float], lookback: int = 15
+) -> str:
+    """
+    Liquidity sweep (stop hunt): price wicks through a prior swing high/low then
+    closes back on the opposite side, trapping retail traders and reversing.
+
+    Bearish sweep: wick above recent swing high, close back below → buyers trapped.
+    Bullish sweep: wick below recent swing low, close back above → sellers trapped.
+
+    Very common in XAU/USD as institutions clear retail stop clusters before the
+    real move begins. Returns 'BEARISH_SWEEP', 'BULLISH_SWEEP', or 'NONE'.
+    """
+    n = len(closes)
+    if n < lookback + 3:
+        return "NONE"
+    ref_end   = n - 3
+    ref_start = max(0, ref_end - lookback)
+    ref_highs = highs[ref_start:ref_end]
+    ref_lows  = lows[ref_start:ref_end]
+    if not ref_highs:
+        return "NONE"
+    swing_high = max(ref_highs)
+    swing_low  = min(ref_lows)
+
+    for i in [-3, -2, -1]:
+        if highs[i] > swing_high and closes[i] < swing_high:
+            return "BEARISH_SWEEP"
+        if lows[i] < swing_low and closes[i] > swing_low:
+            return "BULLISH_SWEEP"
+    return "NONE"
 
 
 def detect_breakout(closes: List[float], highs: List[float], period: int = 20) -> bool:
