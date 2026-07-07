@@ -39,7 +39,11 @@ TF_SIGNAL_COOLDOWNS: Dict[str, int] = {
 
 # Confluence alert — fires ONE grouped card when this many TFs agree.
 # Below this threshold each TF fires its own individual card.
-CONFLUENCE_MIN_TFS = 4
+CONFLUENCE_MIN_TFS = 3
+
+# Higher timeframes used to determine the master trend bias.
+# Lower-TF signals that disagree with this bias are suppressed.
+HTF_ANCHOR = ["D1", "H4"]   # checked in priority order
 
 # File that persists signal state across bot restarts
 SIGNAL_STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "signal_state.json")
@@ -550,10 +554,40 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not new_signals:
         return
 
-    # Pass 2 — confluence check: group same-direction signals into one alert
-    buy_new  = [(tf, a) for tf, a in new_signals if a.action == "BUY"]
-    sell_new = [(tf, a) for tf, a in new_signals if a.action == "SELL"]
+    # ── Pass 2 — Higher-timeframe bias filter ─────────────────────────────────
+    # D1 and H4 define the master trend direction. Only signals that align with
+    # that direction are sent. If D1 and H4 disagree with each other, everything
+    # is suppressed — conflicting signals mean no trade.
+    htf_bias = _determine_htf_bias(analyses, SCAN_TIMEFRAMES)
 
+    if htf_bias == "WAIT":
+        # Log which direction each HTF is pointing so this is diagnosable
+        tf_map = {tf: a for tf, a in zip(SCAN_TIMEFRAMES, analyses)
+                  if a is not None and not isinstance(a, Exception)}
+        d1_dir = tf_map.get("D1")
+        h4_dir = tf_map.get("H4")
+        d1_str = d1_dir.action if d1_dir else "N/A"
+        h4_str = h4_dir.action if h4_dir else "N/A"
+        logger.info(
+            f"Alerts suppressed — higher timeframes show no clear direction "
+            f"(D1={d1_str}, H4={h4_str}). Waiting for alignment."
+        )
+        return
+
+    # Drop any new signals that go against the master bias
+    filtered   = [(tf, a) for tf, a in new_signals if a.action == htf_bias]
+    suppressed = [(tf, a) for tf, a in new_signals if a.action != htf_bias]
+
+    for tf, a in suppressed:
+        logger.info(
+            f"[{tf}] {a.action} signal suppressed — conflicts with HTF bias ({htf_bias}). "
+            f"D1/H4 say {htf_bias}; lower TF cannot override."
+        )
+
+    if not filtered:
+        return
+
+    # Pass 3 — confluence check: group aligned signals into one alert
     async def _process(sig_list: list, direction: str) -> None:
         """Fire alert (confluence or individual) and record state + open trades."""
         if len(sig_list) >= CONFLUENCE_MIN_TFS:
@@ -577,10 +611,41 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.error(f"Trade open failed ({tf}): {e}")
         _save_signal_state()
 
-    if buy_new:
-        await _process(buy_new, "BUY")
-    if sell_new:
-        await _process(sell_new, "SELL")
+    await _process(filtered, htf_bias)
+
+
+def _determine_htf_bias(analyses: list, timeframes: list) -> str:
+    """
+    Determine the master trend direction from D1 and H4.
+
+    Rules (D1 > H4 in priority):
+      - D1 BUY  + H4 BUY   → BUY
+      - D1 SELL + H4 SELL  → SELL
+      - D1 BUY  + H4 SELL  → WAIT  (conflict — suppress all)
+      - D1 SELL + H4 BUY   → WAIT  (conflict — suppress all)
+      - D1 BUY/SELL + H4 WAIT → follow D1
+      - D1 WAIT + H4 BUY/SELL → follow H4
+      - both WAIT           → WAIT  (no directional read)
+
+    Returns 'BUY', 'SELL', or 'WAIT'.
+    """
+    tf_map = {
+        tf: a for tf, a in zip(timeframes, analyses)
+        if a is not None and not isinstance(a, Exception)
+    }
+    d1_action = tf_map["D1"].action if "D1" in tf_map else "WAIT"
+    h4_action = tf_map["H4"].action if "H4" in tf_map else "WAIT"
+
+    d1_dir = d1_action if d1_action in ("BUY", "SELL") else None
+    h4_dir = h4_action if h4_action in ("BUY", "SELL") else None
+
+    if d1_dir and h4_dir:
+        return d1_dir if d1_dir == h4_dir else "WAIT"   # conflict → suppress
+    if d1_dir:
+        return d1_dir
+    if h4_dir:
+        return h4_dir
+    return "WAIT"
 
 
 async def _safe_analyze(tf: str):
