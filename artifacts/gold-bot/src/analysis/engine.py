@@ -809,18 +809,24 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             if bb_sig == "NEUTRAL" and 55 <= bb_pct <= 95:
                 bb_sig, bb_conf = "BUY", 0.55
 
-    # ── Indicators — 7 votes (candle + divergence are now full participants) ────
-    # Weights adjusted so all 7 sum to 1.0 when candle + divergence both vote.
-    # Candle and divergence are often NEUTRAL, so effective weight pool is dynamic.
+    # ── Indicators — 5 independent core votes ──────────────────────────────────
+    # RSI, Stoch, and BB are all oscillators measuring the same price extension.
+    # Replaced Stoch with ADX DI (+DI vs -DI) — a genuinely independent signal
+    # measuring directional strength, not correlated with RSI/BB at all.
+    adx_di_sig  = "BUY"  if (plus_di  > minus_di and adx >= 20) else \
+                  "SELL" if (minus_di > plus_di  and adx >= 20) else "NEUTRAL"
+    adx_di_conf = min(0.90, adx / 100.0)
+
     indicators = [
-        Indicator("RSI(14)",     rsi,       rsi_sig,      0.18),
-        Indicator("MACD",        macd_line, macd_sig,     0.20),
-        Indicator("EMA Stack",   ema20,     ema_sig,      0.24),
-        Indicator("Stoch(14)",   stoch_k,   stoch_sig,    0.16),
-        Indicator("BB %B",       bb_pct,    bb_sig,       0.10),
-        Indicator("Candle",      candle_wt, candle_sig_v, 0.12),  # full vote, not just a bonus
+        Indicator("RSI(14)",   rsi,       rsi_sig,      0.20),
+        Indicator("MACD",      macd_line, macd_sig,     0.22),
+        Indicator("EMA Stack", ema20,     ema_sig,      0.26),
+        Indicator("ADX DI",    adx,       adx_di_sig,   0.20),  # replaces correlated Stoch
+        Indicator("BB %B",     bb_pct,    bb_sig,       0.12),
     ]
-    # RSI divergence — add as 7th indicator when a divergence is detected
+    # Candle and RSI Div are optional — only added when they have something real to say
+    if candle_sig_v != "NEUTRAL":
+        indicators.append(Indicator("Candle", candle_wt, candle_sig_v, 0.10))
     if div_sig != "NEUTRAL":
         indicators.append(Indicator("RSI Div", 0.0, div_sig, 0.08))
 
@@ -828,7 +834,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         "RSI(14)":   rsi_conf,
         "MACD":      macd_conf,
         "EMA Stack": ema_conf,
-        "Stoch(14)": stoch_conf,
+        "ADX DI":    adx_di_conf,
         "BB %B":     bb_conf,
         "Candle":    candle_conf_v,
         "RSI Div":   div_conf,
@@ -1141,19 +1147,20 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         elif rsi_div == "BEARISH_DIV" and direction == "SELL":
             confluence_list.append("RSI Bearish Divergence — fading momentum")
 
-    # Win probability — starts at confidence, boosted by confluence depth
-    raw_wp = confidence
-    raw_wp += min(len(confluence_list) * 2, 12)   # up to +12 for deep confluence
-    if session_label == "London/NY Overlap": raw_wp += 3
-    if adx >= 30: raw_wp += 3
-    if adx >= 40: raw_wp += 2
-    if ob_at:          raw_wp += 3   # order block = institutional price level
-    if sweep_aligned:  raw_wp += 3   # stop hunt cleared = high-prob reversal
-    if fvg_dir != "NONE" and ((fvg_dir == "BULLISH" and action == "BUY") or
-                               (fvg_dir == "BEARISH" and action == "SELL")):
-        raw_wp += 2   # fair value gap = imbalance magnet
-    if rsi_div != "NONE": raw_wp += 2   # divergence = momentum confirmation
-    win_probability = max(50, min(95, raw_wp)) if action in ("BUY", "SELL") else 0
+    # Win probability — honest formula, no confidence inflation
+    # Built purely from measurable signal quality components.
+    # Cap is 72%: no system without real backtesting can justify claiming higher.
+    actual_votes = max(buy_votes, sell_votes)
+    extra_votes  = max(0, actual_votes - MIN_VOTES)  # votes beyond minimum required
+
+    raw_wp  = 50                                    # base: coin flip
+    raw_wp += min(adx / 2.5, 16)                   # ADX strength contribution (max +16 at ADX 40)
+    raw_wp += extra_votes * 3                       # each extra indicator vote: +3
+    if session_label == "London/NY Overlap": raw_wp += 5
+    elif session_label == "London":          raw_wp += 3
+    if htf_align:                            raw_wp += 4   # higher TF agrees
+    if ob_at:                                raw_wp += 3   # at institutional OB level
+    win_probability = max(50, min(72, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
     # ── Fibonacci retracement & early entry ──────────────────────────────────
     eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
@@ -1192,12 +1199,20 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             early_entry_reason = "EMA/ATR retrace zone — sell the bounce, not market"
 
     # ── Setup quality grade ───────────────────────────────────────────────────
+    # Graded on indicator votes (not confluence list length, which is easily inflated).
+    # A+ = all 5 core indicators + trending market + good session
+    # A  = 4 core indicators agree + trending market
     if action in ("BUY", "SELL"):
-        if win_probability >= 85 and len(confluence_list) >= 5 and adx >= 25:
+        core_votes = sum(
+            1 for i in indicators
+            if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "BB %B")
+            and i.signal == action
+        )
+        if win_probability >= 68 and core_votes >= 5 and adx >= 30:
             setup_quality = "A+"
-        elif win_probability >= 80 and len(confluence_list) >= 4:
+        elif win_probability >= 62 and core_votes >= 4 and adx >= 25:
             setup_quality = "A"
-        elif win_probability >= 72:
+        elif win_probability >= 55:
             setup_quality = "B"
         else:
             setup_quality = "C"

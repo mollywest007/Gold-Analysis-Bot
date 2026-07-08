@@ -25,7 +25,7 @@ _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
 
-SCAN_TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4"]  # D1 removed — conflicts too often
+SCAN_TIMEFRAMES = ["M15", "M30", "H1", "H4"]  # M5 removed — too noisy for gold entries
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -537,11 +537,11 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             # Quality gate — only A+ and A setups with ≥80% win probability
             # and a trending market (ADX ≥ 25). B/C/weak signals are skipped.
-            if a.win_probability < 80 or a.setup_quality not in ("A+", "A") or a.adx < 25:
+            if a.win_probability < 65 or a.setup_quality not in ("A+", "A") or a.adx < 25:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
-                    f"Need win≥80% + grade A/A+ + ADX≥25."
+                    f"Need win≥65% + grade A/A+ + ADX≥25."
                 )
                 continue
             new_signals.append((tf, a))
