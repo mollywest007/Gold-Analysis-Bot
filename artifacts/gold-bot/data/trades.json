@@ -381,6 +381,23 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1783523458",
+      "direction": "SELL",
+      "entry": 4041.3,
+      "sl": 4071.52,
+      "tp1": 3980.86,
+      "tp2": 3969.98,
+      "tp3": null,
+      "timeframe": "M15",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1783523458.40429,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
