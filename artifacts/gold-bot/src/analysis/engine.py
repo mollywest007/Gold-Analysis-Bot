@@ -854,7 +854,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     confidence  = max(50, min(97, base_conf))
 
     margin    = abs(buy_score - sell_score)
-    MIN_VOTES = 3   # always require 3/5 — no exceptions
+    MIN_VOTES = 4   # require 4+ indicators to agree — filters weak/marginal signals
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
@@ -884,14 +884,15 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         htf_bearish = htf_strongly_bearish or htf_slightly_bearish
 
         if direction == "BUY" and htf_strongly_bearish:
-            # Hard block — never fight a confirmed HTF downtrend
-            direction  = "NEUTRAL"
+            # Penalty only — heavy confidence hit but signal still fires.
+            # User wants all-TF alerts; hard blocking caused missed entries.
+            confidence = max(50, confidence - 20)
             htf_align  = False
-            htf_reason = f"Hard block: {htf} strongly Bearish — no longs"
+            htf_reason = f"Counter-trend: {htf} strongly Bearish"
         elif direction == "SELL" and htf_strongly_bullish:
-            direction  = "NEUTRAL"
+            confidence = max(50, confidence - 20)
             htf_align  = False
-            htf_reason = f"Hard block: {htf} strongly Bullish — no shorts"
+            htf_reason = f"Counter-trend: {htf} strongly Bullish"
         elif direction == "BUY" and htf_slightly_bearish:
             confidence = max(50, confidence - 12)
             htf_align  = False
@@ -1039,11 +1040,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     near_resistance = direction == "BUY"  and (r1 - price) < atr * 0.5
     near_support    = direction == "SELL" and (price - s1) < atr * 0.5
 
-    if direction != "NEUTRAL" and htf_reason and "Hard block" in htf_reason:
-        # Hard HTF block — genuinely do not trade against a confirmed macro trend
-        action      = "WAIT"
-        wait_reason = htf_reason
-    elif direction != "NEUTRAL":
+    if direction != "NEUTRAL":
         # Always give the signal; collect any caveats as notes
         action = direction
         if adx < 15:
@@ -1291,25 +1288,55 @@ def detect_market_structure(highs: List[float], lows: List[float], lookback: int
     return "RANGING"
 
 
-def detect_rsi_divergence(closes: List[float], lookback: int = 20) -> str:
+def detect_rsi_divergence(closes: List[float], lookback: int = 30) -> str:
     """
-    Classic RSI divergence over the recent lookback bars.
+    Swing-pivot RSI divergence — compares RSI at actual confirmed swing highs/lows,
+    not at arbitrary endpoints. Endpoint comparison is too noisy for intraday gold.
 
-    Bearish: price makes a higher high while RSI makes a lower high → momentum fading on rally
-    Bullish: price makes a lower low while RSI makes a higher low  → hidden strength on dip
+    Bearish: two swing highs where price is higher but RSI is lower → fading momentum.
+    Bullish: two swing lows where price is lower but RSI is higher → hidden strength.
 
     Returns 'BULLISH_DIV', 'BEARISH_DIV', or 'NONE'.
     """
-    if len(closes) < lookback + 16:
+    n = len(closes)
+    if n < lookback + 18:
         return "NONE"
-    rsi_now  = compute_rsi(closes,            14)
-    rsi_prev = compute_rsi(closes[:-lookback], 14)
-    price_now  = closes[-1]
-    price_prev = closes[-lookback]
-    if price_now > price_prev and rsi_now < rsi_prev - 3 and rsi_now > 45:
-        return "BEARISH_DIV"
-    if price_now < price_prev and rsi_now > rsi_prev + 3 and rsi_now < 55:
-        return "BULLISH_DIV"
+
+    pivot_bars = 3          # bars each side required to confirm a swing point
+    win_start  = n - lookback
+    win_end    = n - pivot_bars - 1   # last few bars not yet confirmed
+
+    # Lazy RSI cache — compute only at pivot indices we actually need
+    rsi_cache: dict = {}
+    def _rsi_at(i: int) -> float:
+        if i not in rsi_cache:
+            rsi_cache[i] = compute_rsi(closes[: i + 1], 14)
+        return rsi_cache[i]
+
+    highs_idx: List[int] = []
+    lows_idx:  List[int] = []
+    for i in range(win_start + pivot_bars, win_end):
+        if all(closes[i] >= closes[i - j] and closes[i] >= closes[i + j]
+               for j in range(1, pivot_bars + 1)):
+            highs_idx.append(i)
+        if all(closes[i] <= closes[i - j] and closes[i] <= closes[i + j]
+               for j in range(1, pivot_bars + 1)):
+            lows_idx.append(i)
+
+    # Bearish divergence: latest two swing highs — price higher, RSI lower
+    if len(highs_idx) >= 2:
+        a_i, b_i = highs_idx[-2], highs_idx[-1]
+        if closes[b_i] > closes[a_i] and _rsi_at(b_i) < _rsi_at(a_i) - 3:
+            if _rsi_at(b_i) > 45:   # ignore if RSI is already oversold
+                return "BEARISH_DIV"
+
+    # Bullish divergence: latest two swing lows — price lower, RSI higher
+    if len(lows_idx) >= 2:
+        a_i, b_i = lows_idx[-2], lows_idx[-1]
+        if closes[b_i] < closes[a_i] and _rsi_at(b_i) > _rsi_at(a_i) + 3:
+            if _rsi_at(b_i) < 55:   # ignore if RSI is already overbought
+                return "BULLISH_DIV"
+
     return "NONE"
 
 

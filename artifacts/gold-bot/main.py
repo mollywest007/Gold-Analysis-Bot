@@ -24,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ALERT_INTERVAL_SECONDS  = 60    # 1 minute — fast alert scanner
+ALERT_INTERVAL_SECONDS  = 30    # 30 seconds — catch entries fast
 CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 

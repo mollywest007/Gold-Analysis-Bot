@@ -526,6 +526,24 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             continue
 
         if _should_send(tf, a.action):
+            # Rotate lock immediately when direction flips — even if the new
+            # signal doesn't pass the quality gate. Without this, a stale BUY
+            # lock blocks the NEXT valid BUY after a failed SELL attempt.
+            old_dir = _active_signal.get(tf)
+            if old_dir and old_dir != a.action:
+                _active_signal.pop(tf, None)
+                state_changed = True
+                logger.info(f"[{tf}] Lock rotated {old_dir} → {a.action}")
+
+            # Quality gate — only A+ and A setups with ≥80% win probability
+            # and a trending market (ADX ≥ 25). B/C/weak signals are skipped.
+            if a.win_probability < 80 or a.setup_quality not in ("A+", "A") or a.adx < 25:
+                logger.info(
+                    f"[{tf}] Filtered — quality too low "
+                    f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
+                    f"Need win≥80% + grade A/A+ + ADX≥25."
+                )
+                continue
             new_signals.append((tf, a))
 
     if state_changed:
