@@ -112,6 +112,24 @@ def _indicator_rows(a: MarketAnalysis) -> str:
 
 # ─── SIGNAL CARD ──────────────────────────────────────────────────────────────
 
+def _kill_zone_line(a: MarketAnalysis) -> str:
+    """One-line kill zone status for cards."""
+    kz = getattr(a, "kill_zone", "")
+    is_kz = getattr(a, "is_kill_zone", False)
+    if is_kz:
+        return f"  Kill Zone : ✓ {kz}"
+    return f"  Kill Zone : Off-hours (lower prob)"
+
+
+def _pd_line(a: MarketAnalysis) -> str:
+    pd = getattr(a, "premium_discount", "")
+    if not pd:
+        return ""
+    icons = {"PREMIUM": "▲ PREMIUM  — sell zone", "DISCOUNT": "▼ DISCOUNT — buy zone",
+             "EQUILIBRIUM": "◆ EQUILIBRIUM — chop zone"}
+    return f"  Regime    : {icons.get(pd, pd)}"
+
+
 def signal_card(a: MarketAnalysis) -> str:
     ms = market_status()
 
@@ -128,10 +146,22 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
             "",
             f"  Structure : {_struct_label(a.market_structure)}",
+            f"  Daily Bias: {getattr(a, 'daily_bias', '') or 'N/A'}",
             f"  HTF Align : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
-            f"  Price     : {fmt_price(a.price)}",
         ]
+        lines.append(_kill_zone_line(a))
+        pd_line = _pd_line(a)
+        if pd_line:
+            lines.append(pd_line)
+        nr = getattr(a, "near_round", "")
+        if nr:
+            lines.append(f"  Round Lvl : {nr}")
+        pdh = getattr(a, "pdh", 0.0)
+        pdl = getattr(a, "pdl", 0.0)
+        if pdh > 0 and pdl > 0:
+            lines.append(f"  PDH / PDL : {fmt_price(pdh)} / {fmt_price(pdl)}")
+        lines.append(f"  Price     : {fmt_price(a.price)}")
 
         htf_lower = a.htf_bias.lower()
         signal_is_buy = a.action == "BUY"
@@ -405,6 +435,20 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     else:
         htf_desc = f"{htf_tf} is Neutral — no macro edge"
 
+    # Kill zone / regime
+    kz    = getattr(a, "kill_zone", "")
+    is_kz = getattr(a, "is_kill_zone", False)
+    kz_str = f"✓ {kz}" if is_kz else f"Off-hours"
+    pd    = getattr(a, "premium_discount", "")
+    pdh   = getattr(a, "pdh", 0.0)
+    pdl   = getattr(a, "pdl", 0.0)
+    nr    = getattr(a, "near_round", "")
+    db    = getattr(a, "daily_bias", "")
+    ote_h = getattr(a, "ote_high", 0.0)
+    ote_l = getattr(a, "ote_low", 0.0)
+    pd_icons = {"PREMIUM": "▲ PREMIUM (sell zone)", "DISCOUNT": "▼ DISCOUNT (buy zone)",
+                "EQUILIBRIUM": "◆ EQUILIBRIUM (chop)"}
+
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  FULL ANALYSIS  Pt.1   ║",
@@ -415,13 +459,28 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Session   : {a.session or 'N/A'}",
         "",
         "══════════════════════════════════",
+        "  INSTITUTIONAL CONTEXT",
+        "══════════════════════════════════",
+        f"  Kill Zone  : {kz_str}",
+        f"  Daily Bias : {db or 'N/A'}",
+        f"  HTF Bias   : {htf_desc}",
+        f"  Regime     : {pd_icons.get(pd, pd or 'N/A')}",
+    ]
+    if pdh > 0 and pdl > 0:
+        lines.append(f"  PDH / PDL  : {fmt_price(pdh)} / {fmt_price(pdl)}")
+    if nr:
+        lines.append(f"  Round Lvl  : {nr}")
+    if ote_h > 0 and ote_l > 0:
+        lines.append(f"  OTE Zone   : {fmt_price(ote_l)} – {fmt_price(ote_h)}")
+        lines.append(f"              (38.2-61.8% retrace — ideal limit zone)")
+    lines += [
+        "",
+        "══════════════════════════════════",
         "  MARKET STRUCTURE",
         "══════════════════════════════════",
         f"  Structure : {_struct_label(a.market_structure)}",
         f"  Trend     : {a.trend}   Strength: {a.strength}",
         f"  Bias      : {a.bias}   Momentum: {a.momentum}",
-        "",
-        f"  {htf_desc}",
         "",
         "══════════════════════════════════",
         "  INDICATOR BREAKDOWN",
@@ -511,17 +570,43 @@ def early_entry_card(a: MarketAnalysis) -> str:
     t2  = _estimate_time(a, a.tp2)
     sep = "──────────────────────────────"
 
+    kz     = getattr(a, "kill_zone", "")
+    is_kz  = getattr(a, "is_kill_zone", False)
+    pdh    = getattr(a, "pdh", 0.0)
+    pdl    = getattr(a, "pdl", 0.0)
+    pd     = getattr(a, "premium_discount", "")
+    db     = getattr(a, "daily_bias", "")
+    ote_h  = getattr(a, "ote_high", 0.0)
+    ote_l  = getattr(a, "ote_low", 0.0)
+    nr     = getattr(a, "near_round", "")
+
+    pd_arrow = {"PREMIUM": "▲ PREMIUM", "DISCOUNT": "▼ DISCOUNT", "EQUILIBRIUM": "◆ EQUIL"}.get(pd, pd)
+
     lines = ["<pre>",
         f"XAU/USD  {a.action}  {a.timeframe}  {a.session or 'N/A'}",
         f"Grade {a.setup_quality}  |  Strength {a.win_probability}%  |  {a.trade_type}",
         sep,
-        "FIB ZONE",
+        "INSTITUTIONAL CONTEXT",
+        f"  Daily : {db or 'N/A'}  |  HTF: {a.htf_bias}",
+        f"  Zone  : {pd_arrow}  |  KZ: {'✓ ' + kz if is_kz else 'Off-hrs'}",
+    ]
+    if pdh > 0 and pdl > 0:
+        lines.append(f"  PDH   : {fmt_price(pdh)}   PDL: {fmt_price(pdl)}")
+    if nr:
+        lines.append(f"  Round : {nr}")
+    lines += [
+        sep,
+        "FIB RETRACEMENT",
         f"  38.2% : {fmt_price(a.fib_382)}",
         f"  50.0% : {fmt_price(a.fib_500)}",
         f"  61.8% : {fmt_price(a.fib_618)}",
-        sep,
-        "ENTRY",
     ]
+    if ote_h > 0 and ote_l > 0:
+        lines += [
+            f"  ─── OTE : {fmt_price(ote_l)} – {fmt_price(ote_h)} ───",
+            f"  (38.2-61.8% retrace — best limit zone)",
+        ]
+    lines += [sep, "ENTRY"]
 
     if a.early_entry and a.early_entry != a.entry:
         lines += [

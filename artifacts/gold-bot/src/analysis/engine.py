@@ -77,6 +77,16 @@ class MarketAnalysis:
     bb_lower:       float = 0.0
     # Data quality flag — True when real market data fetch failed and simulation is used
     is_simulated:   bool  = False
+    # ── ICT / Institutional context ───────────────────────────────────────────
+    kill_zone:         str   = ""      # "London Kill Zone", "NY Kill Zone", "Off-hours"
+    is_kill_zone:      bool  = False   # True during high-probability time windows
+    pdh:               float = 0.0    # Previous Day High
+    pdl:               float = 0.0    # Previous Day Low
+    premium_discount:  str   = ""     # "PREMIUM" | "DISCOUNT" | "EQUILIBRIUM"
+    near_round:        str   = ""     # nearest $25/$100 level note
+    ote_high:          float = 0.0    # OTE zone upper bound (38.2%)
+    ote_low:           float = 0.0    # OTE zone lower bound (61.8%)
+    daily_bias:        str   = ""     # "BULLISH" | "BEARISH" | "RANGING"
     # Extended pro fields
     rsi_value:      float = 0.0
     stoch_k_val:    float = 0.0
@@ -718,6 +728,144 @@ def calc_limit_entry(direction: str, price: float, atr: float,
     return round(price, 2), "Market"
 
 
+# ─── ICT / Institutional context helpers ─────────────────────────────────────
+
+def get_kill_zone() -> Tuple[str, bool]:
+    """
+    ICT Kill Zones — time windows when institutional order flow is heaviest.
+    All times UTC.
+      London Kill Zone : 07:00–10:00 UTC  (London open — highest gold volume)
+      NY Kill Zone     : 12:00–15:00 UTC  (NY open / London/NY overlap)
+      NY Close Zone    : 19:00–20:00 UTC  (smaller but often reversal spike)
+    Outside these windows signals are valid but lower probability.
+    """
+    hour = datetime.now(timezone.utc).hour
+    if 7 <= hour < 10:
+        return "London Kill Zone (07-10 UTC)", True
+    if 12 <= hour < 15:
+        return "NY Kill Zone (12-15 UTC)", True
+    if 19 <= hour < 21:
+        return "NY Close Zone (19-21 UTC)", True
+    return "Off-hours", False
+
+
+def _candles_per_day(timeframe: str) -> int:
+    return {"M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6, "D1": 1}.get(timeframe, 24)
+
+
+def _calc_pdh_pdl(highs: List[float], lows: List[float],
+                  timeframe: str) -> Tuple[float, float]:
+    """
+    Previous Day High / Low — the most watched institutional levels on XAU/USD.
+    Approximated from OHLCV by counting candles (no timestamps needed).
+    Requires at least TWO full day-buckets of data before returning values,
+    so partial startup datasets never produce misleading institutional levels.
+    """
+    cpd = _candles_per_day(timeframe)
+    n   = len(highs)
+    # Need today's full bucket + at least one full prior bucket
+    if n < cpd * 2:
+        return 0.0, 0.0
+    # Previous "day" bucket = the cpd candles before today's cpd candles
+    today_start = n - cpd
+    prev_end    = today_start
+    prev_start  = prev_end - cpd          # guaranteed >= 0 since n >= cpd*2
+    return round(max(highs[prev_start:prev_end]), 2), \
+           round(min(lows[prev_start:prev_end]),  2)
+
+
+def _calc_premium_discount(price: float, high: float, low: float) -> str:
+    """
+    ICT Premium / Discount:
+      PREMIUM  — price above 50% equilibrium → look to SELL into premium
+      DISCOUNT — price below 50% equilibrium → look to BUY from discount
+      EQUILIBRIUM — ±10% of the midpoint, choppy / wait
+    """
+    if high <= low or (high - low) < 1.0:
+        return "EQUILIBRIUM"
+    eq  = (high + low) / 2
+    pct = (price - eq) / (high - low)   # –0.5 … +0.5
+    if pct >  0.10:
+        return "PREMIUM"
+    if pct < -0.10:
+        return "DISCOUNT"
+    return "EQUILIBRIUM"
+
+
+def _nearest_round(price: float, atr: float) -> str:
+    """
+    Gold strongly respects $25 and $100 round numbers as S/R magnets.
+    Returns a human-readable note when price is within 0.5×ATR of one.
+    """
+    threshold = max(atr * 0.5, 2.5)
+    nearest_25  = round(price / 25)  * 25
+    nearest_100 = round(price / 100) * 100
+    dist_25  = abs(price - nearest_25)
+    dist_100 = abs(price - nearest_100)
+    if dist_100 <= threshold * 2:
+        pos = "above" if nearest_100 > price else "below"
+        return f"${nearest_100:.0f} century lvl ({pos})"
+    if dist_25 <= threshold:
+        pos = "above" if nearest_25 > price else "below"
+        return f"${nearest_25:.0f} round lvl ({pos})"
+    return ""
+
+
+def _calc_ote_zone(fib_382: float, fib_618: float,
+                   direction: str, price: float) -> Tuple[float, float]:
+    """
+    OTE (Optimal Trade Entry) = the 38.2%–61.8% retracement zone.
+    Institutional traders enter limit orders inside this range for the
+    best possible R:R.  The 50% level (equilibrium) is the ideal fill.
+
+    Returns (ote_low, ote_high) — both on the ENTRY SIDE of current price.
+    """
+    if fib_382 <= 0 or fib_618 <= 0:
+        return 0.0, 0.0
+    lo = min(fib_382, fib_618)
+    hi = max(fib_382, fib_618)
+    if direction == "BUY" and hi < price:
+        return lo, hi   # zone is below price — valid pullback target
+    if direction == "SELL" and lo > price:
+        return lo, hi   # zone is above price — valid retrace target
+    return 0.0, 0.0
+
+
+async def _get_daily_bias(price: float, highs: List[float],
+                          lows: List[float], closes: List[float],
+                          timeframe: str) -> str:
+    """
+    Daily bias from D1 structure: is the macro trend BULLISH, BEARISH, or RANGING?
+    Uses last two daily candles (approximated from OHLCV) for a fast read.
+    """
+    if timeframe == "D1":
+        # Already on D1 — use last 3 closes
+        if len(closes) < 3:
+            return "RANGING"
+        if closes[-1] > closes[-3]:
+            return "BULLISH"
+        if closes[-1] < closes[-3]:
+            return "BEARISH"
+        return "RANGING"
+
+    cpd = _candles_per_day(timeframe)
+    n   = len(closes)
+    if n < cpd * 3:
+        return "RANGING"
+    # Two-day slices
+    day1_close = closes[max(0, n - cpd * 2): n - cpd]
+    day2_close = closes[n - cpd:]
+    if not day1_close or not day2_close:
+        return "RANGING"
+    avg1 = sum(day1_close) / len(day1_close)
+    avg2 = sum(day2_close) / len(day2_close)
+    if avg2 > avg1 * 1.001:
+        return "BULLISH"
+    if avg2 < avg1 * 0.999:
+        return "BEARISH"
+    return "RANGING"
+
+
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 async def analyze(timeframe: str = "H1") -> MarketAnalysis:
@@ -1164,6 +1312,56 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     if ob_at:                                raw_wp += 3   # at institutional OB level
     win_probability = max(50, min(72, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
+    # ── ICT / Institutional context ────────────────────────────────────────────
+    kill_zone_label, is_kill_zone = get_kill_zone()
+    pdh, pdl = _calc_pdh_pdl(highs, lows, timeframe)
+
+    # Premium/Discount: use the current day's candle range
+    cpd = _candles_per_day(timeframe)
+    day_highs = highs[-min(cpd, len(highs)):]
+    day_lows  = lows[-min(cpd, len(lows)):]
+    day_high  = max(day_highs) if day_highs else price
+    day_low   = min(day_lows)  if day_lows  else price
+    premium_discount = _calc_premium_discount(price, day_high, day_low)
+
+    near_round = _nearest_round(price, atr)
+    daily_bias = await _get_daily_bias(price, highs, lows, closes, timeframe)
+
+    # Kill zone boosts win probability — institutions are active, moves are real
+    if is_kill_zone and action in ("BUY", "SELL"):
+        win_probability = min(72, win_probability + 4)
+        kz_cf = f"{kill_zone_label} — institutional active"
+        if not any("Kill Zone" in c for c in confluence_list):
+            confluence_list.append(kz_cf)
+
+    # Premium/Discount alignment bonus
+    pd_aligned = (
+        (action == "BUY"  and premium_discount == "DISCOUNT") or
+        (action == "SELL" and premium_discount == "PREMIUM")
+    )
+    if pd_aligned and action in ("BUY", "SELL"):
+        win_probability = min(72, win_probability + 2)
+        pd_cf = f"{'Discount' if action == 'BUY' else 'Premium'} zone — favorable"
+        if not any("zone" in c.lower() and "favorable" in c for c in confluence_list):
+            confluence_list.append(pd_cf)
+
+    # PDH/PDL proximity — major institutional level nearby
+    if action == "BUY" and pdl > 0:
+        dist_pdl = price - pdl
+        if 0 < dist_pdl < atr * 1.5:
+            if not any("PDL" in c for c in confluence_list):
+                confluence_list.append(f"Near PDL {pdl:,.2f} — institutional support")
+    if action == "SELL" and pdh > 0:
+        dist_pdh = pdh - price
+        if 0 < dist_pdh < atr * 1.5:
+            if not any("PDH" in c for c in confluence_list):
+                confluence_list.append(f"Near PDH {pdh:,.2f} — institutional resistance")
+
+    # Round number near entry — potential magnet or barrier
+    if near_round and not any("round" in c.lower() or "century" in c.lower() for c in confluence_list):
+        if action in ("BUY", "SELL"):
+            confluence_list.append(f"Round lvl: {near_round}")
+
     # ── Fibonacci retracement & early entry ──────────────────────────────────
     eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
     fib_382, fib_500, fib_618 = compute_fibonacci_levels(highs, lows, eff_dir, lookback=50)
@@ -1246,6 +1444,15 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         early_entry=early_entry, early_entry_reason=early_entry_reason,
         setup_quality=setup_quality,
         is_simulated=data.is_simulated,
+        kill_zone=kill_zone_label,
+        is_kill_zone=is_kill_zone,
+        pdh=pdh,
+        pdl=pdl,
+        premium_discount=premium_discount,
+        near_round=near_round,
+        ote_high=max(_calc_ote_zone(fib_382, fib_618, action, price)) if action in ("BUY","SELL") else 0.0,
+        ote_low=min(_calc_ote_zone(fib_382, fib_618, action, price)) if action in ("BUY","SELL") else 0.0,
+        daily_bias=daily_bias,
     )
 
 

@@ -81,23 +81,23 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         a = await get_analysis(tf)
 
+        # ── Simulated data guard — block before any card is shown ─────────────
+        if getattr(a, "is_simulated", False):
+            await msg.edit_text(
+                "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                "Market data could not be fetched (Yahoo Finance is unreachable). "
+                "Analysis is based on simulated prices and is <b>not reliable</b>.\n\n"
+                "Please try again in a few minutes.",
+                parse_mode="HTML",
+            )
+            return
+
         # ── Part 1: Full professional market analysis ──────────────────────────
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("recommend", tf))
 
         # ── Part 2: Entry signal — only A/A+ setups get an entry card ────────────
         if a.action in ("BUY", "SELL"):
-            # Simulated data warning — real data fetch failed
-            if getattr(a, "is_simulated", False):
-                await update.message.reply_text(
-                    "⚠️ <b>DATA UNAVAILABLE</b>\n"
-                    "Market data could not be fetched (Yahoo Finance is unreachable). "
-                    "The analysis above is based on simulated prices and is <b>not reliable</b>.\n\n"
-                    "Please try again in a few minutes.",
-                    parse_mode="HTML",
-                )
-                await msg.delete()
-                return
 
             # Grade gate — C setups should never be traded
             if a.setup_quality == "C":
