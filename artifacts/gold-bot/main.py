@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from telegram import BotCommand, Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 from telegram.ext import ApplicationHandlerStop
-from src.config import TELEGRAM_BOT_TOKEN
+from src.config import TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, ALLOWED_USERNAME
 from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
@@ -29,11 +29,22 @@ CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log all incoming users — no access restrictions."""
+    """Block all users except the configured owner."""
     user = update.effective_user
     if user is None:
         raise ApplicationHandlerStop
-    logger.info(f"User: @{user.username} (id={user.id})")
+
+    # Prefer numeric ID check (immutable); fall back to username if ID not configured.
+    if ALLOWED_USER_ID:
+        authorized = user.id == ALLOWED_USER_ID
+    else:
+        authorized = bool(ALLOWED_USERNAME) and user.username == ALLOWED_USERNAME
+
+    if authorized:
+        logger.info(f"Authorized: @{user.username} (id={user.id})")
+    else:
+        logger.warning(f"Blocked unauthorized user: @{user.username} (id={user.id})")
+        raise ApplicationHandlerStop
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:

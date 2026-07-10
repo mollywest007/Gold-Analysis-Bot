@@ -1,70 +1,52 @@
-# XAU/USD Gold Analysis Telegram Bot
+# XAU/USD Gold Analysis Bot
 
-A professional Telegram bot that delivers institutional-grade XAU/USD market analysis, trade signals, trend detection, and support/resistance levels — for analysis only, no trade execution.
-
-## Run & Operate
-
-- `Gold Analysis Bot` workflow — runs `cd artifacts/gold-bot && python main.py`
-- Required secret: `TELEGRAM_BOT_TOKEN` — set in Replit Secrets
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000, unused by bot)
-- `pnpm run typecheck` — full typecheck across all packages
+A Telegram bot that delivers real-time gold trading signals, AI-powered chart analysis, and automated alerts for XAU/USD.
 
 ## Stack
 
-- Python 3.11 + python-telegram-bot 20.7 (async polling)
-- aiohttp for live price fetching (Yahoo Finance fallback to simulation)
-- python-dotenv for env loading
-- pnpm workspaces, Node.js 24, TypeScript 5.9 (existing monorepo infra)
+- **Language:** Python 3.11
+- **Framework:** python-telegram-bot 20.7 (async, job-queue)
+- **AI:** Google AI (Gemini) via `GOOGLE_AI_KEY` — used for chart image analysis
+- **Data:** Live gold price fetched via aiohttp; analysis cached in-memory
 
-## Where things live
+## How to run
 
-- `artifacts/gold-bot/main.py` — bot entry point
-- `artifacts/gold-bot/src/config.py` — constants and env loading
-- `artifacts/gold-bot/src/analysis/engine.py` — market analysis engine (bias, levels, signals)
-- `artifacts/gold-bot/src/analysis/market_data.py` — live price fetcher (Yahoo Finance) with simulation fallback
-- `artifacts/gold-bot/src/utils/formatting.py` — all message card formatters
-- `artifacts/gold-bot/src/utils/keyboards.py` — Telegram keyboard layouts
-- `artifacts/gold-bot/src/handlers/commands.py` — /start /analyze /signal /trend /levels /outlook /settings /help
-- `artifacts/gold-bot/src/handlers/callbacks.py` — inline button callbacks
-- `artifacts/gold-bot/src/handlers/messages.py` — reply keyboard (text button) handlers
+The bot starts automatically via the **Gold Analysis Bot** workflow:
 
-## Architecture decisions
+```
+cd artifacts/gold-bot && python main.py
+```
 
-- Analysis engine uses deterministic oscillator math seeded on price + timeframe + time bucket, so results are stable per timeframe window and change naturally as price moves.
-- Live price fetched from Yahoo Finance (GC=F futures); falls back to a time-seeded simulation if the fetch fails — bot never crashes due to price feed.
-- Signal gating: BUY/SELL only emitted when confidence ≥ 75% AND R:R ≥ 1:2 AND bias is not Neutral; otherwise WAIT with a reason.
-- Timeframe preference stored in `context.user_data` per user session (no DB needed for MVP).
-- All output uses `<pre>` HTML-formatted monospace cards for a trading-terminal aesthetic.
+## Required secrets
 
-## Product
+| Secret | Purpose |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather — required |
+| `GOOGLE_AI_KEY` | Google AI Studio key — needed for `/chart` AI analysis |
+| `ALLOWED_USER_ID` | Your numeric Telegram user ID — preferred auth method |
+| `ALLOWED_USERNAME` | Your Telegram username — fallback if `ALLOWED_USER_ID` not set |
 
-Users message the bot on Telegram and receive:
-- Full XAU/USD market analysis (bias, trend, entry, SL, TP1, TP2, R:R, confidence)
-- Trade signals with gating rules (BUY/SELL only when conditions are met, else WAIT)
-- Trend direction and momentum summary
-- Key support and resistance levels
-- Market outlook report
-- Configurable timeframe (M5 through D1) per user
+`ALLOWED_USERNAME` defaults to `nailythachad`. Set `ALLOWED_USER_ID` as soon as possible (find it in bot logs after first `/start`) — numeric IDs are immutable, usernames are not.
+
+## Project layout
+
+```
+artifacts/gold-bot/
+  main.py              # Entry point, job scheduling, access gate
+  src/
+    config.py          # Env-var config and auth settings
+    alerts.py          # Alert scanner and subscriber broadcast
+    analysis/
+      engine.py        # Core technical analysis (trend, RSI, ADX, S/R)
+      cache.py         # In-memory analysis cache
+      market_data.py   # Live price fetching
+    handlers/          # Telegram command/callback/message handlers
+    chart_analysis.py  # Google AI chart image analysis
+    trade_tracker.py   # Open/closed trade state (file-backed JSON)
+    market_hours.py    # Forex market open/close detection
+  data/                # Persistent JSON state files
+```
 
 ## User preferences
 
-- No emojis anywhere in the UI
-- Mobile-first, minimal, premium trading-terminal appearance
-- Clean monospace card layout with separator lines
-
-## Access control
-
-The bot is private — only the owner can use it. Auth priority:
-
-1. **Numeric user ID (preferred):** Set `ALLOWED_USER_ID` in Replit Secrets. Your numeric ID appears in the bot logs after your first `/start` — look for `Authorized: @username (id=XXXXXXX)`. Numeric IDs are immutable and can't be reclaimed.
-2. **Username fallback:** `ALLOWED_USERNAME` env var (defaults to the config value). Only active when `ALLOWED_USER_ID` is not set. Less secure — Telegram usernames are mutable.
-
-## Gotchas
-
-- Restart the `Gold Analysis Bot` workflow after any code change in `artifacts/gold-bot/`
-- The bot uses long-polling (not webhook) — only one instance should run at a time
-- `TELEGRAM_BOT_TOKEN` and `GOOGLE_AI_KEY` must be set in Replit Secrets before starting the workflow
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Keep project structure as-is; do not migrate or restructure without explicit request.
