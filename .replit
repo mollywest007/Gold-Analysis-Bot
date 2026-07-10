@@ -54,3 +54,9 @@ externalPort = 3000
 [nix]
 channel = "stable-25_05"
 packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "zlib"]
+
+[userenv]
+
+[userenv.shared]
+ALLOWED_USERNAME = "xyzacel"
+ALLOWED_USER_ID = "8039158711"
