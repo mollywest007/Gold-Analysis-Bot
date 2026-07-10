@@ -85,9 +85,32 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("recommend", tf))
 
-        # ── Part 2: Entry signal for every BUY/SELL, WAIT gets explanation ───────
+        # ── Part 2: Entry signal — only A/A+ setups get an entry card ────────────
         if a.action in ("BUY", "SELL"):
-            # Always send the entry card — grade shown as context, not a gate
+            # Simulated data warning — real data fetch failed
+            if getattr(a, "is_simulated", False):
+                await update.message.reply_text(
+                    "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                    "Market data could not be fetched (Yahoo Finance is unreachable). "
+                    "The analysis above is based on simulated prices and is <b>not reliable</b>.\n\n"
+                    "Please try again in a few minutes.",
+                    parse_mode="HTML",
+                )
+                await msg.delete()
+                return
+
+            # Grade gate — C setups should never be traded
+            if a.setup_quality == "C":
+                await update.message.reply_text(
+                    f"⚠️ <b>Grade C — Do NOT enter this trade</b>\n\n"
+                    f"The engine sees a {a.action} direction but the setup quality is too low "
+                    f"(win probability {a.win_probability}%, ADX {a.adx:.1f}). "
+                    f"Entering here has a poor risk/reward profile.\n\n"
+                    f"<b>Wait for a Grade A or A+ setup.</b> Use /signal to keep scanning.",
+                    parse_mode="HTML",
+                )
+                return
+
             await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
 
             # Always attach the live chart for every BUY/SELL signal
@@ -162,6 +185,16 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         a = await get_analysis(tf)
         # Send signal card first (always fast)
+        # Simulated data guard — block before showing any signal
+        if getattr(a, "is_simulated", False):
+            await msg.edit_text(
+                "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                "Market data could not be fetched. Signal is based on simulated prices "
+                "and is <b>not reliable</b>. Please try again in a few minutes.",
+                parse_mode="HTML",
+            )
+            return
+
         await msg.edit_text(signal_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("signal", tf))
 

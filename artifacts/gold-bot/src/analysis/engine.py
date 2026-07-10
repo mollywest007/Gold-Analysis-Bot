@@ -75,6 +75,8 @@ class MarketAnalysis:
     entry_note:     str = ""           # "Market" or "Limit @ XXXX.XX"
     bb_upper:       float = 0.0
     bb_lower:       float = 0.0
+    # Data quality flag — True when real market data fetch failed and simulation is used
+    is_simulated:   bool  = False
     # Extended pro fields
     rsi_value:      float = 0.0
     stoch_k_val:    float = 0.0
@@ -1243,6 +1245,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,
         early_entry=early_entry, early_entry_reason=early_entry_reason,
         setup_quality=setup_quality,
+        is_simulated=data.is_simulated,
     )
 
 

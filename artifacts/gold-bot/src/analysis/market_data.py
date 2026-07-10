@@ -39,13 +39,15 @@ _cache_lock = asyncio.Lock()
 
 
 class OHLCVData:
-    def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0):
-        self.opens   = opens
-        self.highs   = highs
-        self.lows    = lows
-        self.closes  = closes
-        self.volumes = volumes
-        self.price   = spot_price if spot_price > 0 else (closes[-1] if closes else 0.0)
+    def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0,
+                 is_simulated: bool = False):
+        self.opens        = opens
+        self.highs        = highs
+        self.lows         = lows
+        self.closes       = closes
+        self.volumes      = volumes
+        self.price        = spot_price if spot_price > 0 else (closes[-1] if closes else 0.0)
+        self.is_simulated = is_simulated  # True when real data fetch failed — signals unreliable
 
     def __len__(self):
         return len(self.closes)
@@ -65,8 +67,9 @@ def _aggregate_to_h4(data: "OHLCVData") -> "OHLCVData":
         lows.append(min(data.lows[i:i + step]))
         closes.append(data.closes[i + step - 1])
         volumes.append(sum(v for v in data.volumes[i:i + step] if v))
-    result       = OHLCVData(opens, highs, lows, closes, volumes)
-    result.price = data.price
+    result              = OHLCVData(opens, highs, lows, closes, volumes,
+                                    is_simulated=data.is_simulated)
+    result.price        = data.price
     return result
 
 
@@ -291,7 +294,8 @@ def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":
         volumes.append(round(vol))
         price = close_p
 
-    return OHLCVData(opens, highs, lows, closes, volumes, spot_price=closes[-1])
+    return OHLCVData(opens, highs, lows, closes, volumes, spot_price=closes[-1],
+                     is_simulated=True)
 
 
 def invalidate_cache(timeframe: str = None) -> None:

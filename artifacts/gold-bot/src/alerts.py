@@ -535,13 +535,32 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 state_changed = True
                 logger.info(f"[{tf}] Lock rotated {old_dir} → {a.action}")
 
-            # Quality gate — only A+ and A setups with ≥80% win probability
-            # and a trending market (ADX ≥ 25). B/C/weak signals are skipped.
-            if a.win_probability < 65 or a.setup_quality not in ("A+", "A") or a.adx < 25:
+            # Block simulated data — never alert on fake prices
+            if getattr(a, "is_simulated", False):
+                logger.warning(
+                    f"[{tf}] Alert BLOCKED — running on simulated data (YF fetch failed). "
+                    f"Will retry on next scan cycle."
+                )
+                continue
+
+            # Require HTF alignment — no counter-trend alerts
+            htf_aligned = a.htf_bias in ("Bullish", "Slightly Bullish") and a.action == "BUY" or \
+                          a.htf_bias in ("Bearish", "Slightly Bearish") and a.action == "SELL" or \
+                          a.htf_bias == "Neutral"  # neutral HTF: allow, no penalty
+            if not htf_aligned:
+                logger.info(
+                    f"[{tf}] Filtered — counter-trend signal "
+                    f"({a.action} vs HTF={a.htf_bias}). No counter-trend alerts."
+                )
+                continue
+
+            # Quality gate — only A+ and A setups, win probability ≥ 68%,
+            # confirmed trend (ADX ≥ 25). B/C/weak signals are skipped entirely.
+            if a.win_probability < 68 or a.setup_quality not in ("A+", "A") or a.adx < 25:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
-                    f"Need win≥65% + grade A/A+ + ADX≥25."
+                    f"Need win≥68% + grade A/A+ + ADX≥25 + HTF aligned."
                 )
                 continue
             new_signals.append((tf, a))
