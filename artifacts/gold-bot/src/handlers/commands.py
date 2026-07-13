@@ -1,4 +1,5 @@
 import logging
+import time
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
@@ -17,6 +18,39 @@ logger = logging.getLogger(__name__)
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     return context.user_data.get("timeframe", "H1")
+
+
+def _open_trade_banner(tf: str) -> str:
+    """
+    If there's already a LOCKED open trade on this timeframe, return a clear
+    HTML banner showing its real entry/SL/TP — the exact numbers from the
+    original alert, never recalculated. Empty string if no open trade.
+
+    This exists because /signal, /recommend etc. run a FRESH analysis every
+    time (entry/SL/TP shift as price and indicators move), while an open
+    trade's levels are frozen at the moment it was opened. Without this
+    banner, users compare live-recalculated numbers to their real trade's
+    numbers and think the bot is "reading wrong" — it isn't, they're two
+    different things.
+    """
+    from src import trade_tracker
+    open_trades = [
+        t for t in trade_tracker.get_all_trades()
+        if t.get("status") in ("open", "tp1_hit") and t.get("timeframe") == tf
+    ]
+    if not open_trades:
+        return ""
+    t = open_trades[0]
+    age_secs = time.time() - t.get("opened_at", 0)
+    age_str = f"{int(age_secs // 60)}m ago" if age_secs < 3600 else f"{int(age_secs // 3600)}h {int((age_secs % 3600) // 60)}m ago"
+    tp2_str = f"  TP2: {t['tp2']:,.2f}" if t.get("tp2") else ""
+    return (
+        f"🔒 <b>You already have a LOCKED {t['direction']} trade on {tf}</b> (opened {age_str})\n"
+        f"Entry: {t['entry']:,.2f}  SL: {t['sl']:,.2f}  TP1: {t['tp1']:,.2f}{tp2_str}\n"
+        f"These are your <b>real, unchanging</b> trade levels — use /active for live P&amp;L.\n"
+        f"The analysis below is a fresh market read and will show different "
+        f"numbers as price moves — it is <b>not</b> a new trade."
+    )
 
 
 def _market_closed_text() -> str:
@@ -95,6 +129,10 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # ── Part 1: Full professional market analysis ──────────────────────────
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("recommend", tf))
+
+        banner = _open_trade_banner(tf)
+        if banner:
+            await update.message.reply_text(banner, parse_mode="HTML")
 
         # ── Part 2: Entry signal — only A/A+ setups get an entry card ────────────
         if a.action in ("BUY", "SELL"):
@@ -197,6 +235,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         await msg.edit_text(signal_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("signal", tf))
+
+        banner = _open_trade_banner(tf)
+        if banner:
+            await update.message.reply_text(banner, parse_mode="HTML")
 
         # When there is an actionable signal, attach a live chart automatically
         if a.action in ("BUY", "SELL"):

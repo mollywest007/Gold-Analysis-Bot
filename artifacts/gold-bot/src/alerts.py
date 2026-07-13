@@ -593,6 +593,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                     direction=a.action, entry=a.entry, sl=a.stop_loss,
                     tp1=a.tp1, tp2=a.tp2, timeframe=tf,
                     confidence=a.confidence, rr_ratio=a.rr_ratio,
+                    tp3=getattr(a, "tp3", None),
                 )
             except Exception as e:
                 logger.error(f"Trade open failed ({tf}): {e}")
