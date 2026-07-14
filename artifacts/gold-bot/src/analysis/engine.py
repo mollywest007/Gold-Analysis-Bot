@@ -95,6 +95,7 @@ class MarketAnalysis:
     plus_di:        float = 0.0
     minus_di:       float = 0.0
     market_structure: str = "RANGING"   # HH_HL | LH_LL | RANGING | TRANSITION
+    choch:          str = "NONE"        # BULLISH_CHOCH | BEARISH_CHOCH | NONE — early reversal signal
     win_probability:  int = 0
     confluence_list: List[str] = field(default_factory=list)
     tp3:            float = 0.0
@@ -1231,6 +1232,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     # ── Extended pro fields ────────────────────────────────────────────────────
     mkt_structure = detect_market_structure(highs, lows, lookback=5)
+    choch = detect_choch(highs, lows, closes, lookback=5)
 
     # TP3: measured move (5× SL distance)
     if direction == "BUY":
@@ -1296,6 +1298,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             confluence_list.append("RSI Bullish Divergence — hidden strength")
         elif rsi_div == "BEARISH_DIV" and direction == "SELL":
             confluence_list.append("RSI Bearish Divergence — fading momentum")
+        if choch == "BULLISH_CHOCH" and direction == "BUY":
+            confluence_list.append("Change of Character — bullish reversal confirmed")
+        elif choch == "BEARISH_CHOCH" and direction == "SELL":
+            confluence_list.append("Change of Character — bearish reversal confirmed")
 
     # Win probability — honest formula, no confidence inflation
     # Built purely from measurable signal quality components.
@@ -1310,6 +1316,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     elif session_label == "London":          raw_wp += 3
     if htf_align:                            raw_wp += 4   # higher TF agrees
     if ob_at:                                raw_wp += 3   # at institutional OB level
+    if (choch == "BULLISH_CHOCH" and direction == "BUY") or \
+       (choch == "BEARISH_CHOCH" and direction == "SELL"):
+        raw_wp += 4   # confirmed change of character in signal's direction
     win_probability = max(50, min(72, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
     # ── ICT / Institutional context ────────────────────────────────────────────
@@ -1437,6 +1446,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         rsi_value=rsi, stoch_k_val=stoch_k, stoch_d_val=stoch_d,
         macd_hist=hist, plus_di=plus_di, minus_di=minus_di,
         market_structure=mkt_structure,
+        choch=choch,
         win_probability=win_probability,
         confluence_list=confluence_list,
         tp3=tp3,
@@ -1511,6 +1521,57 @@ def detect_market_structure(highs: List[float], lows: List[float], lookback: int
         if lh and ll:   return "LH_LL"
         if hh or hl or lh or ll: return "TRANSITION"
     return "RANGING"
+
+
+def detect_choch(highs: List[float], lows: List[float], closes: List[float],
+                  lookback: int = 5) -> str:
+    """
+    Change of Character (CHoCH) — the first break of an *opposing* swing point
+    after a trend was established. This is the early-warning smart-money signal
+    that a trend may be flipping, distinct from a Break of Structure (BOS) which
+    confirms continuation of the existing trend.
+
+    Downtrend (LH/LL) + price closes above the most recent lower-high swing
+      → BULLISH_CHOCH (possible reversal up)
+    Uptrend (HH/HL) + price closes below the most recent higher-low swing
+      → BEARISH_CHOCH (possible reversal down)
+    """
+    n = len(closes)
+    if n < lookback * 4 + 5:
+        return "NONE"
+
+    swing_highs_idx, swing_lows_idx = [], []
+    for i in range(lookback, n - lookback):
+        if all(highs[i] >= highs[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            swing_highs_idx.append(i)
+        if all(lows[i] <= lows[j] for j in range(i - lookback, i + lookback + 1) if j != i):
+            swing_lows_idx.append(i)
+
+    if len(swing_highs_idx) < 2 or len(swing_lows_idx) < 2:
+        return "NONE"
+
+    last_high_i, prev_high_i = swing_highs_idx[-1], swing_highs_idx[-2]
+    last_low_i,  prev_low_i  = swing_lows_idx[-1],  swing_lows_idx[-2]
+
+    hh = highs[last_high_i] > highs[prev_high_i]
+    hl = lows[last_low_i]   > lows[prev_low_i]
+    lh = highs[last_high_i] < highs[prev_high_i]
+    ll = lows[last_low_i]   < lows[prev_low_i]
+
+    current_close = closes[-1]
+
+    if lh and ll:
+        # Established downtrend — CHoCH fires when price closes back above
+        # the most recent lower-high (the last point that confirmed the downtrend).
+        if current_close > highs[last_high_i]:
+            return "BULLISH_CHOCH"
+    elif hh and hl:
+        # Established uptrend — CHoCH fires when price closes back below
+        # the most recent higher-low.
+        if current_close < lows[last_low_i]:
+            return "BEARISH_CHOCH"
+
+    return "NONE"
 
 
 def detect_rsi_divergence(closes: List[float], lookback: int = 30) -> str:

@@ -28,6 +28,12 @@ def _struct_label(s: str) -> str:
             "TRANSITION": "Structure Breaking", "RANGING": "Ranging"}.get(s, s)
 
 
+def _choch_label(s: str) -> str:
+    return {"BULLISH_CHOCH": "⚠️ Bullish (reversal up)",
+            "BEARISH_CHOCH": "⚠️ Bearish (reversal down)",
+            "NONE": "None"}.get(s, s)
+
+
 def _trade_type_label(a: MarketAnalysis) -> str:
     return {"Scalp": "SCALP (minutes-hours)", "Intraday": "INTRADAY (same session)",
             "Swing": "SWING (1-5 days)", "Position": "POSITION (weeks)"}.get(a.trade_type, a.trade_type)
@@ -146,6 +152,7 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
             "",
             f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
             f"  Daily Bias: {getattr(a, 'daily_bias', '') or 'N/A'}",
             f"  HTF Align : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
@@ -226,6 +233,7 @@ def signal_card(a: MarketAnalysis) -> str:
             "",
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
             f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
             f"  HTF Bias  : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
             "",
@@ -272,6 +280,7 @@ def analysis_card(a: MarketAnalysis) -> str:
         "  MARKET STRUCTURE",
         "──────────────────────────────────",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Bias      : {a.bias}   ({a.strength})",
         f"  HTF Bias  : {a.htf_bias}",
         f"  Trend     : {a.trend}",
@@ -479,6 +488,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         "  MARKET STRUCTURE",
         "══════════════════════════════════",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Trend     : {a.trend}   Strength: {a.strength}",
         f"  Bias      : {a.bias}   Momentum: {a.momentum}",
         "",
@@ -794,6 +804,7 @@ def trend_card(a: MarketAnalysis) -> str:
         "",
         "──────────────────────────────────",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Trend     : {a.trend}   ({a.strength})",
         f"  Bias      : {a.bias}",
         f"  HTF Bias  : {a.htf_bias}",
@@ -848,6 +859,7 @@ def levels_card(a: MarketAnalysis) -> str:
         f"  ATR(14)      : {fmt_price(a.atr)}",
         f"  Liq Zone     : {a.liquidity_zone}",
         f"  Structure    : {_struct_label(a.market_structure)}",
+        f"  CHoCH        : {_choch_label(a.choch)}",
         "",
         "  Not financial advice.", "</pre>",
     ]
@@ -884,6 +896,7 @@ def outlook_card(a: MarketAnalysis) -> str:
         f"  Bias      : {a.bias}   ({a.strength})",
         f"  HTF Bias  : {a.htf_bias}",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Momentum  : {a.momentum}   ADX: {a.adx:.1f}",
         f"  Action    : {a.action}",
     ]
@@ -933,6 +946,7 @@ def alert_card(a: MarketAnalysis) -> str:
         f"  Price     : {fmt_price(a.price)}",
         f"  Session   : {a.session or 'N/A'}   {mkt}",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  HTF Align : {a.htf_bias}",
         "",
         "──────────────────────────────────",
@@ -969,6 +983,7 @@ def market_open_card(a: MarketAnalysis) -> str:
         "=" * 32,
         f"Price     : {fmt_price(a.price)}",
         f"Structure : {_struct_label(a.market_structure)}",
+        f"CHoCH     : {_choch_label(a.choch)}",
         f"Bias      : {a.bias}   ({a.strength})",
         f"HTF Bias  : {a.htf_bias}",
         f"ADX       : {a.adx:.1f}",
@@ -1195,6 +1210,7 @@ def market_conditions_card(a: MarketAnalysis) -> str:
         "  CURRENT CONDITIONS",
         "──────────────────────────────────",
         f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Bias      : {a.bias}   ({a.strength})",
         f"  HTF Bias  : {a.htf_bias}",
         f"  Momentum  : {a.momentum}",
