@@ -29,7 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/gold-bot && python main.py"
+args = "cd artifacts/gold-bot && .venv/bin/python main.py"
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
