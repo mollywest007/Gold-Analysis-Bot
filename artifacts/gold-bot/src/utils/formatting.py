@@ -1136,8 +1136,9 @@ def multi_timeframe_card(analyses: list) -> str:
                 f"SL      : {fmt_price(a.stop_loss)}",
                 f"TP1     : {fmt_price(a.tp1)}",
                 f"TP2     : {fmt_price(a.tp2)}",
-                f"Win %   : {_win_bar(a.win_probability)}",
             ]
+        win_pct = a.win_probability if a.win_probability else 0
+        lines.append(f"Win %   : {_win_bar(win_pct)}")
         lines.append(WIDE)
 
     # ── Alert cooldown summary ─────────────────────────────────────────────────
