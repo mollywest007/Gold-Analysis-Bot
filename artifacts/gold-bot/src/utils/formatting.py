@@ -1507,7 +1507,13 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
         else:
             age_str = f"{int(age_secs // 3600)}h {int((age_secs % 3600) // 60)}m ago"
 
-        status_note = "  ✅ TP1 HIT — watching for TP2" if t.get("status") == "tp1_hit" else ""
+        _st = t.get("status")
+        if _st == "tp1_hit":
+            status_note = "  ✅ TP1 HIT — watching for TP2"
+        elif _st == "tp2_hit" and t.get("tp3"):
+            status_note = "  ✅✅ TP1+TP2 HIT — watching for TP3"
+        else:
+            status_note = ""
         lines += [
             f"{tf}  {direction}  |  Conf: {conf}%{status_note}",
             f"Opened     : {age_str}",

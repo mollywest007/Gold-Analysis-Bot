@@ -178,11 +178,19 @@ async def _send_result_image(
         caption = (f"STOP LOSS HIT  |  XAU/USD\n"
                    f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
                    f"Loss: {abs(entry - exit_price):,.2f} pts")
+    elif event == "TP3":
+        result  = "WIN_TP2"
+        tp3_val = trade.get("tp3", exit_price)
+        caption = (f"🎯 TP3 HIT — MAXIMUM TARGET  |  XAU/USD\n"
+                   f"{direction}  Entry: {entry:,.2f}  TP3: {tp3_val:,.2f}\n"
+                   f"Full run profit: +{abs(entry - exit_price):,.2f} pts")
     elif event == "TP2":
         result  = "WIN_TP2"
-        caption = (f"ALL TARGETS HIT  |  XAU/USD\n"
+        tp3_val = trade.get("tp3")
+        watching = f"  |  Watching for TP3 @ {tp3_val:,.2f}" if tp3_val else ""
+        caption = (f"✅ TP2 HIT  |  XAU/USD\n"
                    f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
-                   f"Full profit: +{abs(entry - exit_price):,.2f} pts")
+                   f"Profit: +{abs(entry - exit_price):,.2f} pts{watching}")
     elif event == "TP1_SL":
         result  = "LOSS"
         caption = (f"SL HIT (TP1 was captured)  |  XAU/USD\n"
@@ -190,9 +198,11 @@ async def _send_result_image(
                    f"TP1 {tp1:,.2f} was hit — SL then triggered at {exit_price:,.2f}")
     else:
         result  = "WIN_TP1"
-        caption = (f"TP1 HIT  |  XAU/USD\n"
+        tp3_val = trade.get("tp3")
+        watching = f"  |  Watching for TP2 → TP3 @ {tp3_val:,.2f}" if tp3_val else "  |  Watching for TP2"
+        caption = (f"✅ TP1 HIT  |  XAU/USD\n"
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
-                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts  |  Watching for TP2")
+                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts{watching}")
 
     try:
         img_bytes = generate_result_image(

@@ -55,7 +55,7 @@ def open_trade(
     # Only one open/tp1_hit trade per timeframe — replace if same timeframe already has one.
     # Previously this deduped by direction, which silently dropped an H4 SELL when any
     # other SELL fired on a different timeframe.
-    trades = [t for t in trades if not (t.get("status") in ("open", "tp1_hit") and t.get("timeframe") == timeframe)]
+    trades = [t for t in trades if not (t.get("status") in ("open", "tp1_hit", "tp2_hit") and t.get("timeframe") == timeframe)]
     trade = {
         "id":          str(int(time.time())),
         "direction":   direction,
@@ -108,8 +108,10 @@ def check_trades(current_price: float, recent_high: float = None,
 
     for t in trades:
         status = t.get("status", "")
-        # Continue tracking open trades AND trades where TP1 was hit but TP2 not yet reached
-        if status not in ("open", "tp1_hit"):
+        # Track: open, TP1 waiting for TP2, TP2 waiting for TP3 (when tp3 exists)
+        if status == "tp2_hit" and not t.get("tp3"):
+            continue   # TP2 was final target — truly closed, nothing to watch
+        if status not in ("open", "tp1_hit", "tp2_hit"):
             continue
 
         age = time.time() - t.get("opened_at", 0)
@@ -133,22 +135,28 @@ def check_trades(current_price: float, recent_high: float = None,
         hi = max(hi, current_price)
         lo = min(lo, current_price)
 
+        tp3_val = t.get("tp3") or 0.0
+
         if d == "BUY":
             sl_hit    = lo <= sl
             tp1_hit   = hi >= tp1
             tp2_hit   = hi >= tp2
+            tp3_hit   = bool(tp3_val) and hi >= tp3_val
             # Exit price = the level itself (what would actually have filled),
             # not current_price, since a wick may have already retraced.
             sl_exit   = sl
             tp1_exit  = tp1
             tp2_exit  = tp2
+            tp3_exit  = tp3_val
         else:  # SELL
             sl_hit    = hi >= sl
             tp1_hit   = lo <= tp1
             tp2_hit   = lo <= tp2
+            tp3_hit   = bool(tp3_val) and lo <= tp3_val
             sl_exit   = sl
             tp1_exit  = tp1
             tp2_exit  = tp2
+            tp3_exit  = tp3_val
 
         if sl_hit:
             # If TP1 was already captured, mark distinctly so history shows TP1→SL
@@ -163,6 +171,15 @@ def check_trades(current_price: float, recent_high: float = None,
                 events.append({"trade": t, "event": "SL", "exit_price": sl_exit})
                 logger.info(f"Trade {t['id']} SL hit @ {sl_exit:.2f}")
 
+        elif tp3_hit and tp3_val and not t.get("tp3_hit"):
+            t["tp3_hit"] = True
+            t["tp2_hit"] = True
+            t["tp1_hit"] = True
+            t["status"]  = "tp3_hit"
+            changed = True
+            events.append({"trade": t, "event": "TP3", "exit_price": tp3_exit})
+            logger.info(f"Trade {t['id']} TP3 hit @ {tp3_exit:.2f}")
+
         elif tp2_hit and not t.get("tp2_hit"):
             t["tp2_hit"] = True
             t["tp1_hit"] = True   # TP1 implicitly cleared if TP2 is reached
@@ -173,7 +190,7 @@ def check_trades(current_price: float, recent_high: float = None,
 
         elif tp1_hit and not t.get("tp1_hit"):
             t["tp1_hit"] = True
-            t["status"]  = "tp1_hit"   # record partial win; trade stays tracked for TP2
+            t["status"]  = "tp1_hit"   # record partial win; trade stays tracked for TP2/TP3
             changed = True
             events.append({"trade": t, "event": "TP1", "exit_price": tp1_exit})
             logger.info(f"Trade {t['id']} TP1 hit @ {tp1_exit:.2f}")
@@ -185,7 +202,15 @@ def check_trades(current_price: float, recent_high: float = None,
 
 
 def open_trade_count() -> int:
-    return sum(1 for t in _load() if t.get("status") in ("open", "tp1_hit"))
+    trades = _load()
+    count = 0
+    for t in trades:
+        s = t.get("status")
+        if s in ("open", "tp1_hit"):
+            count += 1
+        elif s == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"):
+            count += 1   # TP2 hit but still watching for TP3
+    return count
 
 
 def get_all_trades() -> List[Dict[str, Any]]:
@@ -197,7 +222,7 @@ def get_all_trades() -> List[Dict[str, Any]]:
 def get_stats() -> Dict[str, Any]:
     """Return win/loss/open counts and win rate across all closed trades."""
     trades = _load()
-    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp1_sl_hit"))
+    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
     open_  = sum(1 for t in trades if t.get("status") == "open")
     expired = sum(1 for t in trades if t.get("status") == "expired")

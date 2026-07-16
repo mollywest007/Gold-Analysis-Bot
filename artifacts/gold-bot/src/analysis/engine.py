@@ -281,11 +281,15 @@ def compute_adx(highs: List[float], lows: List[float], closes: List[float],
 
 def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
                    price: float, atr: float,
-                   volumes: Optional[List[float]] = None) -> Tuple[float, float, float, float]:
+                   volumes: Optional[List[float]] = None,
+                   timeframe: str = "H1") -> Tuple[float, float, float, float]:
     resistances: List[Tuple[float, float]] = []
     supports:    List[Tuple[float, float]] = []
     n        = len(closes)
-    lookback = 6
+    # Higher timeframes need a larger lookback to capture weekly/multi-day S/R pivots.
+    # A fixed 6-bar lookback on H4 only covers 24 hours — major levels are invisible.
+    _lookback_map = {"M5": 4, "M15": 5, "M30": 6, "H1": 8, "H4": 14, "D1": 20}
+    lookback = _lookback_map.get(timeframe, 6)
 
     for i in range(lookback, n - lookback):
         if all(highs[i] >= highs[j] for j in range(i - lookback, i + lookback + 1) if j != i):
@@ -1117,7 +1121,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     verdict_reason = ". ".join(parts[:5]) if parts else "Indicators mixed — no clear edge"
 
     # S/R levels
-    r1, r2, s1, s2 = find_sr_levels(highs, lows, closes, price, atr, volumes)
+    r1, r2, s1, s2 = find_sr_levels(highs, lows, closes, price, atr, volumes, timeframe)
 
     # Breakout / reversal
     breakout = detect_breakout(closes, highs, 20)
@@ -1130,9 +1134,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     # SL uses 2.0×–2.5× ATR so gold wicks don't stop us out before the move.
     # Previous 1.2–1.4× SL was the primary cause of SL hits.
     sl_mult = (
-        2.5 if timeframe in ("M5", "M15") else   # scalp: tighter but still respects wick
+        2.5 if timeframe in ("M5", "M15") else   # scalp: still needs wick protection
         2.2 if timeframe in ("M30", "H1") else
-        2.0                                        # H4/D1: slower, wider is fine
+        2.3 if timeframe == "H4" else             # H4 swing candles have large wicks — needs more room than H1
+        2.0                                        # D1: position trade, ATR is already large
     )
     max_sl_dist = atr * 3.5   # cap so SL isn't absurdly far from price
 
@@ -1176,6 +1181,19 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     else:
         tp1 = round(entry + tp1_dist, 2)
         tp2 = round(entry + tp2_dist, 2)
+
+    # Guarantee minimum 1.5:1 R:R — S/R snapping must never leave TP1 too close to entry
+    if sl_dist > 0:
+        min_tp1_dist = sl_dist * 1.5
+        if direction == "BUY" and tp1 < entry + min_tp1_dist:
+            tp1 = round(entry + min_tp1_dist, 2)
+        elif direction == "SELL" and tp1 > entry - min_tp1_dist:
+            tp1 = round(entry - min_tp1_dist, 2)
+        # TP2 must always be meaningfully beyond TP1 (at least 0.5× SL further)
+        if direction == "BUY" and tp2 < tp1 + sl_dist * 0.5:
+            tp2 = round(tp1 + sl_dist * 0.5, 2)
+        elif direction == "SELL" and tp2 > tp1 - sl_dist * 0.5:
+            tp2 = round(tp1 - sl_dist * 0.5, 2)
 
     rr_ratio = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 else 0.0
 
