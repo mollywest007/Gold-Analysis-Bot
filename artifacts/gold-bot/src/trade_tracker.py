@@ -12,7 +12,18 @@ from typing import List, Dict, Any, Set
 logger = logging.getLogger(__name__)
 
 TRADES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "trades.json")
-MAX_TRADE_AGE = 48 * 3600   # auto-close after 48h
+
+# Per-timeframe expiry — higher TFs need more time to reach their targets.
+# A flat 48h was too short for H4 trades, which routinely take 3–7 days.
+_TF_MAX_AGE = {
+    "M5":  24 * 3600,
+    "M15": 48 * 3600,
+    "M30": 72 * 3600,
+    "H1":  5 * 24 * 3600,   # 5 days
+    "H4":  10 * 24 * 3600,  # 10 days
+    "D1":  20 * 24 * 3600,  # 20 days
+}
+_DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600  # 5 days fallback
 
 
 def _load() -> List[Dict[str, Any]]:
@@ -41,8 +52,10 @@ def open_trade(
     tp3: float = None,
 ) -> None:
     trades = _load()
-    # Only one open trade at a time per direction — replace if same direction exists
-    trades = [t for t in trades if t.get("status") != "open" or t.get("direction") != direction]
+    # Only one open/tp1_hit trade per timeframe — replace if same timeframe already has one.
+    # Previously this deduped by direction, which silently dropped an H4 SELL when any
+    # other SELL fired on a different timeframe.
+    trades = [t for t in trades if not (t.get("status") in ("open", "tp1_hit") and t.get("timeframe") == timeframe)]
     trade = {
         "id":          str(int(time.time())),
         "direction":   direction,
@@ -100,7 +113,8 @@ def check_trades(current_price: float, recent_high: float = None,
             continue
 
         age = time.time() - t.get("opened_at", 0)
-        if age > MAX_TRADE_AGE:
+        max_age = _TF_MAX_AGE.get(t.get("timeframe"), _DEFAULT_MAX_TRADE_AGE)
+        if age > max_age:
             t["status"] = "expired"
             changed = True
             logger.info(f"Trade {t['id']} expired after {age/3600:.1f}h")
@@ -171,7 +185,7 @@ def check_trades(current_price: float, recent_high: float = None,
 
 
 def open_trade_count() -> int:
-    return sum(1 for t in _load() if t.get("status") == "open")
+    return sum(1 for t in _load() if t.get("status") in ("open", "tp1_hit"))
 
 
 def get_all_trades() -> List[Dict[str, Any]]:

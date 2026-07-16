@@ -48,7 +48,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         from src.analysis.market_data import get_gold_price
         from src.utils.formatting import active_trades_card
         msg = await update.message.reply_text("Fetching active trades...")
-        open_trades = [t for t in trade_tracker.get_all_trades() if t.get("status") == "open"]
+        open_trades = [t for t in trade_tracker.get_all_trades() if t.get("status") in ("open", "tp1_hit")]
         try:
             price = await get_gold_price()
         except Exception:
