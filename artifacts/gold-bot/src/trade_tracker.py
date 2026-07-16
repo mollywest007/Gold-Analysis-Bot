@@ -66,15 +66,32 @@ def open_trade(
     logger.info(f"Trade opened: {direction} @ {entry:.2f}  SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}{tp3_str}")
 
 
-def check_trades(current_price: float) -> List[Dict[str, Any]]:
+def check_trades(current_price: float, recent_high: float = None,
+                  recent_low: float = None,
+                  tf_extremes: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     Evaluate all open trades against current_price.
+
+    recent_high/recent_low (optional): fallback high/low to use for any
+    trade whose own timeframe isn't present in tf_extremes.
+
+    tf_extremes (optional): { "M15": (high, low), "H1": (high, low), ... } —
+    the high/low of each timeframe's current forming candle since the last
+    check. Gold can wick through a TP/SL level for a few seconds and snap
+    back before the next 30s poll samples current_price — checking only the
+    single spot price would miss that touch entirely (or worse, report the
+    wrong exit price once price has already moved on). Using each trade's
+    own timeframe candle extremes lets a fast wick still register the touch,
+    which is what would have actually filled on a real broker order sitting
+    at that level.
+
     Returns a list of event dicts:
       {trade, event: 'TP1'|'TP2'|'SL', exit_price}
     """
     trades  = _load()
     events  = []
     changed = False
+    tf_extremes = tf_extremes or {}
 
     for t in trades:
         status = t.get("status", "")
@@ -94,42 +111,58 @@ def check_trades(current_price: float) -> List[Dict[str, Any]]:
         tp1 = t["tp1"]
         tp2 = t["tp2"]
 
+        tf_hi, tf_lo = tf_extremes.get(t.get("timeframe"), (None, None))
+        hi = tf_hi if tf_hi is not None else (recent_high if recent_high is not None else current_price)
+        lo = tf_lo if tf_lo is not None else (recent_low  if recent_low  is not None else current_price)
+        # Never let the candle-derived extreme be less informative than the
+        # live spot price itself (covers the gap between candle close and now).
+        hi = max(hi, current_price)
+        lo = min(lo, current_price)
+
         if d == "BUY":
-            sl_hit  = current_price <= sl
-            tp1_hit = current_price >= tp1
-            tp2_hit = current_price >= tp2
+            sl_hit    = lo <= sl
+            tp1_hit   = hi >= tp1
+            tp2_hit   = hi >= tp2
+            # Exit price = the level itself (what would actually have filled),
+            # not current_price, since a wick may have already retraced.
+            sl_exit   = sl
+            tp1_exit  = tp1
+            tp2_exit  = tp2
         else:  # SELL
-            sl_hit  = current_price >= sl
-            tp1_hit = current_price <= tp1
-            tp2_hit = current_price <= tp2
+            sl_hit    = hi >= sl
+            tp1_hit   = lo <= tp1
+            tp2_hit   = lo <= tp2
+            sl_exit   = sl
+            tp1_exit  = tp1
+            tp2_exit  = tp2
 
         if sl_hit:
             # If TP1 was already captured, mark distinctly so history shows TP1→SL
             if t.get("tp1_hit"):
                 t["status"] = "tp1_sl_hit"
                 changed = True
-                events.append({"trade": t, "event": "TP1_SL", "exit_price": current_price})
-                logger.info(f"Trade {t['id']} SL hit after TP1 partial @ {current_price:.2f}")
+                events.append({"trade": t, "event": "TP1_SL", "exit_price": sl_exit})
+                logger.info(f"Trade {t['id']} SL hit after TP1 partial @ {sl_exit:.2f}")
             else:
                 t["status"] = "sl_hit"
                 changed = True
-                events.append({"trade": t, "event": "SL", "exit_price": current_price})
-                logger.info(f"Trade {t['id']} SL hit @ {current_price:.2f}")
+                events.append({"trade": t, "event": "SL", "exit_price": sl_exit})
+                logger.info(f"Trade {t['id']} SL hit @ {sl_exit:.2f}")
 
         elif tp2_hit and not t.get("tp2_hit"):
             t["tp2_hit"] = True
             t["tp1_hit"] = True   # TP1 implicitly cleared if TP2 is reached
             t["status"]  = "tp2_hit"
             changed = True
-            events.append({"trade": t, "event": "TP2", "exit_price": current_price})
-            logger.info(f"Trade {t['id']} TP2 hit @ {current_price:.2f}")
+            events.append({"trade": t, "event": "TP2", "exit_price": tp2_exit})
+            logger.info(f"Trade {t['id']} TP2 hit @ {tp2_exit:.2f}")
 
         elif tp1_hit and not t.get("tp1_hit"):
             t["tp1_hit"] = True
             t["status"]  = "tp1_hit"   # record partial win; trade stays tracked for TP2
             changed = True
-            events.append({"trade": t, "event": "TP1", "exit_price": current_price})
-            logger.info(f"Trade {t['id']} TP1 hit @ {current_price:.2f}")
+            events.append({"trade": t, "event": "TP1", "exit_price": tp1_exit})
+            logger.info(f"Trade {t['id']} TP1 hit @ {tp1_exit:.2f}")
 
     if changed:
         _save(trades)

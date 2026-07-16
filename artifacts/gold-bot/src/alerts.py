@@ -10,7 +10,7 @@ from telegram import InputFile
 from telegram.ext import ContextTypes
 
 from src.analysis import analyze
-from src.analysis.market_data import get_gold_price, invalidate_cache
+from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
 from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
@@ -480,10 +480,28 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # ── Check open trades for TP/SL hits ──────────────────────────────────────
+    # Use each open trade's own timeframe candle (high/low) rather than a
+    # single spot-price snapshot — a 30s poll can miss a brief wick through
+    # TP/SL and either report the wrong exit price or miss the touch outright.
     try:
         current_price = await get_gold_price()
         if current_price > 0:
-            events = trade_tracker.check_trades(current_price)
+            open_tfs = {
+                t.get("timeframe") for t in trade_tracker.get_all_trades()
+                if t.get("status") in ("open", "tp1_hit") and t.get("timeframe")
+            }
+            tf_extremes: Dict[str, tuple] = {}
+            if open_tfs:
+                ohlcv_results = await asyncio.gather(
+                    *[fetch_ohlcv(tf) for tf in open_tfs],
+                    return_exceptions=True,
+                )
+                for tf, data in zip(open_tfs, ohlcv_results):
+                    if isinstance(data, Exception) or data is None or not data.highs:
+                        continue
+                    tf_extremes[tf] = (data.highs[-1], data.lows[-1])
+
+            events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
                 # Trade closed — unlock this timeframe so the next entry signal fires fresh
