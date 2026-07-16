@@ -1332,6 +1332,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     raw_wp += extra_votes * 3                       # each extra indicator vote: +3
     if session_label == "London/NY Overlap": raw_wp += 5
     elif session_label == "London":          raw_wp += 3
+    elif session_label == "Asian":           raw_wp += 2   # Asian session: gold moves, just less volume
     if htf_align:                            raw_wp += 4   # higher TF agrees
     if ob_at:                                raw_wp += 3   # at institutional OB level
     if (choch == "BULLISH_CHOCH" and direction == "BUY") or \

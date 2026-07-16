@@ -1137,8 +1137,22 @@ def multi_timeframe_card(analyses: list) -> str:
                 f"TP1     : {fmt_price(a.tp1)}",
                 f"TP2     : {fmt_price(a.tp2)}",
             ]
-        win_pct = a.win_probability if a.win_probability else 0
-        lines.append(f"Win %   : {_win_bar(win_pct)}")
+        if a.action in ("BUY", "SELL") and a.win_probability:
+            win_pct = a.win_probability
+            gate_ok = win_pct >= 68 and a.setup_quality in ("A+", "A") and a.adx >= 25
+            gate_icon = "✅" if gate_ok else "❌"
+            if not gate_ok:
+                reasons = []
+                if win_pct < 68:      reasons.append(f"win {win_pct}%<68%")
+                if a.adx < 25:        reasons.append(f"ADX {a.adx:.0f}<25")
+                if a.setup_quality not in ("A+", "A"): reasons.append(f"grade {a.setup_quality}")
+                gate_note = f" ({', '.join(reasons)})"
+            else:
+                gate_note = " — alert will fire"
+            lines.append(f"Win %   : {_win_bar(win_pct)}")
+            lines.append(f"Alert   : {gate_icon}{gate_note}")
+        else:
+            lines.append(f"Win %   : —")
         lines.append(WIDE)
 
     # ── Alert cooldown summary ─────────────────────────────────────────────────
