@@ -1136,6 +1136,7 @@ def multi_timeframe_card(analyses: list) -> str:
                 f"SL      : {fmt_price(a.stop_loss)}",
                 f"TP1     : {fmt_price(a.tp1)}",
                 f"TP2     : {fmt_price(a.tp2)}",
+                f"Win %   : {_win_bar(a.win_probability)}",
             ]
         lines.append(WIDE)
 
