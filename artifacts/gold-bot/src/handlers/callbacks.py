@@ -95,7 +95,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 from src import trade_tracker
                 from src.analysis.market_data import get_gold_price
                 from src.utils.formatting import active_trades_card
-                await query.answer("Refreshing active trades…")
                 open_trades = [
                     t for t in trade_tracker.get_all_trades()
                     if t.get("status") in ("open", "tp1_hit")
@@ -113,7 +112,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if command == "news":
                 from src.news import fetch_gold_news
                 from src.utils.formatting import news_card
-                await query.answer("Fetching latest headlines…")
                 items = await fetch_gold_news()
                 await query.edit_message_text(
                     news_card(items), parse_mode="HTML", reply_markup=kb
@@ -123,7 +121,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if command == "history":
                 from src import trade_tracker
                 from src.utils.formatting import history_card
-                await query.answer("Refreshing history…")
                 trades = trade_tracker.get_all_trades()
                 stats  = trade_tracker.get_stats()
                 await query.edit_message_text(
