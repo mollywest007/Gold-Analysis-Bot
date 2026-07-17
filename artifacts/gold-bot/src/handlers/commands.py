@@ -329,7 +329,8 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:
         price = 0.0
     text = active_trades_card(open_trades, price)
-    await msg.edit_text(text, parse_mode="HTML")
+    await msg.edit_text(text, parse_mode="HTML",
+                        reply_markup=refresh_keyboard("active", "none"))
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -347,7 +348,8 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         from src.news import fetch_gold_news
         items = await fetch_gold_news()
-        await msg.edit_text(news_card(items), parse_mode="HTML")
+        await msg.edit_text(news_card(items), parse_mode="HTML",
+                            reply_markup=refresh_keyboard("news", "none"))
     except Exception as e:
         logger.error(f"news error: {e}")
         await msg.edit_text("Could not fetch news right now. Try again shortly.")
@@ -358,7 +360,8 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     from src.utils.formatting import history_card
     trades = trade_tracker.get_all_trades()
     stats  = trade_tracker.get_stats()
-    await update.message.reply_text(history_card(trades, stats), parse_mode="HTML")
+    await update.message.reply_text(history_card(trades, stats), parse_mode="HTML",
+                                    reply_markup=refresh_keyboard("history", "none"))
 
 
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -443,7 +446,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Step 4: Send analysis card ────────────────────────────────────────────
     if gemini_ok:
         try:
-            await update.message.reply_text(_result_card(result), parse_mode="HTML")
+            await update.message.reply_text(_result_card(result), parse_mode="HTML",
+                                            reply_markup=refresh_keyboard("chart", tf))
             await msg.delete()
         except Exception as e:
             logger.warning(f"cmd_chart — result card send failed: {e}")
@@ -453,7 +457,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             from src.analysis import analyze
             from src.utils.formatting import pro_analysis_card, early_entry_card
             a = await analyze(tf)
-            await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML")
+            await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
+                                            reply_markup=refresh_keyboard("chart", tf))
             await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
             await msg.delete()
         except Exception as e:

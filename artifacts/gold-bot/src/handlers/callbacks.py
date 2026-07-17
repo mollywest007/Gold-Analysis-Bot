@@ -90,6 +90,59 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         kb = refresh_keyboard(command, tf_arg)
 
         try:
+            # ── Commands available 24/7 (no market-open check) ────────────────
+            if command == "active":
+                from src import trade_tracker
+                from src.analysis.market_data import get_gold_price
+                from src.utils.formatting import active_trades_card
+                await query.answer("Refreshing active trades…")
+                open_trades = [
+                    t for t in trade_tracker.get_all_trades()
+                    if t.get("status") in ("open", "tp1_hit")
+                    or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
+                ]
+                try:
+                    price = await get_gold_price()
+                except Exception:
+                    price = 0.0
+                await query.edit_message_text(
+                    active_trades_card(open_trades, price), parse_mode="HTML", reply_markup=kb
+                )
+                return
+
+            if command == "news":
+                from src.news import fetch_gold_news
+                from src.utils.formatting import news_card
+                await query.answer("Fetching latest headlines…")
+                items = await fetch_gold_news()
+                await query.edit_message_text(
+                    news_card(items), parse_mode="HTML", reply_markup=kb
+                )
+                return
+
+            if command == "history":
+                from src import trade_tracker
+                from src.utils.formatting import history_card
+                await query.answer("Refreshing history…")
+                trades = trade_tracker.get_all_trades()
+                stats  = trade_tracker.get_stats()
+                await query.edit_message_text(
+                    history_card(trades, stats), parse_mode="HTML", reply_markup=kb
+                )
+                return
+
+            if command == "chart":
+                # Re-run engine analysis for the chart TF (photo can't be re-sent
+                # via edit — refresh the text analysis card underneath it instead)
+                from src.utils.formatting import pro_analysis_card
+                await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
+                a = await analyze(tf)
+                await query.edit_message_text(
+                    pro_analysis_card(a), parse_mode="HTML", reply_markup=kb
+                )
+                return
+
+            # ── Market-open gate for analysis commands ────────────────────────
             if not _is_open():
                 await query.edit_message_text(_closed_text(), parse_mode="HTML",
                                               reply_markup=kb)
