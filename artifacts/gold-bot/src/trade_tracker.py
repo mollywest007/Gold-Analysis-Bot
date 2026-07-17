@@ -120,6 +120,10 @@ def check_trades(current_price: float, recent_high: float = None,
             t["status"] = "expired"
             changed = True
             logger.info(f"Trade {t['id']} expired after {age/3600:.1f}h")
+            # Return an EXPIRED event so alerts.py can release the signal lock
+            # for this timeframe — without this, the TF stays permanently locked
+            # and the next genuine entry signal is silently suppressed forever.
+            events.append({"trade": t, "event": "EXPIRED", "exit_price": t.get("entry", 0)})
             continue
 
         d   = t["direction"]

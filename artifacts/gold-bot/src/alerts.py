@@ -513,9 +513,17 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:
+                closed_tf = ev["trade"].get("timeframe")
+                if ev["event"] == "EXPIRED":
+                    # Silently release the lock — no message sent for expired trades.
+                    # Without this, the timeframe stays locked after expiry and the
+                    # next genuine entry signal is permanently suppressed.
+                    logger.info(f"[{closed_tf}] Trade expired — signal lock released.")
+                    if closed_tf:
+                        clear_signal_lock(closed_tf)
+                    continue
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
                 # Trade closed — unlock this timeframe so the next entry signal fires fresh
-                closed_tf = ev["trade"].get("timeframe")
                 if closed_tf:
                     clear_signal_lock(closed_tf)
     except Exception as e:
@@ -545,12 +553,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
         if a.action not in ("BUY", "SELL"):
-            if tf in _active_signal:
-                logger.info(f"[{tf}] Signal cleared (now {a.action}) — lock released.")
-                _active_signal.pop(tf)
-                state_changed = True
-            else:
-                logger.info(f"[{tf}] No signal.")
+            # Do NOT clear the lock on WAIT — the market briefly returning WAIT
+            # between two candles of the same direction is normal oscillation,
+            # not a genuine signal reset. Clearing here caused the bot to
+            # re-fire the same SELL/BUY alert every time analysis dipped to WAIT
+            # for one cycle. Lock is released only by: trade close/SL/expire, or
+            # a confirmed flip to the opposite direction.
+            logger.info(f"[{tf}] No signal ({a.action}) — signal lock preserved.")
             continue
 
         if _should_send(tf, a.action):
