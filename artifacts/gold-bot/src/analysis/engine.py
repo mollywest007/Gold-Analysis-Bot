@@ -1025,12 +1025,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
-    if buy_score > sell_score and margin > 0.05 and buy_votes >= MIN_VOTES:
+    # margin > 0.02: low enough to capture signals when 4 indicators agree but
+    # scores are close due to weighting — previously valid setups dropped to NEUTRAL
+    if buy_score > sell_score and margin > 0.02 and buy_votes >= MIN_VOTES:
         direction = "BUY"
         bias      = "Bullish"
         if di_conf_buy:
             confidence = min(97, confidence + 5)
-    elif sell_score > buy_score and margin > 0.05 and sell_votes >= MIN_VOTES:
+    elif sell_score > buy_score and margin > 0.02 and sell_votes >= MIN_VOTES:
         direction = "SELL"
         bias      = "Bearish"
         if di_conf_sell:

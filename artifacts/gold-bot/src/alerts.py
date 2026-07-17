@@ -657,24 +657,30 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 continue
 
-            # Require HTF alignment — no counter-trend alerts
-            htf_aligned = a.htf_bias in ("Bullish", "Slightly Bullish") and a.action == "BUY" or \
-                          a.htf_bias in ("Bearish", "Slightly Bearish") and a.action == "SELL" or \
-                          a.htf_bias == "Neutral"  # neutral HTF: allow, no penalty
-            if not htf_aligned:
+            # HTF alignment gate — block STRONG counter-trend only.
+            # "Slightly" counter-trend is a valid pullback opportunity: the engine
+            # already applies a -12 confidence penalty, and the alert card shows
+            # the counter-trend warning. Hard-blocking it means missing valid entries.
+            htf_strongly_against = (
+                (a.action == "BUY"  and a.htf_bias == "Bearish") or
+                (a.action == "SELL" and a.htf_bias == "Bullish")
+            )
+            if htf_strongly_against:
                 logger.info(
-                    f"[{tf}] Filtered — counter-trend signal "
-                    f"({a.action} vs HTF={a.htf_bias}). No counter-trend alerts."
+                    f"[{tf}] Filtered — strong counter-trend "
+                    f"({a.action} vs HTF={a.htf_bias}). Too risky."
                 )
                 continue
 
-            # Quality gate — only A+ and A setups, win probability ≥ 62%,
-            # some trend confirmation (ADX ≥ 20). B/C/weak signals are skipped.
-            if a.win_probability < 62 or a.setup_quality not in ("A+", "A") or a.adx < 20:
+            # Quality gate — only A+ and A setups, win probability ≥ 62%.
+            # ADX is NOT re-checked here: the grade assignment in engine.py already
+            # requires ADX ≥ 17 (kill zone) or ≥ 20 (normal) for grade A.
+            # Double-gating on ADX blocks valid kill-zone signals at ADX 17–19.
+            if a.win_probability < 62 or a.setup_quality not in ("A+", "A"):
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
-                    f"Need win≥62% + grade A/A+ + ADX≥20 + HTF aligned."
+                    f"Need win≥62% + grade A/A+."
                 )
                 continue
             new_signals.append((tf, a))
