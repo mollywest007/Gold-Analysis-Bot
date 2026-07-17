@@ -85,7 +85,7 @@ async def _fetch_goldapi(session: aiohttp.ClientSession) -> Optional[float]:
                 if price and 500 < float(price) < 25000:
                     return float(price)
     except Exception as e:
-        logger.debug(f"gold-api.com: {e}")
+        logger.warning(f"gold-api.com fetch failed: {e}")
     return None
 
 
@@ -104,7 +104,7 @@ async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
                         if 500 < mid < 25000:
                             return mid
     except Exception as e:
-        logger.debug(f"swissquote: {e}")
+        logger.warning(f"swissquote fetch failed: {e}")
     return None
 
 
@@ -120,7 +120,7 @@ async def _fetch_yf_last_close(session: aiohttp.ClientSession) -> Optional[float
                     logger.info(f"Fallback: YF futures {price:.2f} (includes basis)")
                     return float(price)
     except Exception as e:
-        logger.debug(f"YF futures: {e}")
+        logger.warning(f"YF futures fetch failed: {e}")
     return None
 
 
@@ -176,7 +176,16 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
                     return None
                 raw = await resp.json(content_type=None)
 
-        result = raw["chart"]["result"][0]
+        chart   = raw.get("chart", {})
+        results = chart.get("result") or []
+        if not results:
+            err = (chart.get("error") or {})
+            logger.warning(
+                f"YF returned no result for {timeframe}: "
+                f"{err.get('description', 'unknown error')}"
+            )
+            return None
+        result = results[0]
         quote  = result["indicators"]["quote"][0]
 
         opens   = _clean(quote.get("open",   []))

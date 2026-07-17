@@ -35,6 +35,10 @@ SCAN_TIMEFRAMES = ["M15", "M30", "H1", "H4"]  # M5 removed — too noisy for gol
 # This means no missed entries due to arbitrary timers.
 TF_SIGNAL_COOLDOWNS: Dict[str, int] = {}
 
+# Maximum age a signal lock is held before auto-expiring.
+# Prevents a missed TP/SL detection from permanently blocking future signals.
+SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
+
 # Confluence alert — fires ONE grouped card when this many TFs agree.
 # Below this threshold each TF fires its own individual card.
 CONFLUENCE_MIN_TFS = 3
@@ -89,8 +93,10 @@ def _load_signal_state() -> None:
             _active_signal = s.get("active_signal", {})
             _tf_last_fired = s.get("last_fired", {})
             logger.info(f"Signal state loaded: {_active_signal}")
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
+    except FileNotFoundError:
+        pass  # Normal on first run
+    except json.JSONDecodeError as e:
+        logger.warning(f"Signal state file corrupted ({e}) — starting fresh.")
 
 
 def _save_signal_state() -> None:
@@ -105,9 +111,21 @@ def _should_send(tf: str, action: str) -> bool:
     Fire alert whenever the direction is new for this TF.
     Same direction = same trade still open, no re-alert until it resets.
     Resets happen when: signal flips to WAIT/opposite, or trade closes.
+    Also auto-clears locks older than SIGNAL_LOCK_MAX_AGE to prevent
+    a missed TP/SL detection from permanently suppressing future signals.
     """
     prev = _active_signal.get(tf)
     if prev == action:
+        last_fired = _tf_last_fired.get(tf, 0.0)
+        age = time.time() - last_fired
+        if age > SIGNAL_LOCK_MAX_AGE:
+            logger.warning(
+                f"[{tf}] Signal lock expired after {age / 3600:.1f}h — "
+                f"auto-clearing stale {prev} lock so next entry fires freely."
+            )
+            _active_signal.pop(tf, None)
+            _tf_last_fired.pop(tf, None)
+            return True
         logger.info(f"[{tf}] Suppressed — {action} already active on this TF (same trade).")
         return False
     return True
@@ -424,8 +442,8 @@ def _mark_startup_sent() -> None:
     try:
         with open(_STARTUP_STAMP, "w") as f:
             f.write(str(time.time()))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not write startup stamp: {e}")
 
 
 async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -593,13 +611,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 continue
 
-            # Quality gate — only A+ and A setups, win probability ≥ 68%,
-            # confirmed trend (ADX ≥ 25). B/C/weak signals are skipped entirely.
-            if a.win_probability < 68 or a.setup_quality not in ("A+", "A") or a.adx < 25:
+            # Quality gate — only A+ and A setups, win probability ≥ 62%,
+            # some trend confirmation (ADX ≥ 20). B/C/weak signals are skipped.
+            if a.win_probability < 62 or a.setup_quality not in ("A+", "A") or a.adx < 20:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
-                    f"Need win≥68% + grade A/A+ + ADX≥25 + HTF aligned."
+                    f"Need win≥62% + grade A/A+ + ADX≥20 + HTF aligned."
                 )
                 continue
             new_signals.append((tf, a))

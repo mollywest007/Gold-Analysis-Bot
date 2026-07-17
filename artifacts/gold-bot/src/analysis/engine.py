@@ -1436,9 +1436,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "BB %B")
             and i.signal == action
         )
-        if win_probability >= 68 and core_votes >= 5 and adx >= 30:
+        if win_probability >= 68 and core_votes >= 5 and adx >= 25:
             setup_quality = "A+"
-        elif win_probability >= 62 and core_votes >= 4 and adx >= 25:
+        elif win_probability >= 62 and core_votes >= 4 and adx >= 20:
             setup_quality = "A"
         elif win_probability >= 55:
             setup_quality = "B"
