@@ -24,6 +24,8 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
+# Track which trade IDs have already had a reminder sent (avoid double-nudge)
+_reminded_trade_ids: Set[str] = set()
 
 SCAN_TIMEFRAMES = ["M15", "M30", "H1", "H4"]  # M5 removed — too noisy for gold entries
 
@@ -672,6 +674,94 @@ async def _safe_analyze(tf: str):
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")
         return None
+
+
+async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Runs every 10 minutes. For every open trade that is 8–25 minutes old and
+    where price is still within 0.5% of the entry, broadcast a reminder nudge
+    so users who missed the original alert can still act on it.
+    A trade only ever gets ONE reminder — tracked in _reminded_trade_ids.
+    """
+    global _reminded_trade_ids
+
+    all_trades = trade_tracker.get_all_trades()
+    open_trades = [
+        t for t in all_trades
+        if t.get("status") in ("open", "tp1_hit")
+    ]
+    if not open_trades:
+        return
+
+    subs = _load()
+    if not subs:
+        return
+
+    try:
+        current_price = await get_gold_price()
+    except Exception as e:
+        logger.warning(f"Reminder — could not fetch price: {e}")
+        return
+
+    now = time.time()
+    for trade in open_trades:
+        trade_id  = trade.get("id", "")
+        opened_at = trade.get("opened_at", 0)
+        age_secs  = now - opened_at
+        entry     = trade.get("entry", 0)
+
+        # Only remind once, and only in the 8–25 minute window after the alert
+        if trade_id in _reminded_trade_ids:
+            continue
+        if not (8 * 60 <= age_secs <= 25 * 60):
+            continue
+
+        # Only remind if price is still within 0.5% of entry (entry still reachable)
+        if entry <= 0 or abs(current_price - entry) / entry > 0.005:
+            _reminded_trade_ids.add(trade_id)  # price moved away, skip forever
+            continue
+
+        direction = trade.get("direction", "")
+        tf        = trade.get("timeframe", "")
+        sl        = trade.get("sl", 0)
+        tp1       = trade.get("tp1", 0)
+        tp2       = trade.get("tp2")
+        tp3       = trade.get("tp3")
+        conf      = trade.get("confidence", 0)
+
+        sl_dist = abs(entry - sl)
+        rr1 = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 and tp1 else 0
+        rr3 = round(abs(tp3 - entry) / sl_dist, 1) if sl_dist > 0 and tp3 else 0
+
+        dir_emoji  = "🟢" if direction == "BUY" else "🔴"
+        tp2_line   = f"\nTP2 : <b>{tp2:,.2f}</b>" if tp2 else ""
+        tp3_line   = f"\nTP3 : <b>{tp3:,.2f}</b>  (1:{rr3})" if tp3 else ""
+        age_min    = int(age_secs // 60)
+
+        text = (
+            f"⚠️ <b>MISSED ALERT REMINDER</b>\n"
+            f"{'─' * 30}\n"
+            f"{dir_emoji} <b>{direction}  XAU/USD  {tf}</b>\n"
+            f"Fired {age_min} min ago — entry still reachable\n"
+            f"{'─' * 30}\n"
+            f"Entry : <b>{entry:,.2f}</b>  (now {current_price:,.2f})\n"
+            f"SL    : <b>{sl:,.2f}</b>\n"
+            f"TP1   : <b>{tp1:,.2f}</b>  (1:{rr1}){tp2_line}{tp3_line}\n"
+            f"{'─' * 30}\n"
+            f"Confidence: {conf}%\n"
+            f"Use /active to track this trade live."
+        )
+
+        dead = await _broadcast_text(context.bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+
+        _reminded_trade_ids.add(trade_id)
+        logger.info(
+            f"[REMINDER] {direction} {tf} @ {entry:.2f} — "
+            f"age={age_min}m, price={current_price:.2f}, sent to {len(subs)} sub(s)"
+        )
 
 
 # Load persisted signal state on module import

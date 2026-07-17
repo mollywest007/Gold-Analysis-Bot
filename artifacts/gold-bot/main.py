@@ -15,7 +15,7 @@ from src.handlers import (
     register_message_handlers,
     register_photo_handlers,
 )
-from src.alerts import check_and_alert, send_market_conditions_summary, send_startup_summary
+from src.alerts import check_and_alert, send_market_conditions_summary, send_startup_summary, send_trade_reminder
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -160,6 +160,14 @@ def main() -> None:
         interval=4 * 3600,
         first=4 * 3600,
         name="market_conditions",
+    )
+
+    # Missed-alert reminder — check every 10 minutes for open trades still near entry
+    app.job_queue.run_repeating(
+        send_trade_reminder,
+        interval=10 * 60,
+        first=10 * 60,
+        name="trade_reminder",
     )
 
     logger.info(
