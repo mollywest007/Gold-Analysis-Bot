@@ -920,6 +920,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     session_label, session_mult = get_trading_session()
     vol_spike = is_volume_spike(volumes, lookback=20, threshold=1.5)
 
+    # Detect kill zone early — used to lower vote threshold and grade bars
+    # so institutional moves at London/NY open are caught before full alignment
+    kill_zone_label_early, is_kill_zone_early = get_kill_zone()
+
     # ── Pro-grade signal detection (ICT / SMC concepts) ───────────────────────
     rsi_div                     = detect_rsi_divergence(closes, lookback=20)
     div_sig, div_conf           = _score_divergence(rsi_div)
@@ -1015,7 +1019,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     confidence  = max(50, min(97, base_conf))
 
     margin    = abs(buy_score - sell_score)
-    MIN_VOTES = 4   # require 4+ indicators to agree — filters weak/marginal signals
+    # Kill zone: institutions move fast at London/NY open — catch the signal one
+    # indicator earlier so the alert fires at the start of the move, not the middle.
+    MIN_VOTES = 3 if is_kill_zone_early else 4
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
@@ -1338,10 +1344,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     if (choch == "BULLISH_CHOCH" and direction == "BUY") or \
        (choch == "BEARISH_CHOCH" and direction == "SELL"):
         raw_wp += 4   # confirmed change of character in signal's direction
-    win_probability = max(50, min(72, int(raw_wp))) if action in ("BUY", "SELL") else 0
+    win_probability = max(50, min(85, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
     # ── ICT / Institutional context ────────────────────────────────────────────
-    kill_zone_label, is_kill_zone = get_kill_zone()
+    kill_zone_label, is_kill_zone = kill_zone_label_early, is_kill_zone_early
     pdh, pdl = _calc_pdh_pdl(highs, lows, timeframe)
 
     # Premium/Discount: use the current day's candle range
@@ -1357,7 +1363,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     # Kill zone boosts win probability — institutions are active, moves are real
     if is_kill_zone and action in ("BUY", "SELL"):
-        win_probability = min(72, win_probability + 4)
+        win_probability = min(85, win_probability + 6)
         kz_cf = f"{kill_zone_label} — institutional active"
         if not any("Kill Zone" in c for c in confluence_list):
             confluence_list.append(kz_cf)
@@ -1368,7 +1374,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         (action == "SELL" and premium_discount == "PREMIUM")
     )
     if pd_aligned and action in ("BUY", "SELL"):
-        win_probability = min(72, win_probability + 2)
+        win_probability = min(85, win_probability + 2)
         pd_cf = f"{'Discount' if action == 'BUY' else 'Premium'} zone — favorable"
         if not any("zone" in c.lower() and "favorable" in c for c in confluence_list):
             confluence_list.append(pd_cf)
@@ -1436,9 +1442,12 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "BB %B")
             and i.signal == action
         )
-        if win_probability >= 68 and core_votes >= 5 and adx >= 25:
+        # Kill zones: institutions dominate, lower ADX thresholds are acceptable
+        adx_ap = 22 if is_kill_zone else 25
+        adx_a  = 17 if is_kill_zone else 20
+        if win_probability >= 68 and core_votes >= 5 and adx >= adx_ap:
             setup_quality = "A+"
-        elif win_probability >= 62 and core_votes >= 4 and adx >= 20:
+        elif win_probability >= 62 and core_votes >= 4 and adx >= adx_a:
             setup_quality = "A"
         elif win_probability >= 55:
             setup_quality = "B"

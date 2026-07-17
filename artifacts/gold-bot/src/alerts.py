@@ -39,6 +39,10 @@ TF_SIGNAL_COOLDOWNS: Dict[str, int] = {}
 # Prevents a missed TP/SL detection from permanently blocking future signals.
 SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
 
+# Tracks the last "setup forming" pre-alert sent per TF — avoids repeat spam
+# Structure: { "M15": "BUY", "H1": "SELL", ... }
+_forming_alert_sent: Dict[str, str] = {}
+
 # Confluence alert — fires ONE grouped card when this many TFs agree.
 # Below this threshold each TF fires its own individual card.
 CONFLUENCE_MIN_TFS = 3
@@ -147,6 +151,40 @@ def get_signal_lock_info(tf: str) -> str:
     last_fired = _tf_last_fired.get(tf, 0.0)
     elapsed    = int((time.time() - last_fired) // 60)
     return f"Alert sent {elapsed}m ago ({direction}) — waiting for signal to reset"
+
+
+async def _send_setup_forming_alert(
+    bot, subs: Set[int], a, tf: str, forming_dir: str
+) -> None:
+    """
+    Lightweight pre-signal notice — fires when 3 indicators agree but the full
+    signal hasn't triggered yet. Gives the trader a heads-up to watch the chart
+    and prepare a limit order, without committing to an entry.
+    Only fires once per direction per TF; resets when direction changes.
+    """
+    global _forming_alert_sent
+    if _forming_alert_sent.get(tf) == forming_dir:
+        return  # already warned this direction on this TF
+
+    _forming_alert_sent[tf] = forming_dir
+    arrow = "📈" if forming_dir == "BUY" else "📉"
+    kz_tag = f"  🔔 {a.kill_zone}" if getattr(a, "is_kill_zone", False) else ""
+    votes  = a.buy_votes if forming_dir == "BUY" else a.sell_votes
+    text = (
+        f"<pre>⚠️  SETUP FORMING  —  XAU/USD  {tf}\n"
+        f"{'─' * 34}\n"
+        f"{arrow}  Direction : {forming_dir}\n"
+        f"   Price    : {a.price:,.2f}\n"
+        f"   Votes    : {votes}/5 indicators agree\n"
+        f"   ADX      : {a.adx:.1f}   Conf: {a.confidence}%\n"
+        f"   HTF      : {a.htf_bias}{kz_tag}\n"
+        f"{'─' * 34}\n"
+        f"  Not a signal yet. Watch for entry.\n"
+        f"  Early limit @ OTE zone if available.\n"
+        f"</pre>"
+    )
+    await _broadcast_text(bot, subs, text)
+    logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/5 votes)")
 
 
 async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
@@ -580,7 +618,26 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             # for one cycle. Lock is released only by: trade close/SL/expire, or
             # a confirmed flip to the opposite direction.
             logger.info(f"[{tf}] No signal ({a.action}) — signal lock preserved.")
+
+            # Pre-signal: 3 indicators agree but full signal not confirmed yet.
+            # Warn the trader to watch the chart and prepare — early enough to
+            # place a limit order in the OTE zone before the move starts.
+            # Only fires when there is no active lock on this TF.
+            if not _active_signal.get(tf):
+                forming_dir = None
+                if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
+                    forming_dir = "BUY"
+                elif a.sell_votes >= 3 and a.sell_votes > a.buy_votes and a.adx >= 15:
+                    forming_dir = "SELL"
+                if forming_dir:
+                    await _send_setup_forming_alert(bot, subs, a, tf, forming_dir)
+                else:
+                    # Direction collapsed — reset forming state so next build-up fires fresh
+                    _forming_alert_sent.pop(tf, None)
             continue
+
+        # Full signal fired — reset the forming-alert state for this TF
+        _forming_alert_sent.pop(tf, None)
 
         if _should_send(tf, a.action):
             # Rotate lock immediately when direction flips — even if the new
