@@ -18,3 +18,15 @@ id = "rsHg8pIXFxBfeeapU2Sc3"
 uri = "file://artifacts/gold-bot/trade_loss_sample.png"
 type = "image"
 title = "TRADE LOSS — Stop Loss Hit"
+
+[[outputs]]
+id = "yial32VZO5yrpo0VX5Rto"
+uri = "file://artifacts/gold-bot/data/test_tp1.png"
+type = "image"
+title = "TP1 Hit — WIN image"
+
+[[outputs]]
+id = "jB68P0s5021RPBvnSiLDq"
+uri = "file://artifacts/gold-bot/data/test_sl.png"
+type = "image"
+title = "SL Hit — LOSS image"
