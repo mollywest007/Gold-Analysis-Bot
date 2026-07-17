@@ -198,10 +198,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
 
         except Exception as e:
-            logger.error(f"refresh:{command} error: {e}")
-            await query.edit_message_text(
-                "Refresh failed — try again in a moment.", reply_markup=kb
-            )
+            err_str = str(e).lower()
+            if "message is not modified" in err_str:
+                # Content identical — data hasn't changed since last refresh, nothing to do
+                logger.info(f"refresh:{command} — content unchanged, no edit needed")
+            else:
+                logger.error(f"refresh:{command} error: {e}")
+                try:
+                    await query.edit_message_text(
+                        "Refresh failed — try again in a moment.", reply_markup=kb
+                    )
+                except Exception:
+                    pass
         return
 
     # ── All analysis callbacks — blocked when market is closed ─────────────────
