@@ -1143,8 +1143,8 @@ def multi_timeframe_card(analyses: list) -> str:
             gate_icon = "✅" if gate_ok else "❌"
             if not gate_ok:
                 reasons = []
-                if win_pct < 68:      reasons.append(f"win {win_pct}%<68%")
-                if a.adx < 25:        reasons.append(f"ADX {a.adx:.0f}<25")
+                if win_pct < 68:      reasons.append(f"win {win_pct}%&lt;68%")
+                if a.adx < 25:        reasons.append(f"ADX {a.adx:.0f}&lt;25")
                 if a.setup_quality not in ("A+", "A"): reasons.append(f"grade {a.setup_quality}")
                 gate_note = f" ({', '.join(reasons)})"
             else:
