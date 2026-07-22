@@ -1,52 +1,47 @@
-# XAU/USD Gold Analysis Bot
+# Gold Analysis Bot
 
-A Telegram bot that delivers real-time gold trading signals, AI-powered chart analysis, and automated alerts for XAU/USD.
-
-## Stack
-
-- **Language:** Python 3.11
-- **Framework:** python-telegram-bot 20.7 (async, job-queue)
-- **AI:** Google AI (Gemini) via `GOOGLE_AI_KEY` — used for chart image analysis
-- **Data:** Live gold price fetched via aiohttp; analysis cached in-memory
+A Telegram bot that monitors XAU/USD (gold) across multiple timeframes and sends trade entry alerts and market condition summaries to a configured Telegram user.
 
 ## How to run
 
-The bot starts automatically via the **Gold Analysis Bot** workflow:
-
+The **Gold Analysis Bot** workflow starts automatically. It runs:
 ```
-cd artifacts/gold-bot && python main.py
+cd artifacts/gold-bot && .venv/bin/python main.py
 ```
 
 ## Required secrets
 
 | Secret | Purpose |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather — required |
-| `GOOGLE_AI_KEY` | Google AI Studio key — needed for `/chart` AI analysis |
-| `ALLOWED_USER_ID` | Your numeric Telegram user ID — preferred auth method |
-| `ALLOWED_USERNAME` | Your Telegram username — fallback if `ALLOWED_USER_ID` not set |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather ✅ |
+| `GOOGLE_AI_KEY` | Google AI Studio key for chart image analysis (get one free at aistudio.google.com/app/apikey) |
 
-`ALLOWED_USERNAME` defaults to `nailythachad`. Set `ALLOWED_USER_ID` as soon as possible (find it in bot logs after first `/start`) — numeric IDs are immutable, usernames are not.
+## Access control
 
-## Project layout
+Only the configured owner can use the bot. Set in `.replit` under `[userenv.shared]`:
+- `ALLOWED_USER_ID` — numeric Telegram user ID (preferred, immutable)
+- `ALLOWED_USERNAME` — Telegram username fallback
+
+## Project structure
 
 ```
-artifacts/gold-bot/
-  main.py              # Entry point, job scheduling, access gate
+artifacts/gold-bot/       # Main Telegram bot (Python)
+  main.py                 # Entry point — scheduler + bot setup
   src/
-    config.py          # Env-var config and auth settings
-    alerts.py          # Alert scanner and subscriber broadcast
-    analysis/
-      engine.py        # Core technical analysis (trend, RSI, ADX, S/R)
-      cache.py         # In-memory analysis cache
-      market_data.py   # Live price fetching
-    handlers/          # Telegram command/callback/message handlers
-    chart_analysis.py  # Google AI chart image analysis
-    trade_tracker.py   # Open/closed trade state (file-backed JSON)
-    market_hours.py    # Forex market open/close detection
-  data/                # Persistent JSON state files
+    config.py             # Env vars and constants
+    handlers/             # Telegram command/message handlers
+    analysis/             # Market data fetching + signal logic
+    alerts.py             # Alert scanning and dispatch
+    chart_generator.py    # Chart image generation
+    chart_analysis.py     # Google AI chart analysis
+    trade_tracker.py      # Open trade persistence
+  data/                   # Runtime state (subscribers, signals)
+  requirements.txt
+
+artifacts/api-server/     # TypeScript/Express API server
+lib/                      # Shared packages (db, api-spec, api-zod, api-client-react)
 ```
 
 ## User preferences
 
-- Keep project structure as-is; do not migrate or restructure without explicit request.
+- Keep existing project structure — do not restructure or migrate
