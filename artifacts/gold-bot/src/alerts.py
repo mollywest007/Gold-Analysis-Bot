@@ -61,12 +61,32 @@ _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
 
 
+def _is_authorized(chat_id: int) -> bool:
+    """Return True only if chat_id matches the configured owner."""
+    from src.config import ALLOWED_USER_ID, ALLOWED_USERNAME
+    if ALLOWED_USER_ID:
+        return chat_id == ALLOWED_USER_ID
+    if ALLOWED_USERNAME:
+        # Username-only mode: we can't resolve username→id here, so trust the
+        # access gate in main.py to have already blocked unauthorized users.
+        return True
+    return False
+
+
 def _load() -> Set[int]:
     try:
         with open(DATA_PATH, "r") as f:
-            return set(json.load(f).get("subscribers", []))
+            raw = set(json.load(f).get("subscribers", []))
     except (FileNotFoundError, json.JSONDecodeError):
         return set()
+    # Filter out any IDs that don't match the authorized owner.
+    # This ensures stale or injected subscribers are silently dropped.
+    authorized = {uid for uid in raw if _is_authorized(uid)}
+    if len(authorized) != len(raw):
+        removed = raw - authorized
+        logger.warning(f"Dropped {len(removed)} unauthorized subscriber(s) from list: {removed}")
+        _save(authorized)
+    return authorized
 
 
 def _save(subs: Set[int]) -> None:
@@ -76,12 +96,15 @@ def _save(subs: Set[int]) -> None:
 
 
 def register_user(chat_id: int) -> None:
-    """Auto-register a user when they start the bot. Alerts are free for everyone."""
+    """Register a user for alerts — only the authorized owner is accepted."""
+    if not _is_authorized(chat_id):
+        logger.warning(f"register_user: rejected unauthorized chat_id={chat_id}")
+        return
     users = _load()
     if chat_id not in users:
         users.add(chat_id)
         _save(users)
-        logger.info(f"New user registered: {chat_id} (total: {len(users)})")
+        logger.info(f"Owner registered for alerts: {chat_id}")
 
 
 def user_count() -> int:
