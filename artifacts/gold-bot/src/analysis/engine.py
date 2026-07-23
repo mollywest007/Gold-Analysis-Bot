@@ -560,6 +560,12 @@ HTF_MAP = {
 
 
 async def _get_htf_bias(htf: str) -> str:
+    """
+    Calculate HTF bias with price-action-first weighting.
+    DI crossover and recent candle direction are more responsive than lagging
+    EMAs — weighted heavier so the bias flips faster on genuine reversals.
+    Max possible score each side: 7. Bullish/Bearish = >= 5, Slightly = >= 3.
+    """
     try:
         data = await fetch_ohlcv(htf)
         if not data or len(data) < 30:
@@ -578,19 +584,35 @@ async def _get_htf_bias(htf: str) -> str:
         score_bull = 0
         score_bear = 0
 
+        # ── Price vs EMAs (lagging — 1pt each) ───────────────────────────────
         if price > ema20:  score_bull += 1
         else:              score_bear += 1
         if price > ema50:  score_bull += 1
         else:              score_bear += 1
-        if plus_di > minus_di and adx >= 18:  score_bull += 1
-        elif minus_di > plus_di and adx >= 18: score_bear += 1
-        if macd_line > sig_line and hist > 0: score_bull += 1
+
+        # ── DI crossover (most responsive — 2pts, double weight) ─────────────
+        # Flips as soon as directional momentum shifts, before EMAs catch up.
+        if plus_di > minus_di and adx >= 18:   score_bull += 2
+        elif minus_di > plus_di and adx >= 18: score_bear += 2
+
+        # ── MACD (1pt) ────────────────────────────────────────────────────────
+        if macd_line > sig_line and hist > 0:   score_bull += 1
         elif macd_line < sig_line and hist < 0: score_bear += 1
-        if rsi > 52: score_bull += 1
+
+        # ── RSI (1pt) ─────────────────────────────────────────────────────────
+        if rsi > 52:   score_bull += 1
         elif rsi < 48: score_bear += 1
 
-        if score_bull >= 4:   return "Bullish"
-        elif score_bear >= 4: return "Bearish"
+        # ── Recent candle body direction (1pt) — catches intra-candle reversals
+        # Uses last 3 closes: if majority falling, bearish pressure is building.
+        if len(closes) >= 3:
+            recent_dir = sum(1 if closes[i] < closes[i-1] else -1
+                             for i in range(-3, 0))
+            if recent_dir >= 2:   score_bear += 1   # 2 or 3 of last 3 falling
+            elif recent_dir <= -2: score_bull += 1  # 2 or 3 of last 3 rising
+
+        if score_bull >= 5:   return "Bullish"
+        elif score_bear >= 5: return "Bearish"
         elif score_bull >= 3: return "Slightly Bullish"
         elif score_bear >= 3: return "Slightly Bearish"
         return "Neutral"
@@ -673,10 +695,20 @@ def _score_stoch(k: float, d: float,
 
 
 def _score_bb(pct_b: float) -> Tuple[str, float]:
-    """Only score at genuine Bollinger Band extremes — ignore mid-band noise."""
-    if pct_b > 95:  return "SELL", 0.85
-    if pct_b < 5:   return "BUY",  0.85
-    # 5–95: BB%B in normal range — no vote (price can go anywhere from here)
+    """
+    Score Bollinger Band %B — extremes are strong, moderate zones get partial credit.
+    In trending markets BB rarely hits 95/5, so moderate thresholds catch real moves.
+
+    IMPORTANT: very low BB%B (< 5, or even negative) in a downtrend means the trend
+    is strong, not that price is about to bounce. We only give a BUY vote in the
+    20-22 zone (near lower band but not below it) — not below the band, which can
+    happen for many candles in a trending sell-off. Below-band is handled by the
+    trend-aware oscillator override further down instead.
+    """
+    if pct_b > 95:  return "SELL", 0.85   # hard overbought — above upper band
+    if pct_b < 5:   return "SELL", 0.60   # below lower band — trend continuation SELL
+    if pct_b > 78:  return "SELL", 0.60   # near upper band — extended
+    if pct_b < 22:  return "BUY",  0.60   # near lower band — potential support
     return "NEUTRAL", 0.0
 
 
@@ -946,22 +978,39 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     bb_sig,    bb_conf    = _score_bb(bb_pct)
 
     # ── Trend-aware oscillator override ───────────────────────────────────────
-    # In a confirmed trend (ADX >= 25 + price on correct side of EMA stack),
+    # In a confirmed trend (ADX >= 20 + price on correct side of EMA stack),
     # mid-zone RSI/Stoch/BB should read as continuation, not neutral.
-    # This prevents the common failure where a clean downtrend gets 2/5 SELL
-    # votes because oscillators sit neutral in oversold-but-trending territory.
-    if adx >= 25:
+    # Lowered from ADX >= 25 → 20 to catch early trend moves before full
+    # indicator alignment. In strong trends oscillators stay in "neutral"
+    # territory forever — this override prevents missed signals.
+    #
+    # GUARD: Do NOT override oscillators when a reversal candle is present —
+    # Bearish/Bullish Engulfing patterns signal the trend is ending.
+    # Inflating trend-continuation votes alongside a reversal candle produces
+    # artificially high scores in the wrong direction.
+    reversal_candle = candle_pat in (
+        "Bearish Engulfing", "Bullish Engulfing",
+        "Evening Star", "Morning Star",
+        "Shooting Star", "Hammer",
+        "Three Black Crows", "Three White Soldiers",
+    )
+    if adx >= 20 and not reversal_candle:
         in_downtrend = price < ema20 and ema20 < ema50
         in_uptrend   = price > ema20 and ema20 > ema50
-        if in_downtrend:
-            if rsi_sig == "NEUTRAL" and 35 <= rsi <= 58:
+        # Also catch EMA crossover zone: price crossed below EMA20 but EMA stack
+        # hasn't fully flipped yet — early trend-change signal.
+        di_gap = abs(plus_di - minus_di)
+        early_downtrend = price < ema20 and minus_di > plus_di and di_gap >= 5
+        early_uptrend   = price > ema20 and plus_di > minus_di and di_gap >= 5
+        if in_downtrend or early_downtrend:
+            if rsi_sig == "NEUTRAL" and 35 <= rsi <= 62:
                 rsi_sig, rsi_conf = "SELL", 0.60
             if stoch_sig == "NEUTRAL" and stoch_k <= 65:
                 stoch_sig, stoch_conf = "SELL", 0.55
             if bb_sig == "NEUTRAL" and 5 <= bb_pct <= 45:
                 bb_sig, bb_conf = "SELL", 0.55
-        elif in_uptrend:
-            if rsi_sig == "NEUTRAL" and 42 <= rsi <= 65:
+        elif in_uptrend or early_uptrend:
+            if rsi_sig == "NEUTRAL" and 38 <= rsi <= 65:
                 rsi_sig, rsi_conf = "BUY", 0.60
             if stoch_sig == "NEUTRAL" and stoch_k >= 35:
                 stoch_sig, stoch_conf = "BUY", 0.55
@@ -1435,22 +1484,32 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             early_entry_reason = "EMA/ATR retrace zone — sell the bounce, not market"
 
     # ── Setup quality grade ───────────────────────────────────────────────────
-    # Graded on indicator votes (not confluence list length, which is easily inflated).
-    # A+ = all 5 core indicators + trending market + good session
-    # A  = 4 core indicators agree + trending market
+    # Graded on indicator votes + structural confirmation (ChoCH).
+    # A+ = 5 core indicators + trending market
+    # A  = 4 core indicators OR 3 core + ChoCH (structural confirmation)
+    # B  = 3 core indicators, win >= 55%
     if action in ("BUY", "SELL"):
         core_votes = sum(
             1 for i in indicators
             if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "BB %B")
             and i.signal == action
         )
+        # ChoCH aligned with direction counts as structural confirmation —
+        # equivalent to one extra core indicator vote for grading purposes.
+        # A 3-vote setup with confirmed market structure break = grade A.
+        choch_confirmed = (
+            (action == "BUY"  and choch == "BULLISH_CHOCH") or
+            (action == "SELL" and choch == "BEARISH_CHOCH")
+        )
+        effective_votes = core_votes + (1 if choch_confirmed else 0)
+
         # Kill zones: institutions dominate, lower ADX thresholds are acceptable
         adx_ap = 22 if is_kill_zone else 25
         adx_a  = 17 if is_kill_zone else 20
-        if win_probability >= 68 and core_votes >= 5 and adx >= adx_ap:
+        if win_probability >= 68 and effective_votes >= 5 and adx >= adx_ap:
             setup_quality = "A+"
-        elif win_probability >= 62 and core_votes >= 4 and adx >= adx_a:
-            setup_quality = "A"
+        elif win_probability >= 60 and effective_votes >= 4 and adx >= adx_a:
+            setup_quality = "A"   # lowered from 62% — ChoCH path needs 60%
         elif win_probability >= 55:
             setup_quality = "B"
         else:

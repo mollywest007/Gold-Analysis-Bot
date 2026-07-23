@@ -542,6 +542,40 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1784791609",
+      "direction": "BUY",
+      "entry": 4110.4,
+      "sl": 4033.03,
+      "tp1": 4226.45,
+      "tp2": 4381.19,
+      "tp3": 4497.25,
+      "timeframe": "H4",
+      "confidence": 89,
+      "rr_ratio": 1.5,
+      "opened_at": 1784791609.4696372,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
+    },
+    {
+      "id": "1784792003",
+      "direction": "SELL",
+      "entry": 4104.4,
+      "sl": 4127.52,
+      "tp1": 4058.16,
+      "tp2": 4023.48,
+      "tp3": 3988.8,
+      "timeframe": "M30",
+      "confidence": 81,
+      "rr_ratio": 2.0,
+      "opened_at": 1784792003.431057,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }

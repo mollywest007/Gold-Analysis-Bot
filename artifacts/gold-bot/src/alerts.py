@@ -680,32 +680,82 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 continue
 
-            # HTF alignment gate — block STRONG counter-trend only.
+            # ── Cross-TF coherence block ──────────────────────────────────────
+            # Prevent HTF signals from contradicting a confirmed lower-TF lock.
+            # If M15 or M30 already has a confirmed SELL lock (active trade),
+            # a H4/H1 BUY alert would send the opposite signal — confusing and
+            # dangerous. The lower-TF lock means the trend is confirmed down on
+            # the immediate price action; the HTF lagging indicators haven't
+            # caught up yet. Block the contradicting signal until the lower lock
+            # is released by a trade close or direction flip.
+            TF_ORDER = ["M15", "M30", "H1", "H4"]
+            tf_rank  = TF_ORDER.index(tf) if tf in TF_ORDER else -1
+            lower_conflict = False
+            if tf_rank > 0:
+                lower_tfs = TF_ORDER[:tf_rank]
+                for ltf in lower_tfs:
+                    ltf_lock = _active_signal.get(ltf)
+                    if ltf_lock and ltf_lock != a.action:
+                        lower_conflict = True
+                        logger.info(
+                            f"[{tf}] Blocked — contradicts active {ltf_lock} lock "
+                            f"on {ltf}. HTF lagging; waiting for lower TF to clear."
+                        )
+                        break
+            if lower_conflict:
+                continue
+
+            # ── HTF alignment gate — block STRONG counter-trend only ──────────
             # "Slightly" counter-trend is a valid pullback opportunity: the engine
             # already applies a -12 confidence penalty, and the alert card shows
             # the counter-trend warning. Hard-blocking it means missing valid entries.
+            # Exception: ChoCH confirmed on this TF overrides the HTF block —
+            # a structural break is the PRO signal that the trend HAS reversed,
+            # even before the HTF bias catches up.
+            choch = getattr(a, "choch", "") or ""
+            choch_aligned = (
+                (a.action == "BUY"  and choch == "BULLISH_CHOCH") or
+                (a.action == "SELL" and choch == "BEARISH_CHOCH")
+            )
             htf_strongly_against = (
                 (a.action == "BUY"  and a.htf_bias == "Bearish") or
                 (a.action == "SELL" and a.htf_bias == "Bullish")
             )
-            if htf_strongly_against:
+            # Lower-TF same-direction lock overrides the HTF counter-trend block.
+            # If M15 is already confirmed SELL and M30 wants to fire SELL, that IS
+            # multi-TF confluence — not a counter-trend trade. The HTF block was
+            # designed to stop isolated signals, not to suppress aligned TF stacks.
+            lower_same_dir = any(
+                _active_signal.get(ltf) == a.action
+                for ltf in TF_ORDER[:tf_rank]
+            ) if tf_rank > 0 else False
+
+            if htf_strongly_against and not choch_aligned and not lower_same_dir:
                 logger.info(
                     f"[{tf}] Filtered — strong counter-trend "
                     f"({a.action} vs HTF={a.htf_bias}). Too risky."
                 )
                 continue
 
-            # Quality gate — only A+ and A setups, win probability ≥ 62%.
-            # ADX is NOT re-checked here: the grade assignment in engine.py already
-            # requires ADX ≥ 17 (kill zone) or ≥ 20 (normal) for grade A.
-            # Double-gating on ADX blocks valid kill-zone signals at ADX 17–19.
-            if a.win_probability < 62 or a.setup_quality not in ("A+", "A"):
+            # Quality gate — A/A+ OR ChoCH structural bypass.
+            # Standard path: grade A/A+ + win ≥ 62%.
+            # ChoCH bypass: confirmed market structure break + grade B or better
+            #   + win ≥ 58% — ChoCH IS the pro signal for early reversal entry.
+            #   We allow it even when HTF hasn't caught up yet (ChoCH overrides
+            #   the HTF block above, and lowers the win threshold here).
+            is_quality    = a.win_probability >= 62 and a.setup_quality in ("A+", "A")
+            choch_quality = choch_aligned and a.win_probability >= 58 and \
+                            a.setup_quality in ("A+", "A", "B")
+
+            if not is_quality and not choch_quality:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
-                    f"(win={a.win_probability}% grade={a.setup_quality} adx={a.adx:.1f}). "
-                    f"Need win≥62% + grade A/A+."
+                    f"(win={a.win_probability}% grade={a.setup_quality} "
+                    f"adx={a.adx:.1f} choch={choch or 'none'}). "
+                    f"Need win≥62%+A/A+, or ChoCH+win≥58%+B."
                 )
                 continue
+
             new_signals.append((tf, a))
 
     if state_changed:
