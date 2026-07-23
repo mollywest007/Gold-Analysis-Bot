@@ -90,6 +90,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         tf      = tf_arg if tf_arg != "all" else _get_tf(context)
         kb = refresh_keyboard(command, tf_arg)
 
+        # Always answer the query first so Telegram never shows a frozen button
+        await query.answer()
+
         _unchanged = False
         try:
             # ── Commands available 24/7 (no market-open check) ────────────────
@@ -130,13 +133,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             elif command == "chart":
                 # Re-run engine analysis for the chart TF
                 from src.utils.formatting import pro_analysis_card
-                await query.answer()
                 await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
                 a = await analyze(tf)
                 await query.edit_message_text(
                     pro_analysis_card(a), parse_mode="HTML", reply_markup=kb
                 )
-                return  # answer already called above
 
             else:
                 # ── Market-open gate for analysis commands ────────────────────────
@@ -144,7 +145,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text(_closed_text(), parse_mode="HTML",
                                                   reply_markup=kb)
                 elif command == "analyze":
-                    await query.answer()
                     await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
                         analyze("M5"), analyze("M15"), analyze("M30"),
@@ -155,47 +155,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text(
                         multi_timeframe_card(analyses), parse_mode="HTML", reply_markup=kb
                     )
-                    return  # answer already called above
 
                 elif command == "signal":
-                    await query.answer()
                     await query.edit_message_text("Scanning for setup...", reply_markup=kb)
                     a = await analyze(tf)
                     await query.edit_message_text(
                         signal_card(a), parse_mode="HTML", reply_markup=kb
                     )
-                    return
 
                 elif command == "trend":
-                    await query.answer()
                     await query.edit_message_text("Reading trend...", reply_markup=kb)
                     a = await analyze(tf)
                     await query.edit_message_text(
                         trend_card(a), parse_mode="HTML", reply_markup=kb
                     )
-                    return
 
                 elif command == "levels":
-                    await query.answer()
                     await query.edit_message_text("Calculating levels...", reply_markup=kb)
                     a = await analyze(tf)
                     await query.edit_message_text(
                         levels_card(a), parse_mode="HTML", reply_markup=kb
                     )
-                    return
 
                 elif command == "outlook":
-                    await query.answer()
                     await query.edit_message_text("Generating outlook...", reply_markup=kb)
                     a = await analyze(tf)
                     await query.edit_message_text(
                         outlook_card(a), parse_mode="HTML", reply_markup=kb
                     )
-                    return
 
                 elif command == "recommend":
                     from src.utils.formatting import recommend_multi_card
-                    await query.answer()
                     await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
                         analyze("M5"), analyze("M15"), analyze("M30"),
@@ -206,34 +196,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text(
                         recommend_multi_card(analyses), parse_mode="HTML", reply_markup=kb
                     )
-                    return
 
         except Exception as e:
             err_str = str(e).lower()
-            if "message is not modified" in err_str:
-                _unchanged = True
-            else:
+            if "message is not modified" not in err_str:
                 logger.error(f"refresh:{command} error: {e}")
-                await query.answer()
                 try:
                     await query.edit_message_text(
                         "Refresh failed — try again in a moment.", reply_markup=kb
                     )
                 except Exception:
                     pass
-                return
-
-        # Give feedback: toast if unchanged, silent dismiss if updated
-        if _unchanged:
-            await query.answer("✓ Already up to date")
-        else:
-            await query.answer()
         return
 
     # ── All analysis callbacks — blocked when market is closed ─────────────────
     await query.answer()
     if not _is_open():
-        await query.edit_message_text(_closed_text(), parse_mode="HTML")
+        try:
+            await query.edit_message_text(_closed_text(), parse_mode="HTML")
+        except Exception:
+            pass
         return
 
     tf = data.split(":")[1] if ":" in data else _get_tf(context)
