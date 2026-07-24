@@ -211,18 +211,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── All analysis callbacks — blocked when market is closed ─────────────────
     await query.answer()
+
+    tf      = data.split(":")[1] if ":" in data else _get_tf(context)
+    command = data.split(":")[0]          # e.g. "signal", "trend", "analyze" …
+    kb      = refresh_keyboard(command, tf)
+    context.user_data["timeframe"] = tf
+
     if not _is_open():
         try:
-            await query.edit_message_text(_closed_text(), parse_mode="HTML")
+            await query.edit_message_text(_closed_text(), parse_mode="HTML",
+                                          reply_markup=kb)
         except Exception:
             pass
         return
 
-    tf = data.split(":")[1] if ":" in data else _get_tf(context)
-    context.user_data["timeframe"] = tf
-
     if data.startswith("recommend:"):
-        await query.edit_message_text("Scanning all timeframes...")
+        await query.edit_message_text("Scanning all timeframes…", reply_markup=kb)
         try:
             from src.utils.formatting import recommend_multi_card as _rmc
             import re as _re
@@ -234,17 +238,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             analyses = [r for r in results if not isinstance(r, Exception)]
             card = _rmc(analyses)
             try:
-                await query.edit_message_text(card, parse_mode="HTML")
+                await query.edit_message_text(card, parse_mode="HTML", reply_markup=kb)
             except Exception as html_err:
                 logger.warning(f"callback recommend HTML error (falling back to plain): {html_err}")
-                plain = _re.sub(r"<[^>]+>", "", card).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-                await query.edit_message_text(plain)
+                import re as _re2
+                plain = _re2.sub(r"<[^>]+>", "", card).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+                await query.edit_message_text(plain, reply_markup=kb)
         except Exception as e:
             logger.error(f"callback recommend: {e}")
-            await query.edit_message_text("Scanning failed — please try again in a moment.")
+            await query.edit_message_text("Scanning failed — please try again in a moment.",
+                                          reply_markup=kb)
 
     elif data.startswith("analyze:"):
-        await query.edit_message_text("Analyzing all timeframes...")
+        await query.edit_message_text("Analyzing all timeframes…", reply_markup=kb)
         try:
             results = await asyncio.gather(
                 analyze("M5"), analyze("M15"), analyze("M30"),
@@ -252,46 +258,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
-            await query.edit_message_text(multi_timeframe_card(analyses), parse_mode="HTML")
+            await query.edit_message_text(multi_timeframe_card(analyses),
+                                          parse_mode="HTML", reply_markup=kb)
         except Exception as e:
             logger.error(f"callback analyze: {e}")
-            await query.edit_message_text("Analysis failed. Please try again.")
+            await query.edit_message_text("Analysis failed. Please try again.",
+                                          reply_markup=kb)
 
     elif data.startswith("signal:"):
-        await query.edit_message_text("Scanning for trade setup...")
+        await query.edit_message_text("Scanning for trade setup…", reply_markup=kb)
         try:
             a = await analyze(tf)
-            await query.edit_message_text(signal_card(a), parse_mode="HTML")
+            await query.edit_message_text(signal_card(a), parse_mode="HTML",
+                                          reply_markup=kb)
         except Exception as e:
             logger.error(f"callback signal: {e}")
-            await query.edit_message_text("Signal scan failed. Please try again.")
+            await query.edit_message_text("Signal scan failed. Please try again.",
+                                          reply_markup=kb)
 
     elif data.startswith("trend:"):
-        await query.edit_message_text("Reading trend...")
+        await query.edit_message_text("Reading trend…", reply_markup=kb)
         try:
             a = await analyze(tf)
-            await query.edit_message_text(trend_card(a), parse_mode="HTML")
+            await query.edit_message_text(trend_card(a), parse_mode="HTML",
+                                          reply_markup=kb)
         except Exception as e:
             logger.error(f"callback trend: {e}")
-            await query.edit_message_text("Trend read failed. Please try again.")
+            await query.edit_message_text("Trend read failed. Please try again.",
+                                          reply_markup=kb)
 
     elif data.startswith("levels:"):
-        await query.edit_message_text("Calculating levels...")
+        await query.edit_message_text("Calculating levels…", reply_markup=kb)
         try:
             a = await analyze(tf)
-            await query.edit_message_text(levels_card(a), parse_mode="HTML")
+            await query.edit_message_text(levels_card(a), parse_mode="HTML",
+                                          reply_markup=kb)
         except Exception as e:
             logger.error(f"callback levels: {e}")
-            await query.edit_message_text("Level calculation failed. Please try again.")
+            await query.edit_message_text("Level calculation failed. Please try again.",
+                                          reply_markup=kb)
 
     elif data.startswith("outlook:"):
-        await query.edit_message_text("Generating outlook...")
+        await query.edit_message_text("Generating outlook…", reply_markup=kb)
         try:
             a = await analyze(tf)
-            await query.edit_message_text(outlook_card(a), parse_mode="HTML")
+            await query.edit_message_text(outlook_card(a), parse_mode="HTML",
+                                          reply_markup=kb)
         except Exception as e:
             logger.error(f"callback outlook: {e}")
-            await query.edit_message_text("Outlook generation failed. Please try again.")
+            await query.edit_message_text("Outlook generation failed. Please try again.",
+                                          reply_markup=kb)
 
 
 def register_callback_handlers(app: Application) -> None:
