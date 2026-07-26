@@ -123,6 +123,12 @@ class MarketAnalysis:
     buying_pressure: str = ""
     selling_pressure: str = ""
     pressure_advantage: str = "Neutral"
+    # Williams %R
+    willr_value:      float = -50.0
+    willr_caution:    str   = ""
+    # Supertrend
+    supertrend_value:     float = 0.0
+    supertrend_direction: str   = "NEUTRAL"
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -243,6 +249,64 @@ def compute_bollinger(closes: List[float], period: int = 20,
     price  = closes[-1]
     pct_b  = ((price - lower) / (upper - lower) * 100) if upper != lower else 50.0
     return round(upper, 4), round(mid, 4), round(lower, 4), round(pct_b, 2)
+
+
+def compute_williams_r(highs: List[float], lows: List[float], closes: List[float],
+                       period: int = 14) -> float:
+    """Williams %R — momentum oscillator ranging -100 to 0.
+    Overbought: > -20  |  Oversold: < -80"""
+    if len(closes) < period:
+        return -50.0
+    h = highs[-period:]
+    l = lows[-period:]
+    highest_high = max(h)
+    lowest_low   = min(l)
+    if highest_high == lowest_low:
+        return -50.0
+    return round((highest_high - closes[-1]) / (highest_high - lowest_low) * -100, 2)
+
+
+def compute_supertrend(highs: List[float], lows: List[float], closes: List[float],
+                       period: int = 10, multiplier: float = 3.0) -> Tuple[float, str]:
+    """Supertrend indicator — returns (supertrend_line_value, direction).
+    direction: 'BUY' when price is above the line, 'SELL' when below."""
+    if len(closes) < period + 1:
+        return closes[-1], "NEUTRAL"
+
+    # Compute ATR series
+    tr_list: List[float] = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i],
+                 abs(highs[i] - closes[i - 1]),
+                 abs(lows[i]  - closes[i - 1]))
+        tr_list.append(tr)
+
+    # Smooth ATR with SMA for simplicity
+    def _sma(vals: List[float], n: int) -> float:
+        return sum(vals[-n:]) / n if len(vals) >= n else sum(vals) / max(len(vals), 1)
+
+    atr_val = _sma(tr_list, period)
+
+    hl2 = [(highs[i] + lows[i]) / 2 for i in range(len(closes))]
+    basic_upper = hl2[-1] + multiplier * atr_val
+    basic_lower = hl2[-1] - multiplier * atr_val
+
+    # Simple single-bar supertrend direction using last two bars
+    prev_close = closes[-2]
+    curr_close = closes[-1]
+
+    if curr_close > basic_upper:
+        direction = "BUY"
+        line_val  = basic_lower
+    elif curr_close < basic_lower:
+        direction = "SELL"
+        line_val  = basic_upper
+    else:
+        # In the band — use momentum of prev close vs band
+        direction = "BUY" if prev_close >= (hl2[-2] + (hl2[-2] - lows[-2]) * multiplier * 0.5) else "SELL"
+        line_val  = basic_lower if direction == "BUY" else basic_upper
+
+    return round(line_val, 2), direction
 
 
 def compute_adx(highs: List[float], lows: List[float], closes: List[float],
@@ -729,6 +793,26 @@ def _score_bb(pct_b: float) -> Tuple[str, float]:
     return "NEUTRAL", 0.0
 
 
+def _score_williams_r(willr: float) -> Tuple[str, float, str]:
+    """Score Williams %R. Returns (signal, confidence, caution_note).
+    Range: -100 (oversold) to 0 (overbought).
+    Overbought zone: > -20  |  Oversold zone: < -80"""
+    if willr >= -10:   return "SELL", 0.85, ""           # extreme overbought
+    if willr >= -20:   return "SELL", 0.70, ""           # overbought
+    if willr >= -30:   return "SELL", 0.50, "caution flag shown"   # approaching overbought
+    if willr <= -90:   return "BUY",  0.85, ""           # extreme oversold
+    if willr <= -80:   return "BUY",  0.70, ""           # oversold
+    if willr <= -70:   return "BUY",  0.50, "caution flag shown"   # approaching oversold
+    return "NEUTRAL", 0.0, ""
+
+
+def _score_supertrend(direction: str) -> Tuple[str, float]:
+    """Score Supertrend direction. BUY = price above trend line, SELL = below."""
+    if direction == "BUY":    return "BUY",  0.75
+    if direction == "SELL":   return "SELL", 0.75
+    return "NEUTRAL", 0.0
+
+
 # ─── Limit-entry refinement ───────────────────────────────────────────────────
 
 def calc_limit_entry(direction: str, price: float, atr: float,
@@ -976,6 +1060,8 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     atr = compute_atr(highs, lows, closes, 14)
     bb_upper, bb_mid, bb_lower, bb_pct = compute_bollinger(closes, 20, 2.0)
     adx, plus_di, minus_di     = compute_adx(highs, lows, closes, 14)
+    willr                      = compute_williams_r(highs, lows, closes, 14)
+    st_value, st_direction     = compute_supertrend(highs, lows, closes, 10, 3.0)
 
     candle_pat, candle_wt = detect_candlestick(opens, highs, lows, closes, atr)
     c_signal = candle_signal(candle_pat)
@@ -1056,12 +1142,17 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
                   "SELL" if (minus_di > plus_di  and adx >= 20) else "NEUTRAL"
     adx_di_conf = min(0.90, adx / 100.0)
 
+    willr_sig, willr_conf, willr_caution = _score_williams_r(willr)
+    st_sig, st_conf                       = _score_supertrend(st_direction)
+
     indicators = [
-        Indicator("RSI(14)",   rsi,       rsi_sig,      0.20),
-        Indicator("MACD",      macd_line, macd_sig,     0.22),
-        Indicator("EMA Stack", ema20,     ema_sig,      0.26),
-        Indicator("ADX DI",    adx,       adx_di_sig,   0.20),  # replaces correlated Stoch
-        Indicator("BB %B",     bb_pct,    bb_sig,       0.12),
+        Indicator("RSI(14)",    rsi,       rsi_sig,      0.18),
+        Indicator("MACD",       macd_line, macd_sig,     0.20),
+        Indicator("EMA Stack",  ema20,     ema_sig,      0.22),
+        Indicator("ADX DI",     adx,       adx_di_sig,   0.18),
+        Indicator("BB %B",      bb_pct,    bb_sig,       0.10),
+        Indicator("Williams%R", willr,     willr_sig,    0.08),
+        Indicator("Supertrend", st_value,  st_sig,       0.04),
     ]
     # Candle and RSI Div are optional — only added when they have something real to say
     if candle_sig_v != "NEUTRAL":
@@ -1070,13 +1161,15 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         indicators.append(Indicator("RSI Div", 0.0, div_sig, 0.08))
 
     conf_map = {
-        "RSI(14)":   rsi_conf,
-        "MACD":      macd_conf,
-        "EMA Stack": ema_conf,
-        "ADX DI":    adx_di_conf,
-        "BB %B":     bb_conf,
-        "Candle":    candle_conf_v,
-        "RSI Div":   div_conf,
+        "RSI(14)":    rsi_conf,
+        "MACD":       macd_conf,
+        "EMA Stack":  ema_conf,
+        "ADX DI":     adx_di_conf,
+        "BB %B":      bb_conf,
+        "Williams%R": willr_conf,
+        "Supertrend": st_conf,
+        "Candle":     candle_conf_v,
+        "RSI Div":    div_conf,
     }
 
     buy_votes  = sum(1 for i in indicators if i.signal == "BUY")
@@ -1623,6 +1716,10 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         buying_pressure=buying_pressure,
         selling_pressure=selling_pressure,
         pressure_advantage=pressure_advantage,
+        willr_value=willr,
+        willr_caution=willr_caution,
+        supertrend_value=st_value,
+        supertrend_direction=st_direction,
     )
 
 

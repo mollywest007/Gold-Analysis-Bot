@@ -133,12 +133,23 @@ def _estimate_time(a: MarketAnalysis, target: float) -> str:
 
 def _indicator_rows(a: MarketAnalysis) -> str:
     rows = []
+    willr_caution  = getattr(a, "willr_caution", "")
+    st_direction   = getattr(a, "supertrend_direction", "NEUTRAL")
     for ind in a.indicators:
         arrow = "BUY" if ind.signal == "BUY" else ("SELL" if ind.signal == "SELL" else "----")
         if ind.name == "BB %B":
             val_str = f"{ind.value:.1f}%"
         elif ind.name == "MACD":
             val_str = f"{ind.value:+.3f}"
+        elif ind.name == "Williams%R":
+            val_str = f"{ind.value:.1f}"
+            suffix  = f"  ← {willr_caution}" if willr_caution else ""
+            rows.append(f"  {ind.name:<12} {val_str:>8}   {arrow}{suffix}")
+            continue
+        elif ind.name == "Supertrend":
+            st_arrow = "▲ bullish" if st_direction == "BUY" else ("▼ bearish" if st_direction == "SELL" else "neutral")
+            rows.append(f"  {'Supertrend':<12} {'':>8}   {arrow}  ({st_arrow})")
+            continue
         else:
             val_str = f"{ind.value:.1f}"
         rows.append(f"  {ind.name:<12} {val_str:>8}   {arrow}")
@@ -273,7 +284,9 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  MACD Hist: {a.macd_hist:+.3f}",
             f"  +DI/-DI  : {a.plus_di:.1f} / {a.minus_di:.1f}",
             f"  BB%B     : {a.bb_pct:.1f}%",
-            f"  Votes    : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+            f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
+            f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
+            f"  Votes    : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
         ]
 
     # ── Alert cooldown status ──────────────────────────────────────────────────
@@ -324,7 +337,9 @@ def analysis_card(a: MarketAnalysis) -> str:
         f"  +DI / -DI : {a.plus_di:.1f} / {a.minus_di:.1f}",
         f"  Stoch K/D : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
         f"  BB%B      : {a.bb_pct:.1f}%",
-        f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+        f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
+        f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
+        f"  Votes     : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
@@ -533,9 +548,11 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         "──────────────────────────────────",
         f"  MACD Hist {a.macd_hist:>+7.3f}   {macd_desc}",
         f"  BB%B      {a.bb_pct:>6.1f}%   {bb_desc}",
+        f"  Williams%R {getattr(a,'willr_value',-50):>5.1f}" + (f"   ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
+        f"  Supertrend {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
         "──────────────────────────────────",
         f"  Indicator votes:",
-        f"    BUY  {a.buy_votes}/5   SELL  {a.sell_votes}/5   WAIT  {a.wait_votes}/5",
+        f"    BUY  {a.buy_votes}/7   SELL  {a.sell_votes}/7   WAIT  {a.wait_votes}/7",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
@@ -848,7 +865,9 @@ def trend_card(a: MarketAnalysis) -> str:
         f"  Stoch K/D : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
         f"  MACD Hist : {a.macd_hist:+.3f}",
         f"  BB%B      : {a.bb_pct:.1f}%",
-        f"  Votes     : BUY {a.buy_votes}/5  SELL {a.sell_votes}/5",
+        f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
+        f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
+        f"  Votes     : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
     ]
     if a.candle_pattern and a.candle_pattern != "None":
         lines.append(f"  Pattern   : {a.candle_pattern}")
@@ -1507,7 +1526,9 @@ def market_conditions_card(a: MarketAnalysis) -> str:
         f"  RSI  {a.rsi_value:>5.1f}   {rsi_zone}",
         f"  Stoch     : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
         f"  +DI / -DI : {a.plus_di:.1f} / {a.minus_di:.1f}",
-        f"  Votes     : BUY {a.buy_votes}/5   SELL {a.sell_votes}/5",
+        f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
+        f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
+        f"  Votes     : BUY {a.buy_votes}/7   SELL {a.sell_votes}/7",
         "",
         "──────────────────────────────────",
         "  SIGNAL STATUS",
