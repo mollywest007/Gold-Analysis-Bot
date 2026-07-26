@@ -30,22 +30,10 @@ CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Block all users except the configured owner."""
+    """Allow all users."""
     user = update.effective_user
-    if user is None:
-        raise ApplicationHandlerStop
-
-    # Prefer numeric ID check (immutable); fall back to username if ID not configured.
-    if ALLOWED_USER_ID:
-        authorized = user.id == ALLOWED_USER_ID
-    else:
-        authorized = bool(ALLOWED_USERNAME) and user.username == ALLOWED_USERNAME
-
-    if authorized:
-        logger.info(f"Authorized: @{user.username} (id={user.id})")
-    else:
-        logger.warning(f"Blocked unauthorized user: @{user.username} (id={user.id})")
-        raise ApplicationHandlerStop
+    if user is not None:
+        logger.info(f"User: @{user.username} (id={user.id})")
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
