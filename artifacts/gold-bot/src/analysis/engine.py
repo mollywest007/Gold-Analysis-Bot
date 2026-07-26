@@ -1349,6 +1349,23 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         entry     = round(price, 2)
         stop_loss = round(price - sl_min_dist, 2)
 
+    # ── Structural SL refinement — prefer swing point over ATR multiple ───────
+    # The nearest confirmed swing low (BUY) or high (SELL) gives a more precise
+    # and logical SL than a fixed ATR distance. ATR floor/cap remains as a guard.
+    _swing_hs_sl, _swing_ls_sl = _confirmed_swing_points(highs, lows, lookback=5)
+    if direction == "BUY" and _swing_ls_sl:
+        _recent_sw_low = _swing_ls_sl[-1][1]
+        _structural_sl = round(_recent_sw_low - atr * 0.20, 2)
+        _sl_str_dist   = price - _structural_sl
+        if sl_min_dist * 0.75 <= _sl_str_dist <= max_sl_dist and _structural_sl > 0:
+            stop_loss = _structural_sl
+    elif direction == "SELL" and _swing_hs_sl:
+        _recent_sw_high = _swing_hs_sl[-1][1]
+        _structural_sl  = round(_recent_sw_high + atr * 0.20, 2)
+        _sl_str_dist    = _structural_sl - price
+        if sl_min_dist * 0.75 <= _sl_str_dist <= max_sl_dist:
+            stop_loss = _structural_sl
+
     sl_dist  = abs(entry - stop_loss)
     tp1_dist = sl_dist * 2.0
     tp2_dist = sl_dist * 3.5
@@ -1457,13 +1474,21 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         elif bear_ob:
             ob_at, ob_high, ob_low, ob_direction = True, bear_high, bear_low, "BEARISH"
 
-    # TP3: measured move (5× SL distance)
+    # TP3: institutional measured move — anchor to structural R2/S2 when reachable
+    # R2/S2 already computed from pivot logic above; only use them when they fall
+    # between 3× and 8× SL away so the target stays ambitious but not delusional.
     if direction == "BUY":
-        tp3 = round(entry + sl_dist * 5.0, 2)
+        if r2 > tp2 and sl_dist * 3.0 <= (r2 - entry) <= sl_dist * 8.0:
+            tp3 = round(r2 - atr * 0.10, 2)
+        else:
+            tp3 = round(entry + sl_dist * 4.5, 2)
     elif direction == "SELL":
-        tp3 = round(entry - sl_dist * 5.0, 2)
+        if s2 < tp2 and sl_dist * 3.0 <= (entry - s2) <= sl_dist * 8.0:
+            tp3 = round(s2 + atr * 0.10, 2)
+        else:
+            tp3 = round(entry - sl_dist * 4.5, 2)
     else:
-        tp3 = round(entry + sl_dist * 5.0, 2)
+        tp3 = round(entry + sl_dist * 4.5, 2)
 
     # Confluence list
     confluence_list: List[str] = []
@@ -1533,16 +1558,26 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     extra_votes  = max(0, actual_votes - MIN_VOTES)  # votes beyond minimum required
 
     raw_wp  = 50                                    # base: coin flip
-    raw_wp += min(adx / 2.5, 16)                   # ADX strength contribution (max +16 at ADX 40)
+    raw_wp += min(adx / 2.5, 16)                   # ADX strength (max +16 at ADX 40)
     raw_wp += extra_votes * 3                       # each extra indicator vote: +3
     if session_label == "London/NY Overlap": raw_wp += 5
     elif session_label == "London":          raw_wp += 3
     elif session_label == "Asian":           raw_wp += 2   # Asian session: gold moves, just less volume
-    if htf_align:                            raw_wp += 4   # higher TF agrees
-    if ob_at:                                raw_wp += 3   # at institutional OB level
+    if htf_align:                            raw_wp += 4   # HTF aligned = trend confirmation
+    if ob_at:                                raw_wp += 3   # at institutional Order Block
+    # FVG aligned — price in imbalance zone that institutions actively fill
+    _fvg_wp = (fvg_dir == "BULLISH" and direction == "BUY") or \
+              (fvg_dir == "BEARISH" and direction == "SELL")
+    if _fvg_wp:                              raw_wp += 3
+    # Liquidity sweep — confirms institutional move cleared retail stops
+    _sweep_wp = (liq_sweep == "BULLISH_SWEEP" and direction == "BUY") or \
+                (liq_sweep == "BEARISH_SWEEP" and direction == "SELL")
+    if _sweep_wp:                            raw_wp += 2
+    # Volume spike — institutional participation is visible in volume
+    if vol_spike:                            raw_wp += 2
     if (choch == "BULLISH_CHOCH" and direction == "BUY") or \
        (choch == "BEARISH_CHOCH" and direction == "SELL"):
-        raw_wp += 4   # confirmed change of character in signal's direction
+        raw_wp += 4   # CHoCH = early reversal signal, highest confidence boost
     win_probability = max(50, min(85, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
     # ── ICT / Institutional context ────────────────────────────────────────────
@@ -1599,37 +1634,105 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
     fib_382, fib_500, fib_618 = compute_fibonacci_levels(highs, lows, eff_dir, lookback=50)
 
-    # Early entry: best pullback level for a limit order
-    # BUY  → we want price to dip to 61.8% or 50% before bouncing up
-    # SELL → we want price to rally to 61.8% or 50% before falling
+    # ── Pro early entry: OB → FVG → OTE/Fib priority waterfall ─────────────
+    # Institutions enter at specific structural confluences, not at arbitrary
+    # ATR multiples. We look for the highest-probability zone in this order:
+    #   1. Order Block (OB) — demand/supply zone institutions defend
+    #   2. Fair Value Gap (FVG) — imbalance institutions fill on retrace
+    #   3. OTE zone (Fib 61.8%) — Optimal Trade Entry, deepest pullback, best R:R
+    #   4. Fib 50% — equilibrium, balanced risk/reward
+    #   5. Fib 38.2% — shallow pullback, safer but lower R:R
+    #   6. EMA pullback — generic retrace to moving average
     early_entry = 0.0
     early_entry_reason = ""
     if action == "BUY":
-        if fib_618 > stop_loss and fib_618 < price:
+        # 1. Order Block: price has returned to or is near the demand OB zone
+        if ob_at and ob_high > stop_loss and ob_low < price + atr * 0.5:
+            _ob_entry = round(ob_low + (ob_high - ob_low) * 0.3, 2)   # lower 30% of OB = best fill
+            early_entry = max(_ob_entry, stop_loss + atr * 0.15)
+            early_entry_reason = (
+                f"📦 Order Block demand {ob_low:,.2f}–{ob_high:,.2f} — "
+                f"institutional re-accumulation zone, limit buy @ {early_entry:,.2f}"
+            )
+        # 2. FVG: unfilled bullish imbalance below current price
+        elif fvg_dir == "BULLISH" and fvg_bot > stop_loss and fvg_bot < price:
+            early_entry = round(fvg_bot + atr * 0.05, 2)
+            early_entry_reason = (
+                f"⚡ Bullish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
+                f"institutions fill gaps, limit buy at FVG base @ {early_entry:,.2f}"
+            )
+        # 3. OTE zone (61.8% Fibonacci) — deepest pullback, optimal R:R
+        elif fib_618 > stop_loss and fib_618 < price:
             early_entry = fib_618
-            early_entry_reason = f"Fib 61.8% retrace @ {fib_618:,.2f} — deep pullback, high R:R"
+            early_entry_reason = (
+                f"🎯 OTE zone (Fib 61.8%) @ {fib_618:,.2f} — "
+                f"deepest structured pullback, highest R:R, set limit order here"
+            )
+        # 4. Fib 50% — equilibrium retrace
         elif fib_500 > stop_loss and fib_500 < price:
             early_entry = fib_500
-            early_entry_reason = f"Fib 50.0% retrace @ {fib_500:,.2f} — mid pullback zone"
+            early_entry_reason = (
+                f"📐 Fib 50% equilibrium @ {fib_500:,.2f} — "
+                f"mid-range pullback, balanced R:R, solid limit entry zone"
+            )
+        # 5. Fib 38.2% — shallow pullback
         elif fib_382 > stop_loss and fib_382 < price:
             early_entry = fib_382
-            early_entry_reason = f"Fib 38.2% retrace @ {fib_382:,.2f} — shallow pullback"
+            early_entry_reason = (
+                f"📐 Fib 38.2% retrace @ {fib_382:,.2f} — "
+                f"shallow pullback, safer entry, lower R:R — confirm with candle close"
+            )
+        # 6. EMA/ATR pullback zone
         else:
             early_entry = limit_entry if limit_entry and limit_entry < price else price
-            early_entry_reason = "EMA/ATR pullback zone — enter on retrace, not market"
+            early_entry_reason = (
+                "📊 Wait for EMA20/50 retrace — do not chase at market; "
+                "patience for a pullback to the moving average zone improves R:R"
+            )
     elif action == "SELL":
-        if fib_618 < r1 and fib_618 > price:
+        # 1. Order Block: supply zone overhead
+        if ob_at and ob_low < stop_loss and ob_high > price - atr * 0.5:
+            _ob_entry = round(ob_high - (ob_high - ob_low) * 0.3, 2)  # upper 30% of OB = best fill
+            early_entry = min(_ob_entry, stop_loss - atr * 0.15)
+            early_entry_reason = (
+                f"📦 Order Block supply {ob_low:,.2f}–{ob_high:,.2f} — "
+                f"institutional distribution zone, limit sell @ {early_entry:,.2f}"
+            )
+        # 2. FVG: unfilled bearish imbalance above current price
+        elif fvg_dir == "BEARISH" and fvg_top < stop_loss and fvg_top > price:
+            early_entry = round(fvg_top - atr * 0.05, 2)
+            early_entry_reason = (
+                f"⚡ Bearish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
+                f"institutions distribute into gaps, limit sell at FVG top @ {early_entry:,.2f}"
+            )
+        # 3. OTE zone (61.8% Fibonacci)
+        elif fib_618 < stop_loss and fib_618 > price:
             early_entry = fib_618
-            early_entry_reason = f"Fib 61.8% retrace @ {fib_618:,.2f} — deep retrace, high R:R"
-        elif fib_500 < r1 and fib_500 > price:
+            early_entry_reason = (
+                f"🎯 OTE zone (Fib 61.8%) @ {fib_618:,.2f} — "
+                f"deepest structured retrace, highest R:R, set limit sell here"
+            )
+        # 4. Fib 50%
+        elif fib_500 < stop_loss and fib_500 > price:
             early_entry = fib_500
-            early_entry_reason = f"Fib 50.0% retrace @ {fib_500:,.2f} — mid retrace zone"
-        elif fib_382 < r1 and fib_382 > price:
+            early_entry_reason = (
+                f"📐 Fib 50% equilibrium @ {fib_500:,.2f} — "
+                f"mid-range retrace, balanced R:R, solid limit sell zone"
+            )
+        # 5. Fib 38.2%
+        elif fib_382 < stop_loss and fib_382 > price:
             early_entry = fib_382
-            early_entry_reason = f"Fib 38.2% retrace @ {fib_382:,.2f} — shallow retrace"
+            early_entry_reason = (
+                f"📐 Fib 38.2% retrace @ {fib_382:,.2f} — "
+                f"shallow retrace, safer sell, lower R:R — confirm with candle close"
+            )
+        # 6. EMA/ATR retrace zone
         else:
             early_entry = limit_entry if limit_entry and limit_entry > price else price
-            early_entry_reason = "EMA/ATR retrace zone — sell the bounce, not market"
+            early_entry_reason = (
+                "📊 Wait for EMA20/50 retrace — do not sell the bottom; "
+                "wait for a bounce to the moving average zone for better R:R"
+            )
 
     # ── Setup quality grade ───────────────────────────────────────────────────
     # Graded on indicator votes + structural confirmation (ChoCH).

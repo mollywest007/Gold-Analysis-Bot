@@ -193,20 +193,35 @@ List every factor supporting the trade direction. High-probability setups need 4
 - Volume spike or momentum divergence (if visible)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 7 — TRADE LEVELS
+STEP 7 — TRADE LEVELS & EARLY ENTRY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Only suggest a trade if win_probability >= 65.
 If the setup is unclear or insufficient, set entry_type to WAIT.
-• Entry: precise price for the early-entry or confirmation entry
-• Stop Loss: BELOW the most recent structural low (BUY) or ABOVE structural high (SELL)
-  — SL must be BEYOND the invalidation level, not at it
-• TP1: first liquidity pocket / minor S/R (minimum 1:1 R:R)
-• TP2: next major S/R level (minimum 1:2 R:R)
-• TP3: measured move / key HTF level (minimum 1:3 R:R)
-• Invalidation: the candle close that definitively cancels the setup
-• Trade Quality: Excellent (4+ confluence, A+ structure), Good (3 confluence, clean S/R),
-  Average (2 confluence, some ambiguity), Poor (<2 confluence or choppy structure)
-• Risk Level: Low (clear structure + HTF aligned + SL at structural low),
+
+EARLY ENTRY (highest priority — use these when available, they give the best R:R):
+  Prefer EARLY_ENTRY over RETEST/BREAKOUT whenever a structural confluence zone is available.
+  Use this waterfall in order:
+    1. Order Block (OB): enter at the OB zone LOW (buy) or HIGH (sell) — tightest SL, best R:R
+    2. Fair Value Gap (FVG): enter at the FVG base (buy) or top (sell) — institutions fill gaps
+    3. OTE zone (Fib 61.8%): Optimal Trade Entry — deepest pullback before move resumes
+    4. Fib 50%: equilibrium entry — mid-range balance point
+    5. Fib 38.2%: shallow pullback entry — safer but lower R:R
+  The entry price should be INSIDE the identified zone, not at market.
+  Set entry_type = "EARLY_ENTRY" and explain the zone in early_entry_reason.
+
+• Entry: precise price inside the best available confluence zone (OB / FVG / OTE / Fib)
+• Stop Loss: BELOW the structural low of the entry zone (BUY) or ABOVE the structural high (SELL)
+  — For OB entries: SL goes BEYOND the OB low/high with a small buffer
+  — For FVG entries: SL goes just beyond the nearest swing low/high
+  — SL must be at a STRUCTURAL level, not an arbitrary ATR distance
+• TP1: first liquidity pocket / minor S/R (minimum 1:1.5 R:R)
+• TP2: next major S/R level (minimum 1:2.5 R:R)
+• TP3: measured move / key HTF level / PDH or PDL (minimum 1:3.5 R:R)
+• Invalidation: the candle CLOSE that definitively cancels the setup
+• Trade Quality: Excellent (4+ confluence, A+ structure, early entry at OB/FVG/OTE),
+  Good (3 confluence, clean S/R, structural entry), Average (2 confluence, some ambiguity),
+  Poor (<2 confluence or choppy structure)
+• Risk Level: Low (OB/FVG entry + HTF aligned + SL at structural level),
   Medium (2 of 3 conditions), High (choppy, counter-trend, or SL ambiguous)
 
 {open_trade_section}
