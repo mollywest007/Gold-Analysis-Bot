@@ -24,12 +24,12 @@ args = "Gold Analysis Bot"
 name = "Gold Analysis Bot"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/gold-bot && ../../.pythonlibs/bin/python main.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/gold-bot && uv run python main.py"
 
 [agent]
 stack = "PNPM_WORKSPACE"
