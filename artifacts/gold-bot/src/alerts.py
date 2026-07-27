@@ -849,6 +849,39 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     # is suppressed until the trade closes or reverses.
     async def _process(sig_list: list, direction: str) -> None:
         """Fire alert (confluence or individual) and record state + open trades."""
+        # ── Conflicting-trade warning ──────────────────────────────────────────
+        # If any signalling TF already has an open trade in the OPPOSITE
+        # direction, send a warning card BEFORE the signal so the user is
+        # never blindsided by a flip.  This is informational only — it does
+        # not block the signal.
+        all_open = {
+            t["timeframe"]: t for t in trade_tracker.get_all_trades()
+            if t.get("status") in ("open", "tp1_hit") and t.get("timeframe")
+        }
+        for tf, a in sig_list:
+            existing = all_open.get(tf)
+            if existing and existing.get("direction") != direction:
+                opp_dir   = existing["direction"]
+                opp_entry = existing.get("entry", 0.0)
+                opp_sl    = existing.get("sl", 0.0)
+                warn = (
+                    f"<pre>⚠️  SIGNAL FLIP  —  XAU/USD  {tf}\n"
+                    f"{'─' * 36}\n"
+                    f"  Open trade  : {opp_dir} from {opp_entry:,.2f}\n"
+                    f"  Stop loss   : {opp_sl:,.2f}\n"
+                    f"  New signal  : {direction} (see card below)\n"
+                    f"{'─' * 36}\n"
+                    f"  Your SL is your exit — do not flip\n"
+                    f"  manually unless the SL is already hit.\n"
+                    f"  Review the chart before acting.\n"
+                    f"{'─' * 36}</pre>"
+                )
+                await _broadcast_text(bot, subs, warn)
+                logger.info(
+                    f"[{tf}] Conflict warning sent — open {opp_dir} @ {opp_entry:.2f} "
+                    f"vs new {direction} signal."
+                )
+
         if len(sig_list) >= CONFLUENCE_MIN_TFS:
             delivered = await _fire_confluence(bot, subs, sig_list, direction)
         else:
