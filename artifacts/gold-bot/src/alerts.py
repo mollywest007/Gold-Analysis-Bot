@@ -25,17 +25,44 @@ _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
 # Track which reminder milestones have been sent per trade.
-# Structure: { "trade_id": {"10m", "2h", "6h"} }
+# Structure: { "trade_id": {"entry", "update_2x", "update_6x"} }
 _reminded_trade_ids: Dict[str, Set[str]] = {}
 
-# Reminder milestones: (label, min_age_secs, max_age_secs, require_near_entry)
-# require_near_entry=True  → only remind when price is still within 0.5% of entry
-# require_near_entry=False → always remind (trade is running, show current status)
-_REMINDER_MILESTONES = [
-    ("10m", 8 * 60,     25 * 60,    True),
-    ("2h",  2 * 3600,   2.5 * 3600, False),
-    ("6h",  6 * 3600,   7 * 3600,   False),
-]
+# Reminder milestones are calculated from the trade's own timeframe below.
+# The scheduler runs every 10 minutes, so each milestone has a window wide
+# enough to be caught without making a faster timeframe dictate reminders for
+# slower trades.
+_TF_PERIOD_SECONDS = {
+    "M5":  5 * 60,
+    "M15": 15 * 60,
+    "M30": 30 * 60,
+    "H1":  60 * 60,
+    "H4": 4 * 60 * 60,
+    "D1": 24 * 60 * 60,
+}
+_DEFAULT_TF_PERIOD_SECONDS = 60 * 60
+
+
+def _reminder_milestones(tf: str) -> list[tuple[str, int, int, bool]]:
+    """Return reminder windows scaled to the trade's candle timeframe.
+
+    The first reminder is a missed-entry nudge after roughly one candle. The
+    later reminders are status updates after roughly 2.5 and 6 candle
+    periods. Windows overlap neither each other nor the 10-minute scheduler
+    cadence, so an H1 trade cannot receive the M15-style early nudge.
+    """
+    period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
+    first_min = period
+    first_max = int(period * 1.5)
+    second_min = int(period * 2.5)
+    second_max = int(period * 3.5)
+    third_min = int(period * 6)
+    third_max = int(period * 7)
+    return [
+        ("entry", first_min, first_max, True),
+        ("update_2x", second_min, second_max, False),
+        ("update_6x", third_min, third_max, False),
+    ]
 
 SCAN_TIMEFRAMES = ["M15", "M30", "H1", "H4"]  # M5 removed — too noisy for gold entries
 
@@ -896,10 +923,10 @@ async def _safe_analyze(tf: str):
 
 async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Runs every 10 minutes. Sends milestone reminders for every open trade:
-      • 10 min — missed-alert nudge (only if price still near entry)
-      • 2 h    — trade-still-running update with live P&L
-      • 6 h    — long-running trade update with live P&L
+    Runs every 10 minutes. Sends timeframe-scaled milestone reminders:
+      • ~1 candle — missed-alert nudge (only if price still near entry)
+      • ~2.5 candles — trade-still-running update with live P&L
+      • ~6 candles — long-running trade update with live P&L
     Each milestone fires at most once per trade.
     """
     global _reminded_trade_ids
@@ -946,7 +973,7 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         dir_emoji = "🟢" if direction == "BUY" else "🔴"
 
-        for label, min_age, max_age, require_near in _REMINDER_MILESTONES:
+        for label, min_age, max_age, require_near in _reminder_milestones(tf):
             if label in sent_milestones:
                 continue
             if not (min_age <= age_secs <= max_age):
@@ -971,11 +998,11 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
             tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
-            if label == "10m":
+            if label == "entry":
                 header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
                 subtext = f"Fired {age_str} ago — entry still reachable\n"
-                pnl_note = ""   # no P&L at 10m; price is at entry
-            elif label == "2h":
+                pnl_note = ""   # no P&L at the first-candle reminder
+            elif label == "update_2x":
                 header = f"📊 <b>TRADE UPDATE — {direction} STILL RUNNING</b>"
                 subtext = f"Opened {age_str} ago\n"
             else:  # 6h

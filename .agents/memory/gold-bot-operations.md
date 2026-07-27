@@ -14,3 +14,13 @@ HTTP client debug logs must remain below INFO because Telegram bot tokens and Go
 **Why:** Request URLs are emitted in verbose HTTP logs, which can expose credentials in workflow output.
 
 **How to apply:** Keep `httpx` and `httpcore` at WARNING or stricter in bot workflows.
+
+Reminder timing must be based on each trade's own candle timeframe, not a global
+interval. The first missed-entry reminder should wait until at least one full
+candle has elapsed; later status reminders should scale from that same period.
+
+**Why:** A global short-timeframe reminder caused H1 trades to receive an
+incorrect early "missed alert" notification.
+
+**How to apply:** Use the trade's stored timeframe when calculating reminder
+windows, while keeping the scheduler cadence independent of those windows.
