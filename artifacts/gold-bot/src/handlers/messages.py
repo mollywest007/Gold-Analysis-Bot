@@ -6,7 +6,6 @@ from src.handlers.commands import (
     cmd_alerts,
     cmd_analyze,
     cmd_active,
-    cmd_chart,
     cmd_history,
     cmd_levels,
     cmd_news,
@@ -44,7 +43,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "news": cmd_news,
         "settings": cmd_settings,
         "history": cmd_history,
-        "chart": cmd_chart,
     }
     handler = handlers.get(text)
     if handler is not None:
