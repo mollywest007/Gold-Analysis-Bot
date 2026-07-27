@@ -1619,7 +1619,7 @@ def market_conditions_card(a: MarketAnalysis) -> str:
 
 
 def history_card(trades: list, stats: dict) -> str:
-    """Signal history panel — last 20 trades with outcomes and summary stats."""
+    """Signal history panel — today's trades only (UTC day boundary)."""
     from datetime import datetime, timezone
 
     def _status_label(t: dict) -> str:
@@ -1634,59 +1634,84 @@ def history_card(trades: list, stats: dict) -> str:
         if s == "replaced":     return "REPLACED "
         return s.upper()[:9]
 
-    def _fmt_date(ts) -> str:
+    def _fmt_time(ts) -> str:
         try:
-            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d %b %H:%M")
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M")
         except Exception:
-            return "------"
+            return "-----"
+
+    # ── Today's UTC day boundary ───────────────────────────────────────────────
+    now_utc   = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%d %b %Y")
+    day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    today_trades = [t for t in trades if t.get("opened_at", 0) >= day_start]
+    # Older open trades that are still in play → should use /active
+    older_open   = [
+        t for t in trades
+        if t.get("opened_at", 0) < day_start
+        and t.get("status") in ("open", "tp1_hit", "tp2_hit")
+    ]
+
+    # Today-only stats
+    wins         = sum(1 for t in today_trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
+    losses       = sum(1 for t in today_trades if t.get("status") == "sl_hit")
+    open_today   = sum(1 for t in today_trades if t.get("status") in ("open", "tp1_hit", "tp2_hit"))
+    total_closed = wins + losses
+    win_rate     = round((wins / total_closed) * 100) if total_closed > 0 else 0
 
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
-        "║   XAU/USD  SIGNAL HISTORY        ║",
+        "║   XAU/USD  TODAY'S SIGNALS       ║",
         "╚══════════════════════════════════╝",
+        f"  {today_str}  (UTC)",
         "",
-        "  SUMMARY",
+        "  TODAY'S SUMMARY",
         "──────────────────────────────────",
-        f"  Total signals : {stats['total']}",
-        f"  Wins          : {stats['wins']}",
-        f"  Losses        : {stats['losses']}",
-        f"  Open          : {stats['open']}",
-        f"  Win rate      : {stats['win_rate']}%"
-        + ("" if stats['total_closed'] == 0 else f"  ({stats['total_closed']} closed)"),
+        f"  Signals today : {len(today_trades)}",
+        f"  Wins          : {wins}",
+        f"  Losses        : {losses}",
+        f"  Open          : {open_today}",
+        f"  Win rate      : {win_rate}%"
+        + ("" if total_closed == 0 else f"  ({total_closed} closed)"),
         "──────────────────────────────────",
     ]
 
-    if not trades:
+    if older_open:
         lines += [
             "",
-            "  No signals recorded yet.",
+            f"  ⚠️  {len(older_open)} trade(s) from previous day(s)",
+            "  still running — use /active to track.",
+            "──────────────────────────────────",
+        ]
+
+    if not today_trades:
+        lines += [
+            "",
+            "  No signals fired today yet.",
             "  Alerts fire automatically when",
             "  a BUY or SELL is detected.",
             "</pre>",
         ]
         return "\n".join(lines)
 
-    lines += ["", "  RECENT SIGNALS  (newest first)", "──────────────────────────────────"]
+    lines += ["", "  SIGNALS  (newest first)", "──────────────────────────────────"]
 
-    shown = trades[:20]
-    for t in shown:
-        date     = _fmt_date(t.get("opened_at", 0))
+    for t in today_trades:
+        time_str = _fmt_time(t.get("opened_at", 0))
         dir_     = t.get("direction", "???")
         tf       = t.get("timeframe", "??")
         entry    = t.get("entry", 0)
         conf     = t.get("confidence", 0)
         outcome  = _status_label(t)
         lines += [
-            f"  {date}  {dir_:<4} {tf:<3}",
-            f"  Entry: {entry:,.2f}   Conf: {conf}%",
+            f"  {time_str}  {dir_:<4} {tf:<3}  Conf: {conf}%",
+            f"  Entry: {entry:,.2f}",
             f"  Result: {outcome}",
             "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
         ]
 
-    if len(trades) > 20:
-        lines.append(f"  ... and {len(trades) - 20} older signals")
-
-    lines += ["", "  Use /alerts to enable auto-signals.", "</pre>"]
+    lines += ["", "  Use /active for live P&L.", "</pre>"]
     return safe_html("\n".join(lines))
 
 
