@@ -84,19 +84,61 @@ def _load() -> Set[int]:
         return set()
 
 
-def _save(subs: Set[int]) -> None:
+def _load_disabled() -> Set[int]:
+    """Load chats that explicitly opted out of automatic alerts."""
+    try:
+        with open(DATA_PATH, "r") as f:
+            return set(json.load(f).get("disabled", []))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def _save(subs: Set[int], disabled: Optional[Set[int]] = None) -> None:
     os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
+    if disabled is None:
+        disabled = _load_disabled()
     with open(DATA_PATH, "w") as f:
-        json.dump({"subscribers": list(subs)}, f)
+        json.dump(
+            {
+                "subscribers": sorted(subs),
+                "disabled": sorted(disabled),
+            },
+            f,
+        )
 
 
 def register_user(chat_id: int) -> None:
     """Register a user for alert broadcasts."""
     users = _load()
+    disabled = _load_disabled()
+    disabled.discard(chat_id)
     if chat_id not in users:
         users.add(chat_id)
-        _save(users)
+        _save(users, disabled)
         logger.info(f"User registered for alerts: {chat_id}")
+    elif chat_id in disabled:
+        _save(users, disabled)
+
+
+def unregister_user(chat_id: int) -> None:
+    """Disable alert broadcasts for a chat without deleting any trade history."""
+    users = _load()
+    disabled = _load_disabled()
+    disabled.add(chat_id)
+    if chat_id in users:
+        users.remove(chat_id)
+    _save(users, disabled)
+    logger.info(f"User unsubscribed from alerts: {chat_id}")
+
+
+def is_registered(chat_id: int) -> bool:
+    """Return whether a chat is currently subscribed to automatic alerts."""
+    return chat_id in _load()
+
+
+def is_alerts_disabled(chat_id: int) -> bool:
+    """Return whether a chat explicitly opted out of automatic alerts."""
+    return chat_id in _load_disabled()
 
 
 def user_count() -> int:
@@ -202,18 +244,28 @@ async def _send_setup_forming_alert(
     logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/5 votes)")
 
 
-async def _broadcast_text(bot, subs: Set[int], text: str) -> Set[int]:
+async def _broadcast_text(
+    bot, subs: Set[int], text: str, *, return_result: bool = False
+):
+    """Send text to subscribers.
+
+    The historical callers only need the set of dead chats. Alert delivery
+    also needs to know whether at least one send succeeded so a transient
+    Telegram error does not consume the signal lock.
+    """
     dead: Set[int] = set()
+    delivered = 0
     for chat_id in list(subs):
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            delivered += 1
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
                 dead.add(chat_id)
             else:
                 logger.warning(f"Text send failed for {chat_id}: {e}")
-    return dead
+    return (dead, delivered > 0) if return_result else dead
 
 
 async def _broadcast_photo(bot, subs: Set[int], img_bytes: bytes, caption: str) -> Set[int]:
@@ -375,11 +427,13 @@ async def _send_market_close_notification(bot, subs: Set[int]) -> None:
         logger.error(f"Market-close notification failed: {e}")
 
 
-async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
+async def _fire_signal(bot, subs: Set[int], a, tf: str) -> bool:
     """Broadcast a single-TF entry signal: entry card + live chart."""
     # 1. Send the entry card (same format as /recommend Part 2)
     text = early_entry_card(a)
-    dead = await _broadcast_text(bot, subs, text)
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
     if dead:
         subs -= dead
         _save(subs)
@@ -418,11 +472,14 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> None:
     logger.info(
         f"[{tf}] Alert fired: {a.action} @ {a.entry:.2f} "
         f"grade={a.setup_quality} win={a.win_probability}% "
-        f"to {len(subs)} sub(s)"
+        f"to {len(subs)} sub(s), text_delivered={delivered}"
     )
+    return delivered
 
 
-async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: str) -> None:
+async def _fire_confluence(
+    bot, subs: Set[int], signal_list: list, direction: str
+) -> bool:
     """
     Broadcast ONE grouped alert when 3+ timeframes align on the same direction.
     signal_list: list of (tf, MarketAnalysis) tuples — all same direction.
@@ -436,7 +493,9 @@ async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: st
     ref_a  = next(a for tf, a in signal_list if tf == ref_tf)
 
     text = confluence_alert_card(signal_list, direction, ref_tf)
-    dead = await _broadcast_text(bot, subs, text)
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
     if dead:
         subs -= dead
         _save(subs)
@@ -471,8 +530,9 @@ async def _fire_confluence(bot, subs: Set[int], signal_list: list, direction: st
 
     logger.info(
         f"Confluence {direction} alert fired — TFs: {[tf for tf, _ in signal_list]} "
-        f"ref={ref_tf}  to {len(subs)} sub(s)"
+        f"ref={ref_tf}  to {len(subs)} sub(s), text_delivered={delivered}"
     )
+    return delivered
 
 
 _STARTUP_STAMP = "/tmp/gold_bot_startup_last.txt"
@@ -763,10 +823,22 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     async def _process(sig_list: list, direction: str) -> None:
         """Fire alert (confluence or individual) and record state + open trades."""
         if len(sig_list) >= CONFLUENCE_MIN_TFS:
-            await _fire_confluence(bot, subs, sig_list, direction)
+            delivered = await _fire_confluence(bot, subs, sig_list, direction)
         else:
+            delivered_signals = []
             for tf, a in sig_list:
-                await _fire_signal(bot, subs, a, tf)
+                if await _fire_signal(bot, subs, a, tf):
+                    delivered_signals.append((tf, a))
+            sig_list = delivered_signals
+
+        # Do not lock or create a tracked trade when Telegram did not accept
+        # the alert. The next scan must retry a transient delivery failure.
+        if not sig_list or (len(sig_list) >= CONFLUENCE_MIN_TFS and not delivered):
+            logger.warning(
+                f"[{direction}] Alert not delivered; leaving signal state unlocked "
+                "for retry."
+            )
+            return
 
         now_ts = time.time()
         for tf, a in sig_list:

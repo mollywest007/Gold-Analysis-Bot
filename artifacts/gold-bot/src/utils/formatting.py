@@ -1797,6 +1797,8 @@ def help_text() -> str:
         ("/trend",     "Trend direction, structure, momentum"),
         ("/levels",    "Support, resistance, BB, ATR levels"),
         ("/outlook",   "Market outlook and scenario"),
+        ("/active",    "View open trades and live P&L"),
+        ("/history",   "View recent trade results"),
         ("/news",      "Latest gold market headlines"),
         ("/alerts",    "Toggle automatic signal notifications"),
         ("/settings",  "Change timeframe (M5 to D1)"),

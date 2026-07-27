@@ -14,6 +14,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ["Signal", "Trend"],
         ["Levels", "Outlook"],
         ["Active", "News"],
+        ["Alerts"],
         ["Settings"],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)

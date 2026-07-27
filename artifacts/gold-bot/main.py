@@ -16,13 +16,24 @@ from src.handlers import (
     register_message_handlers,
     register_photo_handlers,
 )
-from src.alerts import check_and_alert, send_market_conditions_summary, send_startup_summary, send_trade_reminder
+from src.alerts import (
+    check_and_alert,
+    send_market_conditions_summary,
+    send_startup_summary,
+    send_trade_reminder,
+    register_user,
+    is_alerts_disabled,
+)
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
     handlers=[logging.StreamHandler()],
 )
+# HTTP request URLs can contain bot/API credentials as query parameters.
+# Keep those URLs out of workflow logs while retaining application-level logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 ALERT_INTERVAL_SECONDS  = 15    # 15 seconds — catch entries before the move extends
@@ -46,6 +57,20 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         authorized = True  # No restriction configured — open access
 
     if authorized:
+        # Any successful interaction proves this chat can receive messages.
+        # Do not require the user to know about /start before alerts work.
+        message_text = (
+            (update.message.text or "").strip().lower()
+            if update.message and update.message.text
+            else ""
+        )
+        # /alerts must be able to unsubscribe the chat; all other authorized
+        # interactions keep the chat subscribed so alerts work by default.
+        if (
+            message_text not in ("/alerts", "alerts")
+            and not is_alerts_disabled(update.effective_chat.id)
+        ):
+            register_user(update.effective_chat.id)
         return
 
     # Reject the stranger
@@ -89,6 +114,7 @@ async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 BOT_COMMANDS = [
     BotCommand("start",     "Open the bot and register for alerts"),
+    BotCommand("alerts",    "Toggle automatic signal notifications"),
     BotCommand("recommend", "Full analysis with entry, SL, and targets"),
     BotCommand("active",    "View open trades with live P&L"),
     BotCommand("signal",    "Current BUY / SELL / WAIT signal"),

@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
 from src.analysis import get_analysis
-from src.alerts import register_user
+from src.alerts import register_user, unregister_user, is_registered
 from src.market_hours import market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
@@ -97,6 +97,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
+
+
+async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle automatic signal notifications for the current authorized chat."""
+    chat_id = update.effective_chat.id
+    if is_registered(chat_id):
+        unregister_user(chat_id)
+        text = (
+            "🔕 <b>Automatic alerts are OFF</b>\n\n"
+            "You will still receive replies to commands. Use /alerts again "
+            "to turn signal notifications back on."
+        )
+    else:
+        register_user(chat_id)
+        text = (
+            "🔔 <b>Automatic alerts are ON</b>\n\n"
+            "You will receive new BUY/SELL signals, trade updates, and "
+            "market notifications."
+        )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -468,6 +488,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("alerts",    cmd_alerts))
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(CommandHandler("recommend", cmd_recommend))
     app.add_handler(CommandHandler("analyze",   cmd_analyze))

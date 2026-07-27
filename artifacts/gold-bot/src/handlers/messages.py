@@ -60,6 +60,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text(active_trades_card(open_trades, price), parse_mode="HTML")
         return
 
+    if text == "alerts":
+        from src.alerts import register_user, unregister_user, is_registered
+        chat_id = update.effective_chat.id
+        if is_registered(chat_id):
+            unregister_user(chat_id)
+            reply = (
+                "🔕 <b>Automatic alerts are OFF</b>\n\n"
+                "Use /alerts or the Alerts menu button to turn them back on."
+            )
+        else:
+            register_user(chat_id)
+            reply = (
+                "🔔 <b>Automatic alerts are ON</b>\n\n"
+                "New BUY/SELL signals and trade updates will be sent here."
+            )
+        await update.message.reply_text(reply, parse_mode="HTML")
+        return
+
     if text in ("recommend", "analyze", "signal", "trend", "levels", "outlook"):
         if not _is_market_open():
             await update.message.reply_text(_market_closed_reply(), parse_mode="HTML")
