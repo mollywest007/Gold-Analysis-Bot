@@ -193,19 +193,19 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    import asyncio
     from src.analysis import analyze as _analyze
     from src.utils.formatting import multi_timeframe_card
     msg = await update.message.reply_text("Analyzing all timeframes...")
     try:
-        results = await asyncio.gather(
-            _analyze("M5"), _analyze("M15"), _analyze("M30"),
-            _analyze("H1"), _analyze("H4"), _analyze("D1"),
-            return_exceptions=True,
-        )
-        analyses = [r for r in results if not isinstance(r, Exception)]
+        # Sequential — see messages.py for explanation
+        _analyses = []
+        for _tf in ("M5", "M15", "M30", "H1", "H4", "D1"):
+            try:
+                _analyses.append(await _analyze(_tf))
+            except Exception as _e:
+                logger.warning(f"analyze({_tf}) skipped: {_e}")
         await msg.edit_text(
-            multi_timeframe_card(analyses), parse_mode="HTML",
+            multi_timeframe_card(_analyses), parse_mode="HTML",
             reply_markup=refresh_keyboard("analyze", "all"),
         )
     except Exception as e:

@@ -146,14 +146,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                                   reply_markup=kb)
                 elif command == "analyze":
                     await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
-                    results = await asyncio.gather(
-                        analyze("M5"), analyze("M15"), analyze("M30"),
-                        analyze("H1"), analyze("H4"), analyze("D1"),
-                        return_exceptions=True,
-                    )
-                    analyses = [r for r in results if not isinstance(r, Exception)]
+                    # Sequential — see messages.py for explanation
+                    _analyses = []
+                    for _tf in ("M5", "M15", "M30", "H1", "H4", "D1"):
+                        try:
+                            _analyses.append(await analyze(_tf))
+                        except Exception as _e:
+                            logger.warning(f"analyze({_tf}) skipped: {_e}")
                     await query.edit_message_text(
-                        multi_timeframe_card(analyses), parse_mode="HTML", reply_markup=kb
+                        multi_timeframe_card(_analyses), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "signal":

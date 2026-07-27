@@ -129,6 +129,14 @@ class MarketAnalysis:
     # Supertrend
     supertrend_value:     float = 0.0
     supertrend_direction: str   = "NEUTRAL"
+    # ── v4 additions — chart patterns, VWAP, CCI, regime ─────────────────────
+    cci_value:            float = 0.0
+    vwap:                 float = 0.0
+    chart_pattern:        str   = "None"
+    chart_pattern_signal: str   = "NEUTRAL"
+    market_regime:        str   = "NORMAL"   # TRENDING | RANGING | VOLATILE | SQUEEZE | NORMAL
+    hidden_divergence:    str   = "NONE"     # BULLISH_HIDDEN | BEARISH_HIDDEN | NONE
+    bb_bandwidth:         float = 0.0        # squeeze detector: low = BB squeeze incoming
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -268,45 +276,81 @@ def compute_williams_r(highs: List[float], lows: List[float], closes: List[float
 
 def compute_supertrend(highs: List[float], lows: List[float], closes: List[float],
                        period: int = 10, multiplier: float = 3.0) -> Tuple[float, str]:
-    """Supertrend indicator — returns (supertrend_line_value, direction).
-    direction: 'BUY' when price is above the line, 'SELL' when below."""
-    if len(closes) < period + 1:
-        return closes[-1], "NEUTRAL"
+    """
+    Supertrend — proper iterative calculation (Wilder-smoothed ATR, band locking).
+    direction: 'BUY' when price is above the supertrend line, 'SELL' when below.
+    This replaces the earlier single-bar approximation with the canonical algorithm
+    that correctly tracks band transitions across multiple candles.
+    """
+    n = len(closes)
+    if n < period + 2:
+        return (closes[-1] if closes else 0.0), "NEUTRAL"
 
-    # Compute ATR series
+    # ── Wilder-smoothed ATR ───────────────────────────────────────────────────
     tr_list: List[float] = []
-    for i in range(1, len(closes)):
+    for i in range(1, n):
         tr = max(highs[i] - lows[i],
                  abs(highs[i] - closes[i - 1]),
                  abs(lows[i]  - closes[i - 1]))
         tr_list.append(tr)
 
-    # Smooth ATR with SMA for simplicity
-    def _sma(vals: List[float], n: int) -> float:
-        return sum(vals[-n:]) / n if len(vals) >= n else sum(vals) / max(len(vals), 1)
+    atr_s = sum(tr_list[:period]) / period
+    atr_series: List[float] = [atr_s]
+    for tr in tr_list[period:]:
+        atr_s = (atr_s * (period - 1) + tr) / period
+        atr_series.append(atr_s)
 
-    atr_val = _sma(tr_list, period)
+    hl2 = [(highs[i] + lows[i]) / 2 for i in range(n)]
 
-    hl2 = [(highs[i] + lows[i]) / 2 for i in range(len(closes))]
-    basic_upper = hl2[-1] + multiplier * atr_val
-    basic_lower = hl2[-1] - multiplier * atr_val
+    # ── Iterative band + direction tracking ──────────────────────────────────
+    final_upper = [0.0] * n
+    final_lower = [0.0] * n
+    st_line     = [0.0] * n
+    st_dir      = [1]   * n   # 1 = BUY (price above line), -1 = SELL (price below)
 
-    # Simple single-bar supertrend direction using last two bars
-    prev_close = closes[-2]
-    curr_close = closes[-1]
+    start   = period
+    atr_idx = 0
 
-    if curr_close > basic_upper:
-        direction = "BUY"
-        line_val  = basic_lower
-    elif curr_close < basic_lower:
-        direction = "SELL"
-        line_val  = basic_upper
-    else:
-        # In the band — use momentum of prev close vs band
-        direction = "BUY" if prev_close >= (hl2[-2] + (hl2[-2] - lows[-2]) * multiplier * 0.5) else "SELL"
-        line_val  = basic_lower if direction == "BUY" else basic_upper
+    for i in range(start, n):
+        atr_i = atr_series[atr_idx] if atr_idx < len(atr_series) else atr_s
+        atr_idx += 1
 
-    return round(line_val, 2), direction
+        basic_upper = hl2[i] + multiplier * atr_i
+        basic_lower = hl2[i] - multiplier * atr_i
+
+        if i == start:
+            final_upper[i] = basic_upper
+            final_lower[i] = basic_lower
+            st_line[i]     = basic_lower
+            st_dir[i]      = 1
+        else:
+            # Upper band only tightens (never widens unless broken)
+            final_upper[i] = (
+                basic_upper
+                if basic_upper < final_upper[i - 1] or closes[i - 1] > final_upper[i - 1]
+                else final_upper[i - 1]
+            )
+            # Lower band only rises (never falls unless broken)
+            final_lower[i] = (
+                basic_lower
+                if basic_lower > final_lower[i - 1] or closes[i - 1] < final_lower[i - 1]
+                else final_lower[i - 1]
+            )
+            # Direction: flip only when price decisively crosses the active band
+            prev_st = st_line[i - 1]
+            if prev_st == final_upper[i - 1]:         # was SELL
+                if closes[i] > final_upper[i]:
+                    st_line[i] = final_lower[i]; st_dir[i] = 1
+                else:
+                    st_line[i] = final_upper[i]; st_dir[i] = -1
+            else:                                      # was BUY
+                if closes[i] < final_lower[i]:
+                    st_line[i] = final_upper[i]; st_dir[i] = -1
+                else:
+                    st_line[i] = final_lower[i]; st_dir[i] = 1
+
+    final_direction = "BUY" if st_dir[-1] == 1 else "SELL"
+    return round(st_line[-1], 2), final_direction
 
 
 def compute_adx(highs: List[float], lows: List[float], closes: List[float],
@@ -356,6 +400,311 @@ def compute_adx(highs: List[float], lows: List[float], closes: List[float],
         last_plus_di = last_minus_di = 50.0
 
     return round(adx, 2), last_plus_di, last_minus_di
+
+
+# ─── v4: CCI, VWAP, BB-bandwidth, Hidden Divergence, Chart Patterns, Regime ──
+
+def compute_cci(highs: List[float], lows: List[float], closes: List[float],
+                period: int = 20) -> float:
+    """
+    Commodity Channel Index — excellent for gold's cyclical moves.
+    Overbought  > +100  (> +200 = extreme; reversal territory)
+    Oversold    < -100  (< -200 = extreme)
+    Zero-line cross from below = emerging bullish momentum.
+    """
+    if len(closes) < period:
+        return 0.0
+    tps      = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    tp_win   = tps[-period:]
+    tp_sma   = sum(tp_win) / period
+    mean_dev = sum(abs(tp - tp_sma) for tp in tp_win) / period
+    if mean_dev == 0:
+        return 0.0
+    return round((tps[-1] - tp_sma) / (0.015 * mean_dev), 2)
+
+
+def compute_vwap(highs: List[float], lows: List[float], closes: List[float],
+                 volumes: List[float], session_bars: int = 24) -> float:
+    """
+    Session VWAP — the institutional price benchmark.
+    Price above VWAP: buy-side institutional bias.
+    Price below VWAP: sell-side institutional bias.
+    VWAP pullback (price returns to VWAP from above/below) = high-probability entry.
+    """
+    if not volumes or len(closes) < 5:
+        return closes[-1] if closes else 0.0
+    n     = len(closes)
+    start = max(0, n - session_bars)
+    tps   = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(start, n)]
+    vols  = [max(volumes[i], 0) for i in range(start, n)]
+    total = sum(vols)
+    if total <= 0:
+        return closes[-1]
+    return round(sum(tp * v for tp, v in zip(tps, vols)) / total, 2)
+
+
+def compute_bb_bandwidth(closes: List[float], period: int = 20,
+                         num_std: float = 2.0) -> float:
+    """
+    Bollinger Band Width (% of midline).
+    Low bandwidth (<1.5%) → BB squeeze → volatility expansion (breakout) incoming.
+    High bandwidth (>4.0%) → trend in motion or post-news expansion.
+    """
+    if len(closes) < period:
+        return 0.0
+    window = closes[-period:]
+    mid    = sum(window) / period
+    if mid == 0:
+        return 0.0
+    std    = math.sqrt(sum((x - mid) ** 2 for x in window) / period)
+    return round(4 * num_std * std / mid * 100, 2)
+
+
+def _score_cci(cci: float, adx: float) -> Tuple[str, float]:
+    """
+    CCI scoring. In trending markets (ADX>25) mid-zone CCI aligns with trend.
+    At extremes (±200) it signals reversal regardless of trend.
+    """
+    if cci >= 200:   return "SELL", 0.88
+    if cci <= -200:  return "BUY",  0.88
+    if cci >= 130:   return "SELL", 0.72
+    if cci <= -130:  return "BUY",  0.72
+    if cci >= 100:
+        return ("SELL", 0.62) if adx < 25 else ("SELL", 0.52)
+    if cci <= -100:
+        return ("BUY",  0.62) if adx < 25 else ("BUY",  0.52)
+    # Trend-aligned mid-zone (only when ADX confirms direction)
+    if adx >= 25 and cci > 20:   return "BUY",  0.40
+    if adx >= 25 and cci < -20:  return "SELL", 0.40
+    return "NEUTRAL", 0.0
+
+
+def detect_hidden_divergence(closes: List[float], lookback: int = 30) -> str:
+    """
+    Hidden divergence — confirms trend CONTINUATION (opposite of regular divergence).
+
+    Bullish hidden: price makes Higher Low, RSI makes Lower Low
+                    → pullback in uptrend, smart money buying, expect continuation up.
+    Bearish hidden: price makes Lower High, RSI makes Higher High
+                    → rally in downtrend, distribution underway, expect continuation down.
+
+    Returns 'BULLISH_HIDDEN', 'BEARISH_HIDDEN', or 'NONE'.
+    """
+    n = len(closes)
+    if n < lookback + 18:
+        return "NONE"
+
+    pivot_bars = 3
+    win_start  = n - lookback
+    win_end    = n - pivot_bars - 1
+
+    rsi_cache: dict = {}
+    def _rsi_at(i: int) -> float:
+        if i not in rsi_cache:
+            rsi_cache[i] = compute_rsi(closes[: i + 1], 14)
+        return rsi_cache[i]
+
+    highs_idx: List[int] = []
+    lows_idx:  List[int] = []
+    for i in range(win_start + pivot_bars, win_end):
+        if all(closes[i] >= closes[i - j] and closes[i] >= closes[i + j]
+               for j in range(1, pivot_bars + 1)):
+            highs_idx.append(i)
+        if all(closes[i] <= closes[i - j] and closes[i] <= closes[i + j]
+               for j in range(1, pivot_bars + 1)):
+            lows_idx.append(i)
+
+    # Bearish hidden: price lower high + RSI higher high → downtrend continuation
+    if len(highs_idx) >= 2:
+        a_i, b_i = highs_idx[-2], highs_idx[-1]
+        if closes[b_i] < closes[a_i] and _rsi_at(b_i) > _rsi_at(a_i) + 3:
+            if _rsi_at(b_i) < 65:
+                return "BEARISH_HIDDEN"
+
+    # Bullish hidden: price higher low + RSI lower low → uptrend continuation
+    if len(lows_idx) >= 2:
+        a_i, b_i = lows_idx[-2], lows_idx[-1]
+        if closes[b_i] > closes[a_i] and _rsi_at(b_i) < _rsi_at(a_i) - 3:
+            if _rsi_at(b_i) > 35:
+                return "BULLISH_HIDDEN"
+
+    return "NONE"
+
+
+def detect_chart_pattern(
+    highs: List[float], lows: List[float], closes: List[float],
+    opens: List[float], atr: float, lookback: int = 60
+) -> Tuple[str, str]:
+    """
+    Detect classical chart patterns — ordered by reliability for XAU/USD.
+    Returns (pattern_name, signal).  signal: 'BUY' | 'SELL' | 'NEUTRAL'
+
+    Priority:
+      1. Head & Shoulders / Inverse H&S  (high-reliability major reversal)
+      2. Double Top / Double Bottom       (second most reliable reversal)
+      3. Bull Flag / Bear Flag            (highest win rate continuation)
+      4. Ascending / Descending Triangle  (pre-breakout compression)
+      5. Rising / Falling Wedge           (reversal with narrowing range)
+    """
+    n = len(closes)
+    if n < 20:
+        return "None", "NEUTRAL"
+
+    win = min(lookback, n)
+    h   = highs[-win:]
+    l   = lows[-win:]
+    c   = closes[-win:]
+    wn  = len(h)
+    tol = atr * 0.65   # tolerance for "same level" comparisons
+
+    # ── 1. Head & Shoulders (major top reversal) ──────────────────────────────
+    if wn >= 25:
+        seg = wn // 5
+        sh1_h = max(h[:seg * 2])
+        hd_h  = max(h[seg:seg * 4])
+        sh2_h = max(h[seg * 3:])
+        if (hd_h > sh1_h + atr * 0.5
+                and hd_h > sh2_h + atr * 0.5
+                and abs(sh1_h - sh2_h) < tol * 2.0):
+            lt = min(l[seg:seg * 2]) if seg * 2 <= wn else l[seg]
+            rt = min(l[seg * 3:seg * 4]) if seg * 4 <= wn else l[seg * 3]
+            neckline = (lt + rt) / 2
+            if c[-1] < neckline + atr * 0.6:
+                return "Head & Shoulders", "SELL"
+
+    # ── 1b. Inverse H&S (major bottom reversal) ───────────────────────────────
+    if wn >= 25:
+        seg = wn // 5
+        sh1_l = min(l[:seg * 2])
+        hd_l  = min(l[seg:seg * 4])
+        sh2_l = min(l[seg * 3:])
+        if (hd_l < sh1_l - atr * 0.5
+                and hd_l < sh2_l - atr * 0.5
+                and abs(sh1_l - sh2_l) < tol * 2.0):
+            lp = max(h[seg:seg * 2]) if seg * 2 <= wn else h[seg]
+            rp = max(h[seg * 3:seg * 4]) if seg * 4 <= wn else h[seg * 3]
+            neckline = (lp + rp) / 2
+            if c[-1] > neckline - atr * 0.6:
+                return "Inverse H&S", "BUY"
+
+    # ── 2. Double Top ─────────────────────────────────────────────────────────
+    if wn >= 16:
+        half = wn // 2
+        p1   = max(h[:half])
+        p2   = max(h[half:])
+        if abs(p1 - p2) < tol and min(l) < p1 - atr * 0.8:
+            neckline = min(min(l[:half]), min(l[half:]))
+            if c[-1] < neckline + atr * 0.5:
+                return "Double Top", "SELL"
+
+    # ── 2b. Double Bottom ─────────────────────────────────────────────────────
+    if wn >= 16:
+        half = wn // 2
+        b1   = min(l[:half])
+        b2   = min(l[half:])
+        if abs(b1 - b2) < tol and max(h) > b1 + atr * 0.8:
+            neckline = max(max(h[:half]), max(h[half:]))
+            if c[-1] > neckline - atr * 0.5:
+                return "Double Bottom", "BUY"
+
+    # ── 3. Bull Flag (tight retrace after strong up-move) ────────────────────
+    if wn >= 14:
+        pole = wn // 3
+        pole_move  = c[pole - 1] - c[0]
+        pole_range = max(h[:pole]) - min(l[:pole])
+        ch_high    = max(h[pole:])
+        ch_low     = min(l[pole:])
+        ch_range   = max(ch_high - ch_low, atr * 0.1)
+        pole_bull  = pole_move > pole_range * 0.45 and c[pole - 1] > c[0]
+        tight_ch   = ch_range < pole_range * 0.52
+        upper_ret  = ch_high < max(h[:pole]) + atr
+        price_top  = c[-1] > ch_high - ch_range * 0.4
+        if pole_bull and tight_ch and upper_ret and price_top:
+            return "Bull Flag", "BUY"
+
+    # ── 3b. Bear Flag ─────────────────────────────────────────────────────────
+    if wn >= 14:
+        pole = wn // 3
+        pole_move  = c[0] - c[pole - 1]
+        pole_range = max(h[:pole]) - min(l[:pole])
+        ch_high    = max(h[pole:])
+        ch_low     = min(l[pole:])
+        ch_range   = max(ch_high - ch_low, atr * 0.1)
+        pole_bear  = pole_move > pole_range * 0.45 and c[pole - 1] < c[0]
+        tight_ch   = ch_range < pole_range * 0.52
+        lower_ret  = ch_low > min(l[:pole]) - atr
+        price_bot  = c[-1] < ch_low + ch_range * 0.4
+        if pole_bear and tight_ch and lower_ret and price_bot:
+            return "Bear Flag", "SELL"
+
+    # ── 4. Ascending Triangle (flat resistance + rising lows) ─────────────────
+    if wn >= 18:
+        r_h = h[-10:]
+        r_l = l[-10:]
+        highs_flat  = (max(r_h) - min(r_h)) < tol
+        lows_rising = r_l[-1] > r_l[0] + atr * 0.4
+        if highs_flat and lows_rising:
+            return "Ascending Triangle", "BUY"
+
+    # ── 4b. Descending Triangle (flat support + falling highs) ────────────────
+    if wn >= 18:
+        r_h = h[-10:]
+        r_l = l[-10:]
+        lows_flat    = (max(r_l) - min(r_l)) < tol
+        highs_falling = r_h[-1] < r_h[0] - atr * 0.4
+        if lows_flat and highs_falling:
+            return "Descending Triangle", "SELL"
+
+    # ── 5. Rising Wedge (both boundaries rising but narrowing → bearish) ──────
+    if wn >= 18:
+        q = wn // 4
+        e_hi = max(h[:q + 1]);  l_hi = max(h[-(q + 1):])
+        e_lo = min(l[:q + 1]);  l_lo = min(l[-(q + 1):])
+        both_rising = l_hi > e_hi and l_lo > e_lo
+        narrowing   = (l_hi - l_lo) < (e_hi - e_lo) * 0.72 and (l_hi - l_lo) > atr
+        if both_rising and narrowing:
+            return "Rising Wedge", "SELL"
+
+    # ── 5b. Falling Wedge (both boundaries falling + narrowing → bullish) ─────
+    if wn >= 18:
+        q = wn // 4
+        e_hi = max(h[:q + 1]);  l_hi = max(h[-(q + 1):])
+        e_lo = min(l[:q + 1]);  l_lo = min(l[-(q + 1):])
+        both_falling = l_hi < e_hi and l_lo < e_lo
+        narrowing    = (l_hi - l_lo) < (e_hi - e_lo) * 0.72 and (l_hi - l_lo) > atr
+        if both_falling and narrowing:
+            return "Falling Wedge", "BUY"
+
+    return "None", "NEUTRAL"
+
+
+def detect_market_regime(closes: List[float], highs: List[float], lows: List[float],
+                          adx: float, atr: float) -> str:
+    """
+    Classify the current market regime for XAU/USD.
+    This drives strategy selection — not just signal filtering.
+
+    TRENDING  → trend-follow entries, trail stops aggressively
+    RANGING   → S/R bounces, mean reversion; AVOID breakout entries
+    VOLATILE  → reduce position size, widen SL; wait for calmer entry
+    SQUEEZE   → BB compressing; watch for breakout; prepare both sides
+    NORMAL    → standard analysis applies
+    """
+    if len(closes) < 22:
+        return "NORMAL"
+    price   = closes[-1]
+    bb_bw   = compute_bb_bandwidth(closes[-22:], period=20)
+    atr_pct = (atr / price * 100) if price > 0 else 0
+
+    if adx >= 28 and bb_bw > 3.5:
+        return "TRENDING"
+    if adx < 18 and bb_bw < 1.8:
+        return "RANGING"
+    if atr_pct > 0.85:
+        return "VOLATILE"
+    if bb_bw < 1.2 and adx < 22:
+        return "SQUEEZE"
+    return "NORMAL"
 
 
 # ─── S/R (improved: 6-bar lookback, volume-weighted cluster) ─────────────────
@@ -467,6 +816,47 @@ def detect_candlestick(opens: List[float], highs: List[float],
                 and upper_wick2 < body2 * 0.3):
             return "Three Black Crows", 0.88
 
+        # Three Inside Up: bearish → small bullish inside → bullish close above first
+        if (c3 < o3                     # bar 3: bearish
+                and c2 > o2             # bar 2: bullish inside bar 3
+                and o2 > c3 and c2 < o3
+                and c1 > o1             # bar 1: bullish close above bar 3 open
+                and c1 > o3):
+            return "Three Inside Up", 0.80
+
+        # Three Inside Down: bullish → small bearish inside → bearish close below first
+        if (c3 > o3
+                and c2 < o2
+                and o2 < c3 and c2 > o3
+                and c1 < o1
+                and c1 < o3):
+            return "Three Inside Down", 0.80
+
+        # Bullish Kicker: gap from bearish to bullish candle (strong reversal)
+        if (c3 < o3 and c2 < o2         # two prior bearish
+                and o1 > max(o2, c2)    # current opens above prior high = gap-up
+                and c1 > o1):           # current closes higher = bullish kicker
+            return "Bullish Kicker", 0.88
+
+        # Bearish Kicker: gap from bullish to bearish candle
+        if (c3 > o3 and c2 > o2
+                and o1 < min(o2, c2)    # opens below prior low = gap-down
+                and c1 < o1):
+            return "Bearish Kicker", 0.88
+
+        # Bullish Abandoned Baby: bearish → doji with gap → bullish with gap
+        gap_down_2 = max(o2, c2) < min(o3, c3) - atr * 0.05
+        gap_up_1   = min(o1, c1) > max(o2, c2) + atr * 0.05
+        mid_doji   = abs(c2 - o2) < (h2 - l2) * 0.10
+        if gap_down_2 and mid_doji and gap_up_1 and c1 > o1:
+            return "Bullish Abandoned Baby", 0.90
+
+        # Bearish Abandoned Baby: bullish → doji with gap → bearish with gap
+        gap_up_2   = min(o2, c2) > max(o3, c3) + atr * 0.05
+        gap_down_1 = max(o1, c1) < min(o2, c2) - atr * 0.05
+        if gap_up_2 and mid_doji and gap_down_1 and c1 < o1:
+            return "Bearish Abandoned Baby", 0.90
+
     # ── Two-candle patterns ───────────────────────────────────────────────────
 
     # Bullish Engulfing: prior bearish, current bullish, fully engulfs
@@ -516,6 +906,28 @@ def detect_candlestick(opens: List[float], highs: List[float],
     # Inside Bar: entire range of candle 1 is within candle 2
     if h1 <= h2 and l1 >= l2 and body1 > 0:
         return "Inside Bar", 0.0   # directional neutral — breakout pending
+
+    # Bullish Belt Hold: opens near low, no lower shadow, strong bullish thrust
+    if (c1 > o1 and lower_wick1 < body1 * 0.05
+            and body1 > atr * 0.35 and body_ratio1 >= 0.70):
+        return "Bullish Belt Hold", 0.74
+
+    # Bearish Belt Hold: opens near high, no upper shadow, strong bearish thrust
+    if (c1 < o1 and upper_wick1 < body1 * 0.05
+            and body1 > atr * 0.35 and body_ratio1 >= 0.70):
+        return "Bearish Belt Hold", 0.74
+
+    # Bullish Counterattack: prior bearish, current opens well below then closes near prior close
+    if (c2 < o2 and c1 > o1
+            and o1 < c2 - atr * 0.25
+            and abs(c1 - c2) < atr * 0.18):
+        return "Bullish Counterattack", 0.68
+
+    # Bearish Counterattack: prior bullish, current opens well above then closes near prior close
+    if (c2 > o2 and c1 < o1
+            and o1 > c2 + atr * 0.25
+            and abs(c1 - c2) < atr * 0.18):
+        return "Bearish Counterattack", 0.68
 
     # ── Single-candle patterns (directional checks BEFORE Doji) ──────────────
     # Use range-based wick thresholds so these fire even when body is tiny.
@@ -1066,6 +1478,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     candle_pat, candle_wt = detect_candlestick(opens, highs, lows, closes, atr)
     c_signal = candle_signal(candle_pat)
 
+    # ── v4: CCI, VWAP, BB-bandwidth, chart pattern, hidden divergence, regime ──
+    cci              = compute_cci(highs, lows, closes, 20)
+    vwap             = compute_vwap(highs, lows, closes, volumes, _candles_per_day(timeframe))
+    bb_bw            = compute_bb_bandwidth(closes, 20)
+    chart_pat_cls, chart_pat_sig = detect_chart_pattern(highs, lows, closes, opens, atr, 60)
+    hidden_div       = detect_hidden_divergence(closes, 30)
+    market_regime_v  = detect_market_regime(closes, highs, lows, adx, atr)
+
     session_label, session_mult = get_trading_session()
     vol_spike = is_volume_spike(volumes, lookback=20, threshold=1.5)
 
@@ -1144,32 +1564,46 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     willr_sig, willr_conf, willr_caution = _score_williams_r(willr)
     st_sig, st_conf                       = _score_supertrend(st_direction)
+    cci_sig, cci_conf                     = _score_cci(cci, adx)
 
+    # 8 core indicators — CCI added as 5th (reweighted so all sum to same as before)
     indicators = [
-        Indicator("RSI(14)",    rsi,       rsi_sig,      0.18),
-        Indicator("MACD",       macd_line, macd_sig,     0.20),
-        Indicator("EMA Stack",  ema20,     ema_sig,      0.22),
-        Indicator("ADX DI",     adx,       adx_di_sig,   0.18),
-        Indicator("BB %B",      bb_pct,    bb_sig,       0.10),
-        Indicator("Williams%R", willr,     willr_sig,    0.08),
-        Indicator("Supertrend", st_value,  st_sig,       0.04),
+        Indicator("RSI(14)",    rsi,       rsi_sig,      0.17),
+        Indicator("MACD",       macd_line, macd_sig,     0.18),
+        Indicator("EMA Stack",  ema20,     ema_sig,      0.20),
+        Indicator("ADX DI",     adx,       adx_di_sig,   0.17),
+        Indicator("CCI(20)",    cci,       cci_sig,      0.12),
+        Indicator("BB %B",      bb_pct,    bb_sig,       0.09),
+        Indicator("Williams%R", willr,     willr_sig,    0.05),
+        Indicator("Supertrend", st_value,  st_sig,       0.02),
     ]
-    # Candle and RSI Div are optional — only added when they have something real to say
+    # Optional votes — only added when they have a clear directional stance
     if candle_sig_v != "NEUTRAL":
         indicators.append(Indicator("Candle", candle_wt, candle_sig_v, 0.10))
     if div_sig != "NEUTRAL":
         indicators.append(Indicator("RSI Div", 0.0, div_sig, 0.08))
+    # Chart pattern (strong classical pattern = directional vote)
+    if chart_pat_sig in ("BUY", "SELL") and chart_pat_cls != "None":
+        indicators.append(Indicator("Chart Pat", 0.0, chart_pat_sig, 0.09))
+    # Hidden divergence — trend continuation vote
+    if hidden_div == "BULLISH_HIDDEN":
+        indicators.append(Indicator("Hidden Div", 0.0, "BUY",  0.07))
+    elif hidden_div == "BEARISH_HIDDEN":
+        indicators.append(Indicator("Hidden Div", 0.0, "SELL", 0.07))
 
     conf_map = {
         "RSI(14)":    rsi_conf,
         "MACD":       macd_conf,
         "EMA Stack":  ema_conf,
         "ADX DI":     adx_di_conf,
+        "CCI(20)":    cci_conf,
         "BB %B":      bb_conf,
         "Williams%R": willr_conf,
         "Supertrend": st_conf,
         "Candle":     candle_conf_v,
         "RSI Div":    div_conf,
+        "Chart Pat":  0.72,
+        "Hidden Div": 0.68,
     }
 
     buy_votes  = sum(1 for i in indicators if i.signal == "BUY")
@@ -1550,6 +1984,35 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             confluence_list.append("Change of Character — bullish reversal confirmed")
         elif choch == "BEARISH_CHOCH" and direction == "SELL":
             confluence_list.append("Change of Character — bearish reversal confirmed")
+        # ── v4 additions to confluence ─────────────────────────────────────────
+        # Chart pattern
+        if chart_pat_cls != "None" and chart_pat_sig == direction:
+            confluence_list.append(f"Chart Pattern: {chart_pat_cls} (confirmed {direction})")
+        elif chart_pat_cls != "None" and chart_pat_sig in ("BUY", "SELL"):
+            confluence_list.append(f"Chart Pattern: {chart_pat_cls} (note: opposite bias)")
+        # VWAP institutional benchmark
+        if vwap > 0:
+            vwap_dist = abs(price - vwap)
+            if direction == "BUY" and price > vwap:
+                confluence_list.append(f"Above VWAP {vwap:,.2f} — institutional bid side")
+            elif direction == "BUY" and price < vwap and vwap_dist < atr * 1.2:
+                confluence_list.append(f"VWAP pullback @ {vwap:,.2f} — limit-buy zone (below VWAP)")
+            elif direction == "SELL" and price < vwap:
+                confluence_list.append(f"Below VWAP {vwap:,.2f} — institutional offer side")
+            elif direction == "SELL" and price > vwap and vwap_dist < atr * 1.2:
+                confluence_list.append(f"VWAP rally rejection @ {vwap:,.2f} — limit-sell zone")
+        # Hidden divergence
+        if hidden_div == "BULLISH_HIDDEN" and direction == "BUY":
+            confluence_list.append("Bullish Hidden Divergence — higher low confirms uptrend continuation")
+        elif hidden_div == "BEARISH_HIDDEN" and direction == "SELL":
+            confluence_list.append("Bearish Hidden Divergence — lower high confirms downtrend continuation")
+        # Market regime context
+        if market_regime_v == "TRENDING":
+            confluence_list.append(f"TRENDING regime (ADX {adx:.0f}) — momentum trades favored")
+        elif market_regime_v == "SQUEEZE":
+            confluence_list.append("BB Squeeze — volatility expansion imminent, high-prob breakout")
+        elif market_regime_v == "RANGING":
+            confluence_list.append("RANGING regime — caution on breakout entries; S/R bounces only")
 
     # Win probability — honest formula, no confidence inflation
     # Built purely from measurable signal quality components.
@@ -1578,6 +2041,22 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     if (choch == "BULLISH_CHOCH" and direction == "BUY") or \
        (choch == "BEARISH_CHOCH" and direction == "SELL"):
         raw_wp += 4   # CHoCH = early reversal signal, highest confidence boost
+    # ── v4: chart pattern, hidden divergence, regime, VWAP ───────────────────
+    if chart_pat_cls != "None" and chart_pat_sig == action and action in ("BUY","SELL"):
+        raw_wp += 4   # confirmed classical chart pattern = very high-conviction
+    if (hidden_div == "BULLISH_HIDDEN" and action == "BUY") or \
+       (hidden_div == "BEARISH_HIDDEN" and action == "SELL"):
+        raw_wp += 3   # hidden divergence confirms trend continuation
+    if market_regime_v == "TRENDING":
+        raw_wp += 3   # strong trend regime → momentum entries work
+    elif market_regime_v == "RANGING" and action in ("BUY","SELL"):
+        raw_wp -= 3   # ranging market = breakout traps; reduce probability
+    elif market_regime_v == "SQUEEZE":
+        raw_wp += 2   # squeeze before breakout = higher win on first impulse
+    if vwap > 0 and action in ("BUY","SELL"):
+        vwap_aligned = (action == "BUY" and price > vwap) or (action == "SELL" and price < vwap)
+        if vwap_aligned:
+            raw_wp += 2   # VWAP institutional bias confirms direction
     win_probability = max(50, min(85, int(raw_wp))) if action in ("BUY", "SELL") else 0
 
     # ── ICT / Institutional context ────────────────────────────────────────────
@@ -1654,7 +2133,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
                 f"📦 Order Block demand {ob_low:,.2f}–{ob_high:,.2f} — "
                 f"institutional re-accumulation zone, limit buy @ {early_entry:,.2f}"
             )
-        # 2. FVG: unfilled bullish imbalance below current price
+        # 2. VWAP pullback — institutional benchmark, high-prob limit-buy zone
+        elif (vwap > stop_loss and vwap < price and abs(price - vwap) < atr * 1.5):
+            early_entry = round(max(vwap - atr * 0.05, stop_loss + atr * 0.15), 2)
+            early_entry_reason = (
+                f"📊 VWAP pullback @ {vwap:,.2f} — institutions anchor to VWAP; "
+                f"price retracing to VWAP = prime limit-buy zone, set @ {early_entry:,.2f}"
+            )
+        # 3. FVG: unfilled bullish imbalance below current price
         elif fvg_dir == "BULLISH" and fvg_bot > stop_loss and fvg_bot < price:
             early_entry = round(fvg_bot + atr * 0.05, 2)
             early_entry_reason = (
@@ -1698,7 +2184,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
                 f"📦 Order Block supply {ob_low:,.2f}–{ob_high:,.2f} — "
                 f"institutional distribution zone, limit sell @ {early_entry:,.2f}"
             )
-        # 2. FVG: unfilled bearish imbalance above current price
+        # 2. VWAP rally rejection — institutional benchmark, high-prob limit-sell zone
+        elif (vwap < stop_loss and vwap > price and abs(price - vwap) < atr * 1.5):
+            early_entry = round(min(vwap + atr * 0.05, stop_loss - atr * 0.15), 2)
+            early_entry_reason = (
+                f"📊 VWAP rally to {vwap:,.2f} — price rallying back to VWAP from below; "
+                f"VWAP is institutional resistance here, set limit-sell @ {early_entry:,.2f}"
+            )
+        # 3. FVG: unfilled bearish imbalance above current price
         elif fvg_dir == "BEARISH" and fvg_top < stop_loss and fvg_top > price:
             early_entry = round(fvg_top - atr * 0.05, 2)
             early_entry_reason = (
@@ -1742,7 +2235,7 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     if action in ("BUY", "SELL"):
         core_votes = sum(
             1 for i in indicators
-            if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "BB %B")
+            if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "CCI(20)", "BB %B")
             and i.signal == action
         )
         # ChoCH aligned with direction counts as structural confirmation —
@@ -1759,8 +2252,8 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         adx_a  = 17 if is_kill_zone else 20
         if win_probability >= 68 and effective_votes >= 5 and adx >= adx_ap:
             setup_quality = "A+"
-        elif win_probability >= 60 and effective_votes >= 4 and adx >= adx_a:
-            setup_quality = "A"   # lowered from 62% — ChoCH path needs 60%
+        elif win_probability >= 60 and (effective_votes >= 4 or (effective_votes >= 3 and market_regime_v == "TRENDING")) and adx >= adx_a:
+            setup_quality = "A"
         elif win_probability >= 55:
             setup_quality = "B"
         else:
@@ -1823,6 +2316,13 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         willr_caution=willr_caution,
         supertrend_value=st_value,
         supertrend_direction=st_direction,
+        cci_value=cci,
+        vwap=vwap,
+        chart_pattern=chart_pat_cls,
+        chart_pattern_signal=chart_pat_sig,
+        market_regime=market_regime_v,
+        hidden_divergence=hidden_div,
+        bb_bandwidth=bb_bw,
     )
 
 

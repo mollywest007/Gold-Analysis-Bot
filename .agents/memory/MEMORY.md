@@ -1,0 +1,1 @@
+- [Gold Bot Engine v4 Upgrade](gold-bot-engine-v4.md) — v4 adds CCI, VWAP, BB bandwidth, chart patterns, hidden divergence, market regime; proper iterative Supertrend; 8 core indicators; expanded candlestick patterns

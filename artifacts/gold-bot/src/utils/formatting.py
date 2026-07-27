@@ -150,6 +150,10 @@ def _indicator_rows(a: MarketAnalysis) -> str:
             st_arrow = "▲ bullish" if st_direction == "BUY" else ("▼ bearish" if st_direction == "SELL" else "neutral")
             rows.append(f"  {'Supertrend':<12} {'':>8}   {arrow}  ({st_arrow})")
             continue
+        elif ind.name == "CCI(20)":
+            val_str = f"{ind.value:.0f}"
+        elif ind.name in ("Chart Pat", "Hidden Div", "RSI Div", "Candle"):
+            val_str = ""
         else:
             val_str = f"{ind.value:.1f}"
         rows.append(f"  {ind.name:<12} {val_str:>8}   {arrow}")
@@ -286,8 +290,18 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  BB%B     : {a.bb_pct:.1f}%",
             f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
             f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
-            f"  Votes    : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
+            f"  CCI(20)   : {getattr(a,'cci_value',0.0):.0f}",
+            f"  VWAP      : {getattr(a,'vwap',0.0):,.2f}   Price {'>' if a.price > getattr(a,'vwap',a.price) else '<'} VWAP",
+            f"  Regime    : {getattr(a,'market_regime','NORMAL')}",
+            f"  Votes     : BUY {a.buy_votes}/8  SELL {a.sell_votes}/8",
         ]
+        _cp = getattr(a, "chart_pattern", "None")
+        _cp_sig = getattr(a, "chart_pattern_signal", "NEUTRAL")
+        if _cp and _cp != "None":
+            lines[-1:] += [f"  Chrt Pat  : {_cp} → {_cp_sig}"]
+        _hd = getattr(a, "hidden_divergence", "NONE")
+        if _hd != "NONE":
+            lines += [f"  Hidden Div: {_hd.replace('_', ' ').title()}"]
 
     # ── Alert cooldown status ──────────────────────────────────────────────────
     try:
@@ -339,11 +353,21 @@ def analysis_card(a: MarketAnalysis) -> str:
         f"  BB%B      : {a.bb_pct:.1f}%",
         f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
         f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
-        f"  Votes     : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
+        f"  CCI(20)   : {getattr(a,'cci_value',0.0):.0f}",
+        f"  VWAP      : {getattr(a,'vwap',0.0):,.2f}   Price {'>' if a.price > getattr(a,'vwap',a.price) else '<'} VWAP",
+        f"  BB BW     : {getattr(a,'bb_bandwidth',0.0):.2f}%   Regime: {getattr(a,'market_regime','NORMAL')}",
+        f"  Votes     : BUY {a.buy_votes}/8  SELL {a.sell_votes}/8",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
-        lines.append(f"  Pattern   : {a.candle_pattern}")
+        lines.append(f"  Candle    : {a.candle_pattern}")
+    _cp = getattr(a, "chart_pattern", "None")
+    _cp_sig = getattr(a, "chart_pattern_signal", "NEUTRAL")
+    if _cp and _cp != "None":
+        lines.append(f"  Chrt Pat  : {_cp} → {_cp_sig}")
+    _hd = getattr(a, "hidden_divergence", "NONE")
+    if _hd != "NONE":
+        lines.append(f"  Hidden Div: {_hd.replace('_', ' ').title()}")
 
     lines += ["",
         "──────────────────────────────────",
@@ -550,9 +574,12 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  BB%B      {a.bb_pct:>6.1f}%   {bb_desc}",
         f"  Williams%R {getattr(a,'willr_value',-50):>5.1f}" + (f"   ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
         f"  Supertrend {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
+        f"  CCI(20)   {getattr(a,'cci_value',0.0):>5.0f}",
+        f"  VWAP      {getattr(a,'vwap',0.0):>10,.2f}   ({'above' if a.price > getattr(a,'vwap',a.price) else 'below'} VWAP)",
+        f"  BB BW     {getattr(a,'bb_bandwidth',0.0):>5.2f}%   Regime: {getattr(a,'market_regime','NORMAL')}",
         "──────────────────────────────────",
         f"  Indicator votes:",
-        f"    BUY  {a.buy_votes}/7   SELL  {a.sell_votes}/7   WAIT  {a.wait_votes}/7",
+        f"    BUY  {a.buy_votes}/8   SELL  {a.sell_votes}/8   WAIT  {a.wait_votes}/8",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
@@ -560,6 +587,13 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
             "──────────────────────────────────",
             f"  Candle  : {a.candle_pattern}",
         ]
+    _cp = getattr(a, "chart_pattern", "None")
+    _cp_sig = getattr(a, "chart_pattern_signal", "NEUTRAL")
+    if _cp and _cp != "None":
+        lines += ["──────────────────────────────────", f"  Chrt Pat: {_cp} → {_cp_sig}"]
+    _hd = getattr(a, "hidden_divergence", "NONE")
+    if _hd != "NONE":
+        lines.append(f"  HidDiv  : {_hd.replace('_', ' ').title()}")
     if a.breakout:
         lines.append("  Signal  : Breakout above swing high")
     if a.reversal:
@@ -867,10 +901,20 @@ def trend_card(a: MarketAnalysis) -> str:
         f"  BB%B      : {a.bb_pct:.1f}%",
         f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
         f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
-        f"  Votes     : BUY {a.buy_votes}/7  SELL {a.sell_votes}/7",
+        f"  CCI(20)   : {getattr(a,'cci_value',0.0):.0f}",
+        f"  VWAP      : {getattr(a,'vwap',0.0):,.2f}   ({'above' if a.price > getattr(a,'vwap',a.price) else 'below'} VWAP)",
+        f"  Regime    : {getattr(a,'market_regime','NORMAL')}",
+        f"  Votes     : BUY {a.buy_votes}/8  SELL {a.sell_votes}/8",
     ]
     if a.candle_pattern and a.candle_pattern != "None":
         lines.append(f"  Pattern   : {a.candle_pattern}")
+    _cp = getattr(a, "chart_pattern", "None")
+    _cp_sig = getattr(a, "chart_pattern_signal", "NEUTRAL")
+    if _cp and _cp != "None":
+        lines.append(f"  Chrt Pat  : {_cp} → {_cp_sig}")
+    _hd = getattr(a, "hidden_divergence", "NONE")
+    if _hd != "NONE":
+        lines.append(f"  Hidden Div: {_hd.replace('_', ' ').title()}")
     if a.breakout:
         lines.append("  Note      : Breakout in progress")
     if a.reversal:
@@ -1528,7 +1572,10 @@ def market_conditions_card(a: MarketAnalysis) -> str:
         f"  +DI / -DI : {a.plus_di:.1f} / {a.minus_di:.1f}",
         f"  Williams%R: {getattr(a,'willr_value',-50):.1f}" + (f"  ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
         f"  Supertrend: {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
-        f"  Votes     : BUY {a.buy_votes}/7   SELL {a.sell_votes}/7",
+        f"  CCI(20)   : {getattr(a,'cci_value',0.0):.0f}",
+        f"  VWAP      : {getattr(a,'vwap',0.0):,.2f}   ({'above' if a.price > getattr(a,'vwap',a.price) else 'below'} VWAP)",
+        f"  BB BW     : {getattr(a,'bb_bandwidth',0.0):.2f}%   Regime: {getattr(a,'market_regime','NORMAL')}",
+        f"  Votes     : BUY {a.buy_votes}/8   SELL {a.sell_votes}/8",
         "",
         "──────────────────────────────────",
         "  SIGNAL STATUS",

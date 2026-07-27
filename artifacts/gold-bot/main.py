@@ -30,10 +30,31 @@ CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
 async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Allow all users."""
+    """Block all users except the configured owner. Raises ApplicationHandlerStop for strangers."""
     user = update.effective_user
-    if user is not None:
-        logger.info(f"User: @{user.username} (id={user.id})")
+    if user is None:
+        raise ApplicationHandlerStop
+
+    logger.info(f"User: @{user.username} (id={user.id})")
+
+    # Determine authorization
+    if ALLOWED_USER_ID:
+        authorized = (user.id == ALLOWED_USER_ID)
+    elif ALLOWED_USERNAME:
+        authorized = (user.username == ALLOWED_USERNAME)
+    else:
+        authorized = True  # No restriction configured — open access
+
+    if authorized:
+        return
+
+    # Reject the stranger
+    logger.warning(f"Unauthorized: @{user.username} (id={user.id})")
+    if update.message:
+        await update.message.reply_text("⛔ Unauthorized.")
+    elif update.callback_query:
+        await update.callback_query.answer("⛔ Unauthorized.", show_alert=True)
+    raise ApplicationHandlerStop
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:

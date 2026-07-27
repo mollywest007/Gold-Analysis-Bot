@@ -90,16 +90,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await msg.edit_text("Scanning failed — please try again in a moment.")
 
     elif text == "analyze":
-        import asyncio
         from src.utils.formatting import multi_timeframe_card
         msg = await update.message.reply_text("Analyzing all timeframes...")
         try:
-            results = await asyncio.gather(
-                analyze("M5"), analyze("M15"), analyze("M30"),
-                analyze("H1"), analyze("H4"), analyze("D1"),
-                return_exceptions=True,
-            )
-            analyses = [r for r in results if not isinstance(r, Exception)]
+            # Sequential fetch: each analyze() caches its OHLCV data (5-min TTL),
+            # so the HTF bias fetches inside each call hit the cache for all
+            # subsequent timeframes — avoids 36 simultaneous Yahoo Finance requests
+            # that get rate-limited and drop all but one result.
+            analyses = []
+            for _tf in ("M5", "M15", "M30", "H1", "H4", "D1"):
+                try:
+                    analyses.append(await analyze(_tf))
+                except Exception as _e:
+                    logger.warning(f"analyze({_tf}) skipped: {_e}")
             await msg.edit_text(multi_timeframe_card(analyses), parse_mode="HTML",
                                 reply_markup=refresh_keyboard("analyze", "all"))
         except Exception as e:
