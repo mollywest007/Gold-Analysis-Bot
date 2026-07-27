@@ -431,9 +431,12 @@ def compute_vwap(highs: List[float], lows: List[float], closes: List[float],
     Price below VWAP: sell-side institutional bias.
     VWAP pullback (price returns to VWAP from above/below) = high-probability entry.
     """
-    if not volumes or len(closes) < 5:
+    # Use the shortest of the four arrays — Yahoo Finance sometimes returns
+    # fewer volume bars than price bars for certain timeframes.
+    n_safe = min(len(closes), len(highs), len(lows), len(volumes)) if volumes else 0
+    if not volumes or n_safe < 5:
         return closes[-1] if closes else 0.0
-    n     = len(closes)
+    n     = n_safe
     start = max(0, n - session_bars)
     tps   = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(start, n)]
     vols  = [max(volumes[i], 0) for i in range(start, n)]
