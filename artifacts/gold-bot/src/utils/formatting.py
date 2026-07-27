@@ -316,7 +316,7 @@ def signal_card(a: MarketAnalysis) -> str:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
 
     lines += ["", "  Not financial advice.", "</pre>"]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 # ─── ANALYSIS CARD ────────────────────────────────────────────────────────────
@@ -644,7 +644,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         ]
 
     lines += ["", "  Not financial advice.", "</pre>"]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 # ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
@@ -739,7 +739,7 @@ def early_entry_card(a: MarketAnalysis) -> str:
         "  50% at TP1. Move SL to entry.",
         "  Not financial advice.",
         "</pre>"]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 def no_early_entry_card(a: MarketAnalysis) -> str:
@@ -920,7 +920,7 @@ def trend_card(a: MarketAnalysis) -> str:
     if a.reversal:
         lines.append("  Note      : Divergence reversal signal")
     lines += ["", "  Not financial advice.", "</pre>"]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 # ─── LEVELS CARD ──────────────────────────────────────────────────────────────
@@ -955,7 +955,7 @@ def levels_card(a: MarketAnalysis) -> str:
         "",
         "  Not financial advice.", "</pre>",
     ]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 # ─── OUTLOOK CARD ─────────────────────────────────────────────────────────────

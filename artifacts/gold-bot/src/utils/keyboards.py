@@ -10,12 +10,12 @@ def refresh_keyboard(command: str, tf: str = "all") -> InlineKeyboardMarkup:
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        ["Recommend", "Analyze"],
-        ["Signal", "Trend"],
+        ["Recommend", "Signal"],
+        ["Analyze", "Trend"],
         ["Levels", "Outlook"],
         ["Active", "News"],
-        ["Alerts"],
-        ["Settings"],
+        ["History", "Chart"],
+        ["🔔 Alerts", "Settings"],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
