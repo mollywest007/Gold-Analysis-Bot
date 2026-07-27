@@ -1631,6 +1631,7 @@ def history_card(trades: list, stats: dict) -> str:
         if s == "tp1_sl_hit":   return "TP1 / SL "
         if s == "sl_hit":       return "LOSS  SL "
         if s == "expired":      return "EXPIRED  "
+        if s == "replaced":     return "REPLACED "
         return s.upper()[:9]
 
     def _fmt_date(ts) -> str:
@@ -1703,6 +1704,7 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
             "tp1_sl_hit":  "TP1 / SL",
             "sl_hit":      "LOSS SL",
             "expired":     "EXPIRED",
+            "replaced":    "REPLACED",
         }.get(s, s.upper())
 
     def _fmt_date(ts) -> str:

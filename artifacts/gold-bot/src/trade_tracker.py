@@ -50,12 +50,45 @@ def open_trade(
     confidence: int,
     rr_ratio: float,
     tp3: float = None,
+    atr: float = 0.0,
 ) -> None:
     trades = _load()
-    # Only one open/tp1_hit trade per timeframe — replace if same timeframe already has one.
-    # Previously this deduped by direction, which silently dropped an H4 SELL when any
-    # other SELL fired on a different timeframe.
-    trades = [t for t in trades if not (t.get("status") in ("open", "tp1_hit", "tp2_hit") and t.get("timeframe") == timeframe)]
+
+    # ── Duplicate-entry guard ──────────────────────────────────────────────────
+    # If there is already an open trade on this TF in the SAME direction,
+    # only replace it when the new entry is meaningfully far from the original
+    # (> 0.5 × ATR).  A smaller gap means the market barely moved — the signal
+    # just dipped to WAIT for one scan cycle and snapped back.  Replacing in
+    # that case re-enters at virtually the same price with a fresh SL/TP,
+    # which confuses the tracker and the user without providing a better fill.
+    # A direction FLIP always replaces regardless (handled implicitly: if the
+    # existing trade is the opposite direction the filter below doesn't match).
+    if atr > 0:
+        for t in trades:
+            if (
+                t.get("status") in ("open", "tp1_hit", "tp2_hit")
+                and t.get("timeframe") == timeframe
+                and t.get("direction") == direction
+            ):
+                existing_entry = t.get("entry", 0.0)
+                gap = abs(entry - existing_entry)
+                if gap < 0.5 * atr:
+                    logger.info(
+                        f"[{timeframe}] Trade replacement skipped — new entry {entry:.2f} is "
+                        f"only {gap:.2f} pts from existing {existing_entry:.2f} "
+                        f"(<0.5×ATR={0.5 * atr:.2f}). Keeping original trade."
+                    )
+                    return
+
+    # Close any existing open trade on this timeframe by marking it "replaced"
+    # rather than deleting it, so it still appears in /history.
+    for t in trades:
+        if t.get("status") in ("open", "tp1_hit", "tp2_hit") and t.get("timeframe") == timeframe:
+            t["status"] = "replaced"
+            logger.info(
+                f"Trade {t['id']} ({t.get('direction')} @ {t.get('entry', 0):.2f}) "
+                f"marked REPLACED — new {direction} setup on {timeframe}."
+            )
     trade = {
         "id":          str(int(time.time())),
         "direction":   direction,
@@ -229,7 +262,7 @@ def get_stats() -> Dict[str, Any]:
     wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
     open_  = sum(1 for t in trades if t.get("status") == "open")
-    expired = sum(1 for t in trades if t.get("status") == "expired")
+    expired = sum(1 for t in trades if t.get("status") in ("expired", "replaced"))
     total_closed = wins + losses
     win_rate = round((wins / total_closed) * 100) if total_closed > 0 else 0
     return {
