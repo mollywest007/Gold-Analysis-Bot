@@ -627,6 +627,23 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1785132124",
+      "direction": "BUY",
+      "entry": 4094.7,
+      "sl": 4079.76,
+      "tp1": 4124.58,
+      "tp2": 4146.99,
+      "tp3": 4161.93,
+      "timeframe": "M15",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1785132124.2342966,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
