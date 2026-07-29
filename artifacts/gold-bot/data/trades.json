@@ -691,7 +691,7 @@
       "confidence": 74,
       "rr_ratio": 2.0,
       "opened_at": 1785311199.8852894,
-      "status": "open",
+      "status": "replaced",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1117,6 +1117,23 @@
       "rr_ratio": 2.0,
       "opened_at": 1785313890.498163,
       "status": "sl_hit",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
+    },
+    {
+      "id": "1785314187",
+      "direction": "BUY",
+      "entry": 4037.2,
+      "sl": 4012.48,
+      "tp1": 4086.64,
+      "tp2": 4123.72,
+      "tp3": 4148.44,
+      "timeframe": "M30",
+      "confidence": 72,
+      "rr_ratio": 2.0,
+      "opened_at": 1785314187.9057395,
+      "status": "open",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
