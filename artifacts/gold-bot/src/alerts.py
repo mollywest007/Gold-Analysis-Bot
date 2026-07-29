@@ -690,12 +690,26 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Use each open trade's own timeframe candle (high/low) rather than a
     # single spot-price snapshot — a 30s poll can miss a brief wick through
     # TP/SL and either report the wrong exit price or miss the touch outright.
+    #
+    # We look at the last 3 candles (not just the newest) so a wick that fired
+    # on a candle already scrolled out of the live spot price is still caught.
+    # The worst-case downside is a slightly stale exit price shown in the card,
+    # which is always safer than silently missing the hit entirely.
+    #
+    # tfs_closed_this_cycle: tracks TFs whose trade closed in this scan so the
+    # signal-scanner below skips them — prevents same-cycle re-entry before the
+    # post-SL cooldown has been saved to disk and the analysis re-fetched.
+    tfs_closed_this_cycle: set = set()
     try:
         current_price = await get_gold_price()
         if current_price > 0:
+            # Include tp2_hit trades that are still watching for TP3
             open_tfs = {
                 t.get("timeframe") for t in trade_tracker.get_all_trades()
-                if t.get("status") in ("open", "tp1_hit") and t.get("timeframe")
+                if (
+                    t.get("status") in ("open", "tp1_hit")
+                    or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
+                ) and t.get("timeframe")
             }
             tf_extremes: Dict[str, tuple] = {}
             if open_tfs:
@@ -706,7 +720,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 for tf, data in zip(open_tfs, ohlcv_results):
                     if isinstance(data, Exception) or data is None or not data.highs:
                         continue
-                    tf_extremes[tf] = (data.highs[-1], data.lows[-1])
+                    # Use the extreme range of the last 3 candles, not just the
+                    # newest, to catch wicks that happened on a recently completed
+                    # candle that the 15-second poll may have sampled after price
+                    # had already recovered.
+                    tail_hi = max(data.highs[-3:]) if len(data.highs) >= 3 else data.highs[-1]
+                    tail_lo = min(data.lows[-3:])  if len(data.lows)  >= 3 else data.lows[-1]
+                    tf_extremes[tf] = (tail_hi, tail_lo)
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:
@@ -718,6 +738,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                     logger.info(f"[{closed_tf}] Trade expired — signal lock released.")
                     if closed_tf:
                         clear_signal_lock(closed_tf)
+                        tfs_closed_this_cycle.add(closed_tf)
                     continue
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
                 # Trade closed — unlock this timeframe so the next entry signal fires fresh.
@@ -725,6 +746,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 if closed_tf:
                     is_loss = ev["event"] in ("SL", "TP1_SL")
                     clear_signal_lock(closed_tf, after_sl=is_loss)
+                    tfs_closed_this_cycle.add(closed_tf)
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 
@@ -744,6 +766,13 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
                 logger.error(f"[{tf}] Analysis raised: {a}")
+            continue
+
+        # Skip TFs whose trade just closed this cycle — the post-SL cooldown
+        # is set, but a fresh analysis could pass _should_send before the lock
+        # is fully persisted.  Skipping here guarantees no same-cycle re-entry.
+        if tf in tfs_closed_this_cycle:
+            logger.info(f"[{tf}] Skipping signal scan — trade closed this cycle, cooldown pending.")
             continue
 
         logger.info(

@@ -56,27 +56,43 @@ def open_trade(
 
     # ── Duplicate-entry guard ──────────────────────────────────────────────────
     # If there is already an open trade on this TF in the SAME direction,
-    # only replace it when the new entry is meaningfully far from the original
-    # (> 0.5 × ATR).  A smaller gap means the market barely moved — the signal
-    # just dipped to WAIT for one scan cycle and snapped back.  Replacing in
-    # that case re-enters at virtually the same price with a fresh SL/TP,
-    # which confuses the tracker and the user without providing a better fill.
+    # only replace it when the new entry is meaningfully far from the original.
+    # • When ATR is available (> 0): gap must exceed 0.5 × ATR.
+    # • When ATR is 0 (fallback): block any re-entry opened within 2 candle
+    #   periods — this prevents the 15-second scanner from spamming trades when
+    #   the analysis object doesn't expose an ATR attribute.
     # A direction FLIP always replaces regardless (handled implicitly: if the
     # existing trade is the opposite direction the filter below doesn't match).
-    if atr > 0:
-        for t in trades:
-            if (
-                t.get("status") in ("open", "tp1_hit", "tp2_hit")
-                and t.get("timeframe") == timeframe
-                and t.get("direction") == direction
-            ):
-                existing_entry = t.get("entry", 0.0)
-                gap = abs(entry - existing_entry)
+    _TF_PERIOD_SECS = {
+        "M5": 300, "M15": 900, "M30": 1800,
+        "H1": 3600, "H4": 14400, "D1": 86400,
+    }
+    _min_gap_secs = 2 * _TF_PERIOD_SECS.get(timeframe, 3600)
+    for t in trades:
+        if (
+            t.get("status") in ("open", "tp1_hit", "tp2_hit")
+            and t.get("timeframe") == timeframe
+            and t.get("direction") == direction
+        ):
+            existing_entry = t.get("entry", 0.0)
+            gap = abs(entry - existing_entry)
+            if atr > 0:
+                # ATR available — use price-distance threshold
                 if gap < 0.5 * atr:
                     logger.info(
                         f"[{timeframe}] Trade replacement skipped — new entry {entry:.2f} is "
                         f"only {gap:.2f} pts from existing {existing_entry:.2f} "
                         f"(<0.5×ATR={0.5 * atr:.2f}). Keeping original trade."
+                    )
+                    return
+            else:
+                # ATR unavailable — fall back to time-based guard
+                age = time.time() - t.get("opened_at", 0)
+                if age < _min_gap_secs:
+                    logger.info(
+                        f"[{timeframe}] Trade replacement skipped — existing {direction} "
+                        f"@ {existing_entry:.2f} opened only {age:.0f}s ago "
+                        f"(min gap {_min_gap_secs}s). ATR unavailable."
                     )
                     return
 
@@ -90,7 +106,7 @@ def open_trade(
                 f"marked REPLACED — new {direction} setup on {timeframe}."
             )
     trade = {
-        "id":          str(int(time.time())),
+        "id":          str(int(time.time() * 1000)),  # millisecond precision avoids duplicate IDs
         "direction":   direction,
         "entry":       entry,
         "sl":          sl,

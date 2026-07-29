@@ -7,14 +7,10 @@ A private Telegram bot that delivers XAU/USD (Gold) trading analysis, market ale
 Start the **Gold Analysis Bot** workflow. It runs:
 
 ```
-cd artifacts/gold-bot && ../../.pythonlibs/bin/python main.py
+cd artifacts/gold-bot && uv run --with-requirements requirements.txt python main.py
 ```
 
-To reinstall Python dependencies:
-
-```
-uv sync
-```
+`uv` installs all dependencies automatically on first run — no separate install step needed.
 
 ## Required secrets
 
