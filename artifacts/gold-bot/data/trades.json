@@ -1167,8 +1167,8 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785331717.9356487,
-      "status": "open",
-      "tp1_hit": false,
+      "status": "tp1_hit",
+      "tp1_hit": true,
       "tp2_hit": false,
       "tp3_hit": false
     },
@@ -1184,7 +1184,7 @@
       "confidence": 90,
       "rr_ratio": 2.0,
       "opened_at": 1785332009.5058482,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
