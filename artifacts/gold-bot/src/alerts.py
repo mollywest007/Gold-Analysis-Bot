@@ -704,13 +704,25 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         current_price = await get_gold_price()
         if current_price > 0:
             # Include tp2_hit trades that are still watching for TP3
-            open_tfs = {
-                t.get("timeframe") for t in trade_tracker.get_all_trades()
+            active_trades = [
+                t for t in trade_tracker.get_all_trades()
                 if (
                     t.get("status") in ("open", "tp1_hit")
                     or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
                 ) and t.get("timeframe")
-            }
+            ]
+            open_tfs = {t.get("timeframe") for t in active_trades}
+
+            # For each TF, record the earliest trade open time — we will only
+            # use candles from AFTER that point to avoid false SL/TP hits from
+            # historical data that predates the trade.
+            tf_opened_at: Dict[str, float] = {}
+            for t in active_trades:
+                tf = t.get("timeframe")
+                oa = t.get("opened_at", 0.0)
+                if tf and (tf not in tf_opened_at or oa < tf_opened_at[tf]):
+                    tf_opened_at[tf] = oa
+
             tf_extremes: Dict[str, tuple] = {}
             if open_tfs:
                 ohlcv_results = await asyncio.gather(
@@ -720,13 +732,31 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 for tf, data in zip(open_tfs, ohlcv_results):
                     if isinstance(data, Exception) or data is None or not data.highs:
                         continue
-                    # Use the extreme range of the last 3 candles, not just the
-                    # newest, to catch wicks that happened on a recently completed
-                    # candle that the 15-second poll may have sampled after price
-                    # had already recovered.
-                    tail_hi = max(data.highs[-3:]) if len(data.highs) >= 3 else data.highs[-1]
-                    tail_lo = min(data.lows[-3:])  if len(data.lows)  >= 3 else data.lows[-1]
-                    tf_extremes[tf] = (tail_hi, tail_lo)
+
+                    opened_at = tf_opened_at.get(tf, 0.0)
+                    ts_list   = getattr(data, "timestamps", [])
+
+                    if ts_list and opened_at > 0:
+                        # Prefer candles whose open time is on or after the trade
+                        # open.  Include one candle before open_at as a buffer for
+                        # the candle that was forming when the trade was entered.
+                        indices = [
+                            i for i, ts in enumerate(ts_list)
+                            if ts >= opened_at
+                        ]
+                        if not indices:
+                            # Trade opened after the last completed candle —
+                            # use only the most recent candle as a fallback.
+                            indices = [len(data.highs) - 1]
+                        hi = max(data.highs[i] for i in indices)
+                        lo = min(data.lows[i]  for i in indices)
+                    else:
+                        # No timestamp data — fall back to last completed candle
+                        # only (conservative; avoids false hits from stale data).
+                        hi = data.highs[-1]
+                        lo = data.lows[-1]
+
+                    tf_extremes[tf] = (hi, lo)
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:

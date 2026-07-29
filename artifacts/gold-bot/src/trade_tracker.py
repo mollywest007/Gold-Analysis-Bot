@@ -181,20 +181,28 @@ def check_trades(current_price: float, recent_high: float = None,
         tp2 = t["tp2"]
 
         tf_hi, tf_lo = tf_extremes.get(t.get("timeframe"), (None, None))
-        hi = tf_hi if tf_hi is not None else (recent_high if recent_high is not None else current_price)
-        lo = tf_lo if tf_lo is not None else (recent_low  if recent_low  is not None else current_price)
-        # Never let the candle-derived extreme be less informative than the
-        # live spot price itself (covers the gap between candle close and now).
-        hi = max(hi, current_price)
-        lo = min(lo, current_price)
+
+        # SL detection uses candle extremes (catches brief wicks through the
+        # stop that already retraced before the next spot-price poll).
+        sl_hi = tf_hi if tf_hi is not None else (recent_high if recent_high is not None else current_price)
+        sl_lo = tf_lo if tf_lo is not None else (recent_low  if recent_low  is not None else current_price)
+        sl_hi = max(sl_hi, current_price)
+        sl_lo = min(sl_lo, current_price)
+
+        # TP detection uses ONLY the live spot price.  Candle extremes can
+        # pre-date the trade open (the lookback window may include candles from
+        # before entry) and would fire false TP alerts.  If price genuinely
+        # reaches a TP level, the next spot-price poll will confirm it cleanly.
+        tp_hi = current_price
+        tp_lo = current_price
 
         tp3_val = t.get("tp3") or 0.0
 
         if d == "BUY":
-            sl_hit    = lo <= sl
-            tp1_hit   = hi >= tp1
-            tp2_hit   = hi >= tp2
-            tp3_hit   = bool(tp3_val) and hi >= tp3_val
+            sl_hit    = sl_lo <= sl
+            tp1_hit   = tp_hi >= tp1
+            tp2_hit   = tp_hi >= tp2
+            tp3_hit   = bool(tp3_val) and tp_hi >= tp3_val
             # Exit price = the level itself (what would actually have filled),
             # not current_price, since a wick may have already retraced.
             sl_exit   = sl
@@ -202,10 +210,10 @@ def check_trades(current_price: float, recent_high: float = None,
             tp2_exit  = tp2
             tp3_exit  = tp3_val
         else:  # SELL
-            sl_hit    = hi >= sl
-            tp1_hit   = lo <= tp1
-            tp2_hit   = lo <= tp2
-            tp3_hit   = bool(tp3_val) and lo <= tp3_val
+            sl_hit    = sl_hi >= sl
+            tp1_hit   = tp_lo <= tp1
+            tp2_hit   = tp_lo <= tp2
+            tp3_hit   = bool(tp3_val) and tp_lo <= tp3_val
             sl_exit   = sl
             tp1_exit  = tp1
             tp2_exit  = tp2

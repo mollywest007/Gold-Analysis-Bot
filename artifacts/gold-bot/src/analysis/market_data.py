@@ -40,7 +40,7 @@ _cache_lock = asyncio.Lock()
 
 class OHLCVData:
     def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0,
-                 is_simulated: bool = False):
+                 is_simulated: bool = False, timestamps: list = None):
         self.opens        = opens
         self.highs        = highs
         self.lows         = lows
@@ -48,6 +48,7 @@ class OHLCVData:
         self.volumes      = volumes
         self.price        = spot_price if spot_price > 0 else (closes[-1] if closes else 0.0)
         self.is_simulated = is_simulated  # True when real data fetch failed — signals unreliable
+        self.timestamps   = timestamps or []  # Unix timestamps per candle (open time)
 
     def __len__(self):
         return len(self.closes)
@@ -60,15 +61,18 @@ def _clean(series: list) -> list:
 def _aggregate_to_h4(data: "OHLCVData") -> "OHLCVData":
     step = 4
     n    = len(data.closes)
-    opens, highs, lows, closes, volumes = [], [], [], [], []
+    opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
     for i in range(0, n - step + 1, step):
         opens.append(data.opens[i])
         highs.append(max(data.highs[i:i + step]))
         lows.append(min(data.lows[i:i + step]))
         closes.append(data.closes[i + step - 1])
         volumes.append(sum(v for v in data.volumes[i:i + step] if v))
+        if data.timestamps:
+            timestamps.append(data.timestamps[i])
     result              = OHLCVData(opens, highs, lows, closes, volumes,
-                                    is_simulated=data.is_simulated)
+                                    is_simulated=data.is_simulated,
+                                    timestamps=timestamps)
     result.price        = data.price
     return result
 
@@ -193,6 +197,7 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         lows    = _clean(quote.get("low",    []))
         closes  = _clean(quote.get("close",  []))
         volumes = _clean(quote.get("volume", []))
+        raw_ts  = result.get("timestamp", [])
 
         min_len = min(len(opens), len(highs), len(lows), len(closes))
         if min_len < MIN_CANDLES:
@@ -204,6 +209,7 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         lows    = lows[:min_len]
         closes  = closes[:min_len]
         volumes = volumes[:min_len] if volumes else [0] * min_len
+        timestamps = [float(ts) for ts in raw_ts[:min_len]] if raw_ts else []
 
         # Normalize futures OHLCV to spot prices by subtracting the basis.
         # Futures trade at a premium (cost of carry). Without this, all
@@ -220,7 +226,8 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         else:
             effective_spot = spot_price if (spot_price and spot_price > 0) else futures_last
 
-        data = OHLCVData(opens, highs, lows, closes, volumes, effective_spot)
+        data = OHLCVData(opens, highs, lows, closes, volumes, effective_spot,
+                         timestamps=timestamps)
 
         if aggregate_h4:
             data = _aggregate_to_h4(data)
