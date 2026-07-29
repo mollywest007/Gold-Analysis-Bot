@@ -189,12 +189,21 @@ def check_trades(current_price: float, recent_high: float = None,
         sl_hi = max(sl_hi, current_price)
         sl_lo = min(sl_lo, current_price)
 
-        # TP detection uses ONLY the live spot price.  Candle extremes can
-        # pre-date the trade open (the lookback window may include candles from
-        # before entry) and would fire false TP alerts.  If price genuinely
-        # reaches a TP level, the next spot-price poll will confirm it cleanly.
-        tp_hi = current_price
-        tp_lo = current_price
+        # TP detection uses post-entry candle extremes (same tf_extremes dict
+        # that SL uses). tf_extremes is pre-filtered in alerts.py to include
+        # only candles that opened AFTER the trade was placed, so there is no
+        # risk of a pre-entry wick triggering a false win.  Using candle
+        # extremes symmetrically with SL means a genuine wick to TP between
+        # two 15-second polls is caught rather than silently missed.
+        # When no post-entry candle exists yet (new trade, fallback path in
+        # alerts.py sets tf_extremes[tf] = (current_price, current_price)),
+        # this collapses back to current_price — safe.
+        if tf_hi is not None:
+            tp_hi = max(tf_hi, current_price)
+            tp_lo = min(tf_lo, current_price)
+        else:
+            tp_hi = current_price
+            tp_lo = current_price
 
         tp3_val = t.get("tp3") or 0.0
 

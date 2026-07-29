@@ -1138,8 +1138,10 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not (min_age <= age_secs <= max_age):
                 continue
 
-            # 10-min nudge: only send when entry is still reachable
-            if require_near and (entry <= 0 or abs(current_price - entry) / entry > 0.005):
+            # 10-min nudge: only send when entry is still reachable.
+            # 0.15% of entry ≈ $6 on $4000 gold — if price has moved further
+            # than that from entry, the setup is invalidated; skip the nudge.
+            if require_near and (entry <= 0 or abs(current_price - entry) / entry > 0.0015):
                 sent_milestones.add(label)   # price moved away; mark done, don't retry
                 continue
 
@@ -1154,23 +1156,34 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             pnl_sign = "+" if pnl >= 0 else ""
             pnl_note = f"P&L  : {pnl_sign}{pnl:,.1f} pts ({'in profit ✅' if pnl >= 0 else 'in loss ⚠️'})\n"
 
-            tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
-            tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
-
-            # Detect post-TP1 retrace back through entry — warn to move SL to BE
-            tp1_was_hit = trade.get("tp1_hit", False)
+            # Detect post-TP1 retrace — affects what we show in the message
+            tp1_was_hit     = trade.get("tp1_hit", False)
+            tp1_retraced    = False
             tp1_retrace_warning = ""
             if tp1_was_hit:
                 if direction == "BUY" and current_price <= entry:
+                    tp1_retraced = True
                     tp1_retrace_warning = (
-                        f"\n⚠️ <b>TP1 captured but price retraced below entry.</b>\n"
-                        f"   Consider closing at break-even ({entry:,.2f}) to protect gains.\n"
+                        f"\n⚠️ <b>TP1 was hit but price has since fallen below entry.</b>\n"
+                        f"   Break-even SL is now active at {entry:,.2f}.\n"
+                        f"   Consider closing manually to protect the TP1 gain.\n"
                     )
                 elif direction == "SELL" and current_price >= entry:
+                    tp1_retraced = True
                     tp1_retrace_warning = (
-                        f"\n⚠️ <b>TP1 captured but price retraced above entry.</b>\n"
-                        f"   Consider closing at break-even ({entry:,.2f}) to protect gains.\n"
+                        f"\n⚠️ <b>TP1 was hit but price has since risen above entry.</b>\n"
+                        f"   Break-even SL is now active at {entry:,.2f}.\n"
+                        f"   Consider closing manually to protect the TP1 gain.\n"
                     )
+
+            # Only show TP2/TP3 targets when the trade is still moving in profit.
+            # After a retrace below entry, showing optimistic targets is misleading.
+            if tp1_retraced:
+                tp2_line = ""
+                tp3_line = ""
+            else:
+                tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
+                tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
             if label == "entry":
                 header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
