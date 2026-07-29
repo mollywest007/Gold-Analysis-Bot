@@ -24,6 +24,12 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
+# Post-SL cooldown — after a loss, block re-entry on that TF for 2 candle periods.
+# Prevents the bot spamming re-entries every 15s in volatile/choppy conditions.
+# Structure: { "M15": <timestamp when cooldown expires> }
+_sl_cooldown_until: Dict[str, float] = {}
+# Cooldown = 2 candle periods per timeframe
+_SL_COOLDOWN_CANDLES = 2
 # Track which reminder milestones have been sent per trade.
 # Structure: { "trade_id": {"entry", "update_2x", "update_6x"} }
 _reminded_trade_ids: Dict[str, Set[str]] = {}
@@ -201,7 +207,15 @@ def _should_send(tf: str, action: str) -> bool:
     Resets happen when: signal flips to WAIT/opposite, or trade closes.
     Also auto-clears locks older than SIGNAL_LOCK_MAX_AGE to prevent
     a missed TP/SL detection from permanently suppressing future signals.
+    Post-SL cooldown: after a loss, block re-entry for 2 candle periods.
     """
+    # ── Post-SL cooldown check ─────────────────────────────────────────────────
+    cooldown_until = _sl_cooldown_until.get(tf, 0.0)
+    if time.time() < cooldown_until:
+        remaining = int((cooldown_until - time.time()) // 60)
+        logger.info(f"[{tf}] Post-SL cooldown active — {remaining}m remaining. Skipping {action}.")
+        return False
+
     prev = _active_signal.get(tf)
     if prev == action:
         last_fired = _tf_last_fired.get(tf, 0.0)
@@ -219,12 +233,27 @@ def _should_send(tf: str, action: str) -> bool:
     return True
 
 
-def clear_signal_lock(tf: str) -> None:
-    """Call after a trade closes so the next signal on this timeframe fires freely."""
+def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
+    """Call after a trade closes so the next signal on this timeframe fires freely.
+
+    after_sl=True: apply a 2-candle cooldown before allowing re-entry.
+    This prevents the bot spamming re-entries every 15s after a quick SL hit
+    in volatile/choppy conditions.
+    """
     _active_signal.pop(tf, None)
     _tf_last_fired.pop(tf, None)
+    if after_sl:
+        period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
+        cooldown = _SL_COOLDOWN_CANDLES * period
+        _sl_cooldown_until[tf] = time.time() + cooldown
+        logger.info(
+            f"[{tf}] Signal lock cleared after SL — "
+            f"post-SL cooldown {cooldown // 60:.0f}m before next entry."
+        )
+    else:
+        _sl_cooldown_until.pop(tf, None)
+        logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
     _save_signal_state()
-    logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
 
 
 def get_signal_lock_info(tf: str) -> str:
@@ -683,9 +712,11 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                         clear_signal_lock(closed_tf)
                     continue
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
-                # Trade closed — unlock this timeframe so the next entry signal fires fresh
+                # Trade closed — unlock this timeframe so the next entry signal fires fresh.
+                # SL hits apply a 2-candle cooldown to stop immediate re-entry spam.
                 if closed_tf:
-                    clear_signal_lock(closed_tf)
+                    is_loss = ev["event"] in ("SL", "TP1_SL")
+                    clear_signal_lock(closed_tf, after_sl=is_loss)
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 
