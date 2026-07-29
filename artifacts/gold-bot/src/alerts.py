@@ -745,11 +745,20 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                             if ts >= opened_at
                         ]
                         if not indices:
-                            # Trade opened after the last completed candle —
-                            # use only the most recent candle as a fallback.
-                            indices = [len(data.highs) - 1]
-                        hi = max(data.highs[i] for i in indices)
-                        lo = min(data.lows[i]  for i in indices)
+                            # No candle has opened since this trade was placed.
+                            # Using the pre-entry candle's extremes for SL
+                            # detection causes false immediate SL hits: for a
+                            # SELL the SL sits just above the candle that formed
+                            # the signal high, so that same candle's high would
+                            # instantly trigger SL on the very next scan.
+                            # Fall back to current_price only — the next poll
+                            # after a new candle forms gives proper post-entry
+                            # extremes.
+                            hi = current_price
+                            lo = current_price
+                        else:
+                            hi = max(data.highs[i] for i in indices)
+                            lo = min(data.lows[i]  for i in indices)
                     else:
                         # No timestamp data — fall back to last completed candle
                         # only (conservative; avoids false hits from stale data).
@@ -1148,6 +1157,21 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
             tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
+            # Detect post-TP1 retrace back through entry — warn to move SL to BE
+            tp1_was_hit = trade.get("tp1_hit", False)
+            tp1_retrace_warning = ""
+            if tp1_was_hit:
+                if direction == "BUY" and current_price <= entry:
+                    tp1_retrace_warning = (
+                        f"\n⚠️ <b>TP1 captured but price retraced below entry.</b>\n"
+                        f"   Consider closing at break-even ({entry:,.2f}) to protect gains.\n"
+                    )
+                elif direction == "SELL" and current_price >= entry:
+                    tp1_retrace_warning = (
+                        f"\n⚠️ <b>TP1 captured but price retraced above entry.</b>\n"
+                        f"   Consider closing at break-even ({entry:,.2f}) to protect gains.\n"
+                    )
+
             if label == "entry":
                 header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
                 subtext = f"Fired {age_str} ago — entry still reachable\n"
@@ -1168,9 +1192,10 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"Entry : <b>{entry:,.2f}</b>  (now {current_price:,.2f})\n"
                 f"{pnl_note}"
                 f"SL   : <b>{sl:,.2f}</b>\n"
-                f"TP1  : <b>{tp1:,.2f}</b>  (1:{rr1})\n"
+                f"TP1  : <b>{tp1:,.2f}</b>  {'✅ hit' if tp1_was_hit else f'(1:{rr1})'}\n"
                 f"{tp2_line}"
                 f"{tp3_line}"
+                f"{tp1_retrace_warning}"
                 f"{'─' * 30}\n"
                 f"Use /active to track live.  Use /signal for latest scan."
             )

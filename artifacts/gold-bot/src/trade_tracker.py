@@ -219,6 +219,24 @@ def check_trades(current_price: float, recent_high: float = None,
             tp2_exit  = tp2
             tp3_exit  = tp3_val
 
+        # ── Break-even SL after TP1 ───────────────────────────────────────────
+        # Standard risk management: once TP1 is captured, entry becomes the
+        # effective SL. If price retraces back through entry before TP2 is
+        # hit, close at break-even rather than riding to the original SL.
+        # This prevents the bot from holding a losing trade and sending
+        # optimistic TP2/TP3 updates while the position is underwater.
+        if t.get("tp1_hit") and not t.get("tp2_hit") and not sl_hit:
+            if d == "BUY":
+                be_hit = sl_lo <= entry
+            else:
+                be_hit = sl_hi >= entry
+            if be_hit:
+                t["status"] = "tp1_sl_hit"
+                changed = True
+                events.append({"trade": t, "event": "TP1_SL", "exit_price": entry})
+                logger.info(f"Trade {t['id']} break-even SL triggered after TP1 @ {entry:.2f}")
+                continue
+
         if sl_hit:
             # If TP1 was already captured, mark distinctly so history shows TP1→SL
             if t.get("tp1_hit"):
