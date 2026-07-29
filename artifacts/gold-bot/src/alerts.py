@@ -86,6 +86,12 @@ SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
 # Structure: { "M15": "BUY", "H1": "SELL", ... }
 _forming_alert_sent: Dict[str, str] = {}
 
+# Tracks the last momentum-shift direction warned per TF — avoids re-sending
+# the same warning every 15s while the opposing trade is still open.
+# Cleared when the open trade closes so the next shift warns fresh.
+# Structure: { "M15": "SELL", "H1": "BUY", ... }
+_momentum_shift_warned: Dict[str, str] = {}
+
 # Confluence alert — fires ONE grouped card when this many TFs agree.
 # Below this threshold each TF fires its own individual card.
 CONFLUENCE_MIN_TFS = 3
@@ -242,6 +248,8 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
     """
     _active_signal.pop(tf, None)
     _tf_last_fired.pop(tf, None)
+    # Clear momentum-shift warning state so the next shift warns fresh
+    _momentum_shift_warned.pop(tf, None)
     if after_sl:
         period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
         cooldown = _SL_COOLDOWN_CANDLES * period
@@ -897,22 +905,32 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 opp_dir   = existing["direction"]
                 opp_entry = existing.get("entry", 0.0)
                 opp_sl    = existing.get("sl", 0.0)
-                warn = (
-                    f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
-                    f"{'─' * 36}\n"
-                    f"  Open trade  : {opp_dir} from {opp_entry:,.2f}\n"
-                    f"  Stop loss   : {opp_sl:,.2f}\n"
-                    f"  New bias    : {direction} forming\n"
-                    f"{'─' * 36}\n"
-                    f"  No new entry fired — holding until your\n"
-                    f"  {opp_dir} trade closes (TP or SL).\n"
-                    f"{'─' * 36}</pre>"
-                )
-                await _broadcast_text(bot, subs, warn)
-                logger.info(
-                    f"[{tf}] Momentum shift warning sent — open {opp_dir} @ {opp_entry:.2f} "
-                    f"vs new {direction} bias. Entry suppressed until trade closes."
-                )
+                # Only send the warning once per TF per shift direction —
+                # the scanner runs every 15s so without this it spams the
+                # same message continuously while the trade is open.
+                already_warned = _momentum_shift_warned.get(tf) == direction
+                if not already_warned:
+                    warn = (
+                        f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
+                        f"{'─' * 36}\n"
+                        f"  Open trade  : {opp_dir} from {opp_entry:,.2f}\n"
+                        f"  Stop loss   : {opp_sl:,.2f}\n"
+                        f"  New bias    : {direction} forming\n"
+                        f"{'─' * 36}\n"
+                        f"  No new entry fired — holding until your\n"
+                        f"  {opp_dir} trade closes (TP or SL).\n"
+                        f"{'─' * 36}</pre>"
+                    )
+                    await _broadcast_text(bot, subs, warn)
+                    _momentum_shift_warned[tf] = direction
+                    logger.info(
+                        f"[{tf}] Momentum shift warning sent — open {opp_dir} @ {opp_entry:.2f} "
+                        f"vs new {direction} bias. Entry suppressed until trade closes."
+                    )
+                else:
+                    logger.info(
+                        f"[{tf}] Momentum shift already warned ({direction}) — suppressing repeat."
+                    )
                 # Entry is held back — do not add to clean_signals
             else:
                 clean_signals.append((tf, a))
