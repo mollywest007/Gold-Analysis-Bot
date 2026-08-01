@@ -175,10 +175,11 @@ def check_trades(current_price: float, recent_high: float = None,
             events.append({"trade": t, "event": "EXPIRED", "exit_price": t.get("entry", 0)})
             continue
 
-        d   = t["direction"]
-        sl  = t["sl"]
-        tp1 = t["tp1"]
-        tp2 = t["tp2"]
+        d     = t["direction"]
+        entry = t["entry"]
+        sl    = t["sl"]
+        tp1   = t["tp1"]
+        tp2   = t["tp2"]
 
         tf_hi, tf_lo = tf_extremes.get(t.get("timeframe"), (None, None))
 

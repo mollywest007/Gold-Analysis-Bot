@@ -599,7 +599,7 @@ async def _fire_confluence(
     return delivered
 
 
-_STARTUP_STAMP = "/tmp/gold_bot_startup_last.txt"
+_STARTUP_STAMP = os.path.join(os.path.dirname(__file__), "..", "data", "startup_last.txt")
 _STARTUP_COOLDOWN = 2 * 60 * 60  # 2 hours — suppresses spam on frequent restarts
 
 
