@@ -555,7 +555,7 @@
       "confidence": 97,
       "rr_ratio": 1.5,
       "opened_at": 1784844874.2335732,
-      "status": "open",
+      "status": "expired",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1405,7 +1405,7 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785502354.9381099,
-      "status": "open",
+      "status": "expired",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1439,7 +1439,7 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785508590.8381722,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1456,7 +1456,7 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785510121.2129586,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
