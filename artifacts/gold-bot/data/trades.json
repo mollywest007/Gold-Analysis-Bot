@@ -1511,6 +1511,23 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1785766248616",
+      "direction": "SELL",
+      "entry": 4028.3,
+      "sl": 4074.44,
+      "tp1": 3936.02,
+      "tp2": 3866.81,
+      "tp3": 3820.67,
+      "timeframe": "H1",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1785766248.6168966,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
