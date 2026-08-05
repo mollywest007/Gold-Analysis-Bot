@@ -1490,7 +1490,7 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785750260.6309404,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1507,7 +1507,7 @@
       "confidence": 79,
       "rr_ratio": 2.0,
       "opened_at": 1785754005.478652,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
@@ -1524,7 +1524,7 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1785766248.6168966,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
