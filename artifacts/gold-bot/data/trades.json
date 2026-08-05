@@ -1528,6 +1528,57 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1785942248301",
+      "direction": "BUY",
+      "entry": 4257.2,
+      "sl": 4226.83,
+      "tp1": 4302.75,
+      "tp2": 4328.89,
+      "tp3": 4393.86,
+      "timeframe": "M15",
+      "confidence": 91,
+      "rr_ratio": 1.5,
+      "opened_at": 1785942248.301423,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
+    },
+    {
+      "id": "1785942248304",
+      "direction": "BUY",
+      "entry": 4257.2,
+      "sl": 4223.46,
+      "tp1": 4307.81,
+      "tp2": 4347.69,
+      "tp3": 4409.03,
+      "timeframe": "M30",
+      "confidence": 89,
+      "rr_ratio": 1.5,
+      "opened_at": 1785942248.30421,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
+    },
+    {
+      "id": "1785942248316",
+      "direction": "BUY",
+      "entry": 4257.2,
+      "sl": 4214.0,
+      "tp1": 4322.0,
+      "tp2": 4373.07,
+      "tp3": 4451.6,
+      "timeframe": "H1",
+      "confidence": 95,
+      "rr_ratio": 1.5,
+      "opened_at": 1785942248.3168206,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
