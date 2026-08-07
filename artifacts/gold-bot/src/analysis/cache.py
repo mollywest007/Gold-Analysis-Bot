@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL = 3 * 60   # 3 minutes
 
-_cache: Dict[str, Tuple[object, float]] = {}   # tf -> (MarketAnalysis, ts)
+_cache: Dict[Tuple[str, str], Tuple[object, float]] = {}   # (mode, tf) -> (analysis, ts)
 _lock  = asyncio.Lock()
 
 
@@ -19,9 +19,12 @@ async def get_analysis(timeframe: str, max_age: int = CACHE_TTL) -> "MarketAnaly
     """Return cached analysis if fresh; otherwise fetch fresh and cache it."""
     from .engine import analyze
 
+    from src.mode_manager import get_mode
+    mode = get_mode()
+    cache_key = (mode, timeframe)
     async with _lock:
-        if timeframe in _cache:
-            result, ts = _cache[timeframe]
+        if cache_key in _cache:
+            result, ts = _cache[cache_key]
             age = time.time() - ts
             if age < max_age:
                 logger.debug(f"Cache hit [{timeframe}] — {int(age)}s old")
@@ -30,7 +33,7 @@ async def get_analysis(timeframe: str, max_age: int = CACHE_TTL) -> "MarketAnaly
     result = await analyze(timeframe)
 
     async with _lock:
-        _cache[timeframe] = (result, time.time())
+        _cache[cache_key] = (result, time.time())
 
     return result
 
@@ -50,13 +53,16 @@ async def warm(timeframes: Optional[list] = None) -> None:
 
 def cache_age(timeframe: str) -> Optional[int]:
     """Return seconds since last update, or None if not cached."""
-    entry = _cache.get(timeframe)
+    from src.mode_manager import get_mode
+    entry = _cache.get((get_mode(), timeframe))
     return int(time.time() - entry[1]) if entry else None
 
 
 def invalidate(timeframe: Optional[str] = None) -> None:
     """Expire cache after a trade alert fires so next fetch is fresh."""
     if timeframe:
-        _cache.pop(timeframe, None)
+        for key in list(_cache):
+            if key[1] == timeframe:
+                _cache.pop(key, None)
     else:
         _cache.clear()

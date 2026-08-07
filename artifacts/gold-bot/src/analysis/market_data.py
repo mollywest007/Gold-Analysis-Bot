@@ -19,12 +19,18 @@ HEADERS = {
 }
 
 TF_PARAMS: Dict[str, Dict] = {
+    "M1":  {"interval": "1m",  "range": "7d"},
+    # Yahoo does not provide a dependable native 3-minute interval. M3 is
+    # built from 1-minute candles below so Scalp Mode can still use it.
+    "M3":  {"interval": "1m",  "range": "7d", "aggregate": 3},
     "M5":  {"interval": "5m",  "range": "2d"},
     "M15": {"interval": "15m", "range": "5d"},
     "M30": {"interval": "30m", "range": "10d"},
     "H1":  {"interval": "1h",  "range": "5d"},
     "H4":  {"interval": "1h",  "range": "60d"},
     "D1":  {"interval": "1d",  "range": "6mo"},
+    "W1":  {"interval": "1wk", "range": "5y"},
+    "MN1": {"interval": "1mo", "range": "10y"},
 }
 
 MIN_CANDLES = 30
@@ -58,8 +64,7 @@ def _clean(series: list) -> list:
     return [x for x in series if x is not None and x > 0]
 
 
-def _aggregate_to_h4(data: "OHLCVData") -> "OHLCVData":
-    step = 4
+def _aggregate_bars(data: "OHLCVData", step: int) -> "OHLCVData":
     n    = len(data.closes)
     opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
     for i in range(0, n - step + 1, step):
@@ -164,6 +169,7 @@ async def get_gold_price() -> float:
 async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
     params       = TF_PARAMS.get(timeframe, TF_PARAMS["H1"])
     aggregate_h4 = timeframe == "H4"
+    aggregate_m3 = timeframe == "M3"
     url          = f"{YF_CHART}?interval={params['interval']}&range={params['range']}"
 
     try:
@@ -230,9 +236,11 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
                          timestamps=timestamps)
 
         if aggregate_h4:
-            data = _aggregate_to_h4(data)
+            data = _aggregate_bars(data, 4)
+        elif aggregate_m3:
+            data = _aggregate_bars(data, 3)
             if len(data) < 10:
-                logger.warning("Not enough H4 candles after aggregation")
+                logger.warning(f"Not enough {timeframe} candles after aggregation")
                 return None
 
         logger.info(
@@ -286,8 +294,10 @@ def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":
             break
 
     tf_volatility = {
+        "M1": 0.00035, "M3": 0.00055,
         "M5": 0.0008, "M15": 0.0015, "M30": 0.0025,
         "H1": 0.004,  "H4": 0.010,   "D1":  0.018,
+        "W1": 0.035, "MN1": 0.070,
     }.get(timeframe, 0.004)
 
     opens, highs, lows, closes, volumes = [], [], [], [], []

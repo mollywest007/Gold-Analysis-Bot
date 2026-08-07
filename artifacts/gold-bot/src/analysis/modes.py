@@ -26,11 +26,16 @@ class ModeConfig:
 
     # ── Alert scanning ─────────────────────────────────────────────────────────
     scan_timeframes: List[str]   # timeframes the background scanner watches
+    preferred_timeframe: str     # default chart used by /signal and /recommend
 
     # ── Signal sensitivity ─────────────────────────────────────────────────────
     min_votes:           int     # indicator votes needed outside kill zones
     min_votes_kill_zone: int     # votes needed during London/NY kill zones
     confidence_threshold: int    # min % before a signal is considered valid
+    indicator_weights: Dict[str, float] = field(default_factory=dict)
+    # Mode-specific trade-plan policy.  These are deliberately explicit so a
+    # new mode can tune the strategy without adding branches to the engine.
+    risk_note: str = ""
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
     # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default
@@ -59,11 +64,19 @@ MODES: Dict[str, ModeConfig] = {
         label       = "Scalp",
         emoji       = "⚡",
         description = "Quick entries on M5/M15. Tight stops, fast targets. Pure momentum.",
-        scan_timeframes = ["M5", "M15"],
+        scan_timeframes = ["M1", "M3", "M5", "M15"],
+        preferred_timeframe = "M5",
         min_votes           = 2,   # fire faster — scalp windows close quickly
         min_votes_kill_zone = 2,
         confidence_threshold = 70,
+        indicator_weights = {
+            "RSI(14)": 0.08, "MACD": 0.18, "EMA Stack": 0.20,
+            "ADX DI": 0.22, "CCI(20)": 0.12, "BB %B": 0.12,
+            "Williams%R": 0.05, "Supertrend": 0.03,
+        },
         sl_mult_override = {
+            "M1":  1.1,
+            "M3":  1.2,
             "M5":  1.3,   # very tight — scalpers cut losses fast
             "M15": 1.6,
         },
@@ -72,9 +85,10 @@ MODES: Dict[str, ModeConfig] = {
         trade_type_label = "Scalp",
         tip = (
             "⚡ <b>Scalp Mode active.</b>\n"
-            "Signals fire on M5 and M15 only. Stops are tight — "
+            "Signals fire on M1, M3, M5 and M15. Stops are tight — "
             "monitor the trade closely and be ready to exit quickly."
         ),
+        risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
     ),
 
     "intraday": ModeConfig(
@@ -83,10 +97,16 @@ MODES: Dict[str, ModeConfig] = {
         emoji       = "📊",
         description = "Day-trade setups on M15/M30/H1. Balanced risk, same-day exits.",
         scan_timeframes = ["M15", "M30", "H1"],
+        preferred_timeframe = "H1",
         min_votes           = 4,   # current engine default
         min_votes_kill_zone = 3,
         confidence_threshold = 75,
-        sl_mult_override = {},     # use engine defaults (2.2–2.5×)
+        indicator_weights = {
+            "RSI(14)": 0.14, "MACD": 0.19, "EMA Stack": 0.20,
+            "ADX DI": 0.18, "CCI(20)": 0.11, "BB %B": 0.09,
+            "Williams%R": 0.05, "Supertrend": 0.04,
+        },
+        sl_mult_override = {"M15": 1.5, "M30": 1.6, "H1": 1.8},
         tp_mult = (2.0, 3.5, 4.5),
         htf_gate_strict  = False,
         trade_type_label = "Intraday",
@@ -95,51 +115,69 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning M15, M30 and H1. Standard risk management. "
             "Targets are realistic for same-session trades."
         ),
+        risk_note = "Balanced intraday stop; TP1 targets 2R and TP2 extends the day move.",
     ),
 
     "swing": ModeConfig(
         name        = "swing",
         label       = "Swing",
         emoji       = "🌊",
-        description = "Multi-day setups on H4/D1. Wider stops, bigger targets, fewer signals.",
-        scan_timeframes = ["H4", "D1"],
+        description = "Multi-day setups on H4/D1/W1. Wider stops, bigger targets, fewer signals.",
+        scan_timeframes = ["H4", "D1", "W1"],
+        preferred_timeframe = "H4",
         min_votes           = 4,
         min_votes_kill_zone = 4,   # kill zones less relevant on H4+
         confidence_threshold = 78,
+        indicator_weights = {
+            "RSI(14)": 0.08, "MACD": 0.20, "EMA Stack": 0.22,
+            "ADX DI": 0.18, "CCI(20)": 0.10, "BB %B": 0.05,
+            "Williams%R": 0.05, "Supertrend": 0.12,
+        },
         sl_mult_override = {
-            "H4": 3.0,   # swing candles have large wicks — needs more room
-            "D1": 2.5,
+            "H4": 2.0,
+            "D1": 2.2,
+            "W1": 2.4,
         },
         tp_mult = (3.0, 5.0, 7.0),   # hold for the full move
         htf_gate_strict  = True,      # strong counter-trend D1 blocks H4 signals
         trade_type_label = "Swing",
         tip = (
             "🌊 <b>Swing Mode active.</b>\n"
-            "Scanning H4 and D1. Wider stops, larger targets. "
+            "Scanning H4, D1 and W1. Wider stops, larger targets. "
             "Expect fewer signals — only high-quality setups fire."
         ),
+        risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",
     ),
 
     "position": ModeConfig(
         name        = "position",
         label       = "Position",
         emoji       = "🏛️",
-        description = "Long-term trades on D1. Maximum confirmation, macro trend focus.",
-        scan_timeframes = ["D1"],
+        description = "Long-term trades on D1/W1/MN1. Maximum confirmation, macro trend focus.",
+        scan_timeframes = ["D1", "W1", "MN1"],
+        preferred_timeframe = "D1",
         min_votes           = 5,   # near-unanimous agreement required
         min_votes_kill_zone = 5,
         confidence_threshold = 82,
+        indicator_weights = {
+            "RSI(14)": 0.07, "MACD": 0.18, "EMA Stack": 0.25,
+            "ADX DI": 0.18, "CCI(20)": 0.10, "BB %B": 0.04,
+            "Williams%R": 0.03, "Supertrend": 0.15,
+        },
         sl_mult_override = {
-            "D1": 2.5,   # ATR on D1 is already large; 2.5× is plenty of room
+            "D1": 2.0,
+            "W1": 2.2,
+            "MN1": 2.4,
         },
         tp_mult = (5.0, 8.0, 12.0),  # hold weeks/months
         htf_gate_strict  = True,
         trade_type_label = "Position",
         tip = (
             "🏛️ <b>Position Mode active.</b>\n"
-            "Scanning D1 only. Very few signals — only macro-confirmed moves. "
+            "Scanning D1, W1 and MN1. Very few signals — only macro-confirmed moves. "
             "Stops are wide; targets are large. This is a long-term strategy."
         ),
+        risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
     ),
 }
 

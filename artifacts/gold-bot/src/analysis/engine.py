@@ -71,6 +71,7 @@ class MarketAnalysis:
     htf_bias:   str = "Neutral"
     candle_pattern: str = "None"
     trade_type:     str = "Intraday"   # Scalp | Intraday | Swing | Position
+    analysis_mode:  str = "intraday"
     limit_entry:    float = 0.0        # Suggested limit-order entry for better fill
     entry_note:     str = ""           # "Market" or "Limit @ XXXX.XX"
     bb_upper:       float = 0.0
@@ -721,7 +722,10 @@ def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
     n        = len(closes)
     # Higher timeframes need a larger lookback to capture weekly/multi-day S/R pivots.
     # A fixed 6-bar lookback on H4 only covers 24 hours — major levels are invisible.
-    _lookback_map = {"M5": 4, "M15": 5, "M30": 6, "H1": 8, "H4": 14, "D1": 20}
+    _lookback_map = {
+        "M1": 3, "M3": 3, "M5": 4, "M15": 5, "M30": 6,
+        "H1": 8, "H4": 14, "D1": 20, "W1": 8, "MN1": 6,
+    }
     lookback = _lookback_map.get(timeframe, 6)
 
     for i in range(lookback, n - lookback):
@@ -1018,7 +1022,7 @@ def classify_trade_type(timeframe: str, adx: float) -> str:
       H1 (ADX >= 30) / H4  → Swing     (1–5 days)
       D1                   → Position  (weeks)
     """
-    if timeframe in ("M5", "M15"):
+    if timeframe in ("M1", "M3", "M5", "M15"):
         return "Scalp"
     if timeframe == "D1":
         return "Position"
@@ -1046,12 +1050,16 @@ def get_trading_session() -> Tuple[str, float]:
 # ─── Higher-timeframe bias ────────────────────────────────────────────────────
 
 HTF_MAP = {
+    "M1":  "H1",
+    "M3":  "H1",
     "M5":  "H1",
     "M15": "H1",
     "M30": "H4",
     "H1":  "H4",
     "H4":  "D1",
     "D1":  "D1",
+    "W1":  "D1",
+    "MN1": "D1",
 }
 
 
@@ -1303,7 +1311,10 @@ def get_kill_zone() -> Tuple[str, bool]:
 
 
 def _candles_per_day(timeframe: str) -> int:
-    return {"M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6, "D1": 1}.get(timeframe, 24)
+    return {
+        "M1": 1440, "M3": 480, "M5": 288, "M15": 96, "M30": 48,
+        "H1": 24, "H4": 6, "D1": 1, "W1": 1, "MN1": 1,
+    }.get(timeframe, 24)
 
 
 def _calc_pdh_pdl(highs: List[float], lows: List[float],
@@ -1423,6 +1434,9 @@ async def _get_daily_bias(price: float, highs: List[float],
 
 async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     from src.config import CONFIDENCE_THRESHOLD, MIN_RR_RATIO
+    from src.mode_manager import get_mode_config
+
+    mode_cfg = get_mode_config()
 
     htf = HTF_MAP.get(timeframe, "H4")
 
