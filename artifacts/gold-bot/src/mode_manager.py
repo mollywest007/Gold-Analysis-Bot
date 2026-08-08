@@ -62,4 +62,6 @@ def set_mode(mode: str) -> ModeConfig:
 
 def list_modes() -> list:
     """Return all ModeConfig objects in display order."""
-    return [MODES[k] for k in ("scalp", "intraday", "swing", "position")]
+    # Dict insertion order is the display order.  New modes are therefore
+    # discoverable by the UI without changing this manager.
+    return list(MODES.values())

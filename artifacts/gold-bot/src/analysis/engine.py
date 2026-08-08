@@ -1437,12 +1437,18 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
 
     mode_cfg = get_mode_config()
 
-    htf = HTF_MAP.get(timeframe, "H4")
+    # The active mode owns the confirmation hierarchy.  The legacy map remains
+    # a safe fallback for callers that introduce a timeframe before adding it
+    # to a mode profile.
+    htf = mode_cfg.confirmation_map.get(timeframe, HTF_MAP.get(timeframe, "H4"))
 
     async def _neutral() -> str:
         return "Neutral"
 
-    bias_timeframes = {"H4", "D1", "H1", "M30", "M15", htf}
+    bias_timeframes = set(mode_cfg.context_timeframes) | {htf}
+    # Always include the active chart so reports have a local reference even
+    # when a future mode defines a very small context set.
+    bias_timeframes.add(timeframe)
     bias_results = await asyncio.gather(
         fetch_ohlcv(timeframe),
         *(_get_htf_bias(bias_tf) for bias_tf in sorted(bias_timeframes)),
@@ -1458,9 +1464,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         bias_by_tf.get(htf, "Neutral")
     )
     ltf_trends = {
-        "H1": ltf_h1_bias,
-        "M30": ltf_m30_bias,
-        "M15": ltf_m15_bias,
+        tf: bias_by_tf.get(tf, "Neutral")
+        for tf in mode_cfg.context_timeframes
+        if tf in bias_by_tf
     }
 
     if data is None or len(data) < 35:
@@ -1646,6 +1652,61 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             buy_score  *= 1.08
         elif sell_score > buy_score:
             sell_score *= 1.08
+
+    # ── Mode strategy evidence ────────────────────────────────────────────────
+    # Indicators remain shared across every mode, but the profile decides which
+    # market evidence deserves extra influence.  This is what makes a scalp
+    # setup momentum/liquidity-led while a position setup is regime/macro-led.
+    # Bonuses are deliberately additive and small so they reinforce, rather
+    # than override, the core indicator votes.
+    lookback = mode_cfg.breakout_lookback
+    breakout_direction = "NEUTRAL"
+    if len(closes) >= lookback + 1:
+        prior_high = max(highs[-lookback - 1:-1])
+        prior_low = min(lows[-lookback - 1:-1])
+        if closes[-1] > prior_high:
+            breakout_direction = "BUY"
+        elif closes[-1] < prior_low:
+            breakout_direction = "SELL"
+
+    sweep_direction = (
+        "BUY" if liq_sweep == "BULLISH_SWEEP"
+        else "SELL" if liq_sweep == "BEARISH_SWEEP"
+        else "NEUTRAL"
+    )
+    candle_direction = (
+        "BUY" if closes[-1] >= opens[-1]
+        else "SELL"
+    ) if closes and opens else "NEUTRAL"
+    momentum_direction = "NEUTRAL"
+    if hist > 0 and hist >= prev_hist:
+        momentum_direction = "BUY"
+    elif hist < 0 and hist <= prev_hist:
+        momentum_direction = "SELL"
+    regime_direction = (
+        "BUY" if plus_di > minus_di
+        else "SELL" if minus_di > plus_di
+        else "NEUTRAL"
+    ) if market_regime_v in ("TRENDING", "SQUEEZE") else "NEUTRAL"
+    macro_direction = (
+        "BUY" if htf_bias in ("Bullish", "Slightly Bullish")
+        else "SELL" if htf_bias in ("Bearish", "Slightly Bearish")
+        else "NEUTRAL"
+    )
+    feature_directions = {
+        "breakout": breakout_direction,
+        "liquidity_sweep": sweep_direction,
+        "volume_spike": candle_direction if vol_spike else "NEUTRAL",
+        "momentum_shift": momentum_direction,
+        "trend_regime": regime_direction,
+        "macro_alignment": macro_direction,
+    }
+    for feature, feature_weight in mode_cfg.feature_weights.items():
+        feature_direction = feature_directions.get(feature, "NEUTRAL")
+        if feature_direction == "BUY":
+            buy_score += feature_weight
+        elif feature_direction == "SELL":
+            sell_score += feature_weight
 
     total_score = buy_score + sell_score
     raw_conf    = max(buy_score, sell_score) / total_score if total_score > 0 else 0.5
@@ -1967,16 +2028,16 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         elif bear_ob:
             ob_at, ob_high, ob_low, ob_direction = True, bear_high, bear_low, "BEARISH"
 
-    # TP3: institutional measured move — anchor to structural R2/S2 when reachable
-    # R2/S2 already computed from pivot logic above; only use them when they fall
-    # between 3× and 8× SL away so the target stays ambitious but not delusional.
+    # TP3: institutional measured move — anchor to structural R2/S2 only when
+    # it remains inside the active mode's TP2→TP3 ladder.  This prevents a
+    # short-term profile from inheriting a long-term target (or vice versa).
     if direction == "BUY":
-        if r2 > tp2 and sl_dist * 3.0 <= (r2 - entry) <= sl_dist * 8.0:
+        if r2 > tp2 and sl_dist * tp2_mult <= (r2 - entry) <= sl_dist * tp3_mult:
             tp3 = round(r2 - atr * 0.10, 2)
         else:
             tp3 = round(entry + sl_dist * tp3_mult, 2)
     elif direction == "SELL":
-        if s2 < tp2 and sl_dist * 3.0 <= (entry - s2) <= sl_dist * 8.0:
+        if s2 < tp2 and sl_dist * tp2_mult <= (entry - s2) <= sl_dist * tp3_mult:
             tp3 = round(s2 + atr * 0.10, 2)
         else:
             tp3 = round(entry - sl_dist * tp3_mult, 2)

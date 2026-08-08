@@ -90,6 +90,12 @@ def _mode_line() -> str:
     return f"  Mode      : {cfg.emoji} {cfg.label}"
 
 
+def _mode_risk_line() -> str:
+    """Expose the active profile's risk/holding guidance on trade plans."""
+    note = get_mode_config().risk_note
+    return f"  Risk Plan : {note}" if note else ""
+
+
 def _resolve_direction(analyses: list) -> dict:
     """
     Returns a dict with:
@@ -219,6 +225,9 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  HTF Align : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
         ]
+        risk_line = _mode_risk_line()
+        if risk_line:
+            lines.append(risk_line)
         lines.append(_kill_zone_line(a))
         pd_line = _pd_line(a)
         if pd_line:
@@ -1307,6 +1316,7 @@ def alert_card(a: MarketAnalysis) -> str:
         f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
         f"  HTF Align : {a.htf_bias}",
+        _mode_risk_line(),
         "",
         "──────────────────────────────────",
         f"  Entry     : {fmt_price(a.entry)}",

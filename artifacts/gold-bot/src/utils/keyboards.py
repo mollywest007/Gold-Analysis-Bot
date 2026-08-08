@@ -36,10 +36,9 @@ def settings_keyboard(current_tf: str, current_mode: str = "intraday") -> Inline
 
     mode_buttons = []
     mode_row = []
-    for mode, label in (
-        ("scalp", "⚡ Scalp"), ("intraday", "📊 Intraday"),
-        ("swing", "🌊 Swing"), ("position", "🏛️ Position"),
-    ):
+    for mode_cfg in MODES.values():
+        mode = mode_cfg.name
+        label = f"{mode_cfg.emoji} {mode_cfg.label}"
         mode_row.append(InlineKeyboardButton(
             f"[{label}]" if mode == current_mode else label,
             callback_data=f"set_mode:{mode}",

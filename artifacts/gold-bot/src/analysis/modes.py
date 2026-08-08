@@ -27,6 +27,12 @@ class ModeConfig:
     # ── Alert scanning ─────────────────────────────────────────────────────────
     scan_timeframes: List[str]   # timeframes the background scanner watches
     preferred_timeframe: str     # default chart used by /signal and /recommend
+    # The primary confirmation chart for each scanned timeframe.  Keeping this
+    # in the mode profile (instead of a global map) lets a scalp setup ignore
+    # macro noise while a position setup can require weekly/monthly agreement.
+    confirmation_map: Dict[str, str]
+    # Additional context charts fetched for the report and confluence checks.
+    context_timeframes: List[str]
 
     # ── Signal sensitivity ─────────────────────────────────────────────────────
     min_votes:           int     # indicator votes needed outside kill zones
@@ -38,6 +44,10 @@ class ModeConfig:
     breakout_lookback: int = 20
     liquidity_lookback: int = 15
     min_rr_ratio: float = 2.0
+    # Directional evidence multipliers applied after the shared indicator vote.
+    # These make the personas distinct without adding mode-specific branches
+    # throughout the engine.
+    feature_weights: Dict[str, float] = field(default_factory=dict)
     # Automatic alert quality gates. The engine handles directional gating;
     # these settings control which completed plans are worth notifying about.
     alert_min_win_probability: int = 62
@@ -76,6 +86,8 @@ MODES: Dict[str, ModeConfig] = {
         description = "Quick entries on M5/M15. Tight stops, fast targets. Pure momentum.",
         scan_timeframes = ["M1", "M3", "M5", "M15"],
         preferred_timeframe = "M5",
+        confirmation_map = {"M1": "M15", "M3": "M15", "M5": "M30", "M15": "H1"},
+        context_timeframes = ["M15", "M30", "H1"],
         min_votes           = 2,   # fire faster — scalp windows close quickly
         min_votes_kill_zone = 2,
         confidence_threshold = 70,
@@ -83,6 +95,10 @@ MODES: Dict[str, ModeConfig] = {
         breakout_lookback = 8,
         liquidity_lookback = 8,
         min_rr_ratio = 1.5,
+        feature_weights = {
+            "breakout": 0.12, "liquidity_sweep": 0.12, "volume_spike": 0.08,
+            "momentum_shift": 0.10, "trend_regime": 0.06, "macro_alignment": 0.01,
+        },
         alert_min_win_probability = 55,
         alert_min_grades = ("A+", "A", "B"),
         confluence_min_tfs = 3,
@@ -115,6 +131,8 @@ MODES: Dict[str, ModeConfig] = {
         description = "Day-trade setups on M15/M30/H1. Balanced risk, same-day exits.",
         scan_timeframes = ["M15", "M30", "H1"],
         preferred_timeframe = "H1",
+        confirmation_map = {"M15": "H1", "M30": "H1", "H1": "H4"},
+        context_timeframes = ["H1", "H4", "D1"],
         min_votes           = 4,   # current engine default
         min_votes_kill_zone = 3,
         confidence_threshold = 75,
@@ -122,6 +140,10 @@ MODES: Dict[str, ModeConfig] = {
         breakout_lookback = 20,
         liquidity_lookback = 15,
         min_rr_ratio = 2.0,
+        feature_weights = {
+            "breakout": 0.08, "liquidity_sweep": 0.06, "volume_spike": 0.06,
+            "momentum_shift": 0.05, "trend_regime": 0.08, "macro_alignment": 0.06,
+        },
         alert_min_win_probability = 62,
         alert_min_grades = ("A+", "A"),
         confluence_min_tfs = 3,
@@ -149,6 +171,8 @@ MODES: Dict[str, ModeConfig] = {
         description = "Multi-day setups on H4/D1/W1. Wider stops, bigger targets, fewer signals.",
         scan_timeframes = ["H4", "D1", "W1"],
         preferred_timeframe = "H4",
+        confirmation_map = {"H4": "D1", "D1": "W1", "W1": "MN1"},
+        context_timeframes = ["H4", "D1", "W1", "MN1"],
         min_votes           = 4,
         min_votes_kill_zone = 4,   # kill zones less relevant on H4+
         confidence_threshold = 78,
@@ -156,6 +180,10 @@ MODES: Dict[str, ModeConfig] = {
         breakout_lookback = 30,
         liquidity_lookback = 25,
         min_rr_ratio = 2.5,
+        feature_weights = {
+            "breakout": 0.04, "liquidity_sweep": 0.05, "volume_spike": 0.04,
+            "momentum_shift": 0.02, "trend_regime": 0.12, "macro_alignment": 0.14,
+        },
         alert_min_win_probability = 68,
         alert_min_grades = ("A+", "A"),
         confluence_min_tfs = 3,
@@ -187,6 +215,8 @@ MODES: Dict[str, ModeConfig] = {
         description = "Long-term trades on D1/W1/MN1. Maximum confirmation, macro trend focus.",
         scan_timeframes = ["D1", "W1", "MN1"],
         preferred_timeframe = "D1",
+        confirmation_map = {"D1": "W1", "W1": "MN1", "MN1": "MN1"},
+        context_timeframes = ["D1", "W1", "MN1"],
         min_votes           = 5,   # near-unanimous agreement required
         min_votes_kill_zone = 5,
         confidence_threshold = 82,
@@ -194,6 +224,10 @@ MODES: Dict[str, ModeConfig] = {
         breakout_lookback = 50,
         liquidity_lookback = 40,
         min_rr_ratio = 3.0,
+        feature_weights = {
+            "breakout": 0.03, "liquidity_sweep": 0.03, "volume_spike": 0.03,
+            "momentum_shift": 0.01, "trend_regime": 0.16, "macro_alignment": 0.20,
+        },
         alert_min_win_probability = 72,
         alert_min_grades = ("A+",),
         confluence_min_tfs = 3,
