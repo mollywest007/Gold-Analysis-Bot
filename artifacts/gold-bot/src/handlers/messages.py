@@ -11,6 +11,7 @@ from src.handlers.commands import (
     cmd_news,
     cmd_outlook,
     cmd_recommend,
+    cmd_mode,
     cmd_settings,
     cmd_signal,
     cmd_trend,
@@ -42,6 +43,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "active": cmd_active,
         "news": cmd_news,
         "settings": cmd_settings,
+        "mode": cmd_mode,
         "history": cmd_history,
     }
     handler = handlers.get(text)

@@ -33,6 +33,16 @@ class ModeConfig:
     min_votes_kill_zone: int     # votes needed during London/NY kill zones
     confidence_threshold: int    # min % before a signal is considered valid
     indicator_weights: Dict[str, float] = field(default_factory=dict)
+    # Extra strategy knobs keep modes distinct beyond timeframe selection.
+    volume_spike_threshold: float = 1.5
+    breakout_lookback: int = 20
+    liquidity_lookback: int = 15
+    min_rr_ratio: float = 2.0
+    # Automatic alert quality gates. The engine handles directional gating;
+    # these settings control which completed plans are worth notifying about.
+    alert_min_win_probability: int = 62
+    alert_min_grades: Tuple[str, ...] = ("A+", "A")
+    confluence_min_tfs: int = 3
     # Mode-specific trade-plan policy.  These are deliberately explicit so a
     # new mode can tune the strategy without adding branches to the engine.
     risk_note: str = ""
@@ -69,6 +79,13 @@ MODES: Dict[str, ModeConfig] = {
         min_votes           = 2,   # fire faster — scalp windows close quickly
         min_votes_kill_zone = 2,
         confidence_threshold = 70,
+        volume_spike_threshold = 1.25,
+        breakout_lookback = 8,
+        liquidity_lookback = 8,
+        min_rr_ratio = 1.5,
+        alert_min_win_probability = 55,
+        alert_min_grades = ("A+", "A", "B"),
+        confluence_min_tfs = 3,
         indicator_weights = {
             "RSI(14)": 0.08, "MACD": 0.18, "EMA Stack": 0.20,
             "ADX DI": 0.22, "CCI(20)": 0.12, "BB %B": 0.12,
@@ -101,6 +118,13 @@ MODES: Dict[str, ModeConfig] = {
         min_votes           = 4,   # current engine default
         min_votes_kill_zone = 3,
         confidence_threshold = 75,
+        volume_spike_threshold = 1.5,
+        breakout_lookback = 20,
+        liquidity_lookback = 15,
+        min_rr_ratio = 2.0,
+        alert_min_win_probability = 62,
+        alert_min_grades = ("A+", "A"),
+        confluence_min_tfs = 3,
         indicator_weights = {
             "RSI(14)": 0.14, "MACD": 0.19, "EMA Stack": 0.20,
             "ADX DI": 0.18, "CCI(20)": 0.11, "BB %B": 0.09,
@@ -128,6 +152,13 @@ MODES: Dict[str, ModeConfig] = {
         min_votes           = 4,
         min_votes_kill_zone = 4,   # kill zones less relevant on H4+
         confidence_threshold = 78,
+        volume_spike_threshold = 1.6,
+        breakout_lookback = 30,
+        liquidity_lookback = 25,
+        min_rr_ratio = 2.5,
+        alert_min_win_probability = 68,
+        alert_min_grades = ("A+", "A"),
+        confluence_min_tfs = 3,
         indicator_weights = {
             "RSI(14)": 0.08, "MACD": 0.20, "EMA Stack": 0.22,
             "ADX DI": 0.18, "CCI(20)": 0.10, "BB %B": 0.05,
@@ -159,6 +190,13 @@ MODES: Dict[str, ModeConfig] = {
         min_votes           = 5,   # near-unanimous agreement required
         min_votes_kill_zone = 5,
         confidence_threshold = 82,
+        volume_spike_threshold = 1.8,
+        breakout_lookback = 50,
+        liquidity_lookback = 40,
+        min_rr_ratio = 3.0,
+        alert_min_win_probability = 72,
+        alert_min_grades = ("A+",),
+        confluence_min_tfs = 3,
         indicator_weights = {
             "RSI(14)": 0.07, "MACD": 0.18, "EMA Stack": 0.25,
             "ADX DI": 0.18, "CCI(20)": 0.10, "BB %B": 0.04,

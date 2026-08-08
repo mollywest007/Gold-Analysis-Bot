@@ -1,4 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from src.analysis.modes import MODES
 
 
 def refresh_keyboard(command: str, tf: str = "all") -> InlineKeyboardMarkup:
@@ -14,14 +15,14 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         ["Signal", "Trend"],
         ["Levels", "Outlook"],
         ["Active", "News"],
-        ["History"],
+        ["History", "Mode"],
         ["🔔 Alerts", "Settings"],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
 
-def settings_keyboard(current_tf: str) -> InlineKeyboardMarkup:
-    tf_options = ["M5", "M15", "M30", "H1", "H4", "D1"]
+def settings_keyboard(current_tf: str, current_mode: str = "intraday") -> InlineKeyboardMarkup:
+    tf_options = MODES.get(current_mode, MODES["intraday"]).scan_timeframes
     tf_buttons = []
     row = []
     for tf in tf_options:
@@ -33,7 +34,25 @@ def settings_keyboard(current_tf: str) -> InlineKeyboardMarkup:
     if row:
         tf_buttons.append(row)
 
+    mode_buttons = []
+    mode_row = []
+    for mode, label in (
+        ("scalp", "⚡ Scalp"), ("intraday", "📊 Intraday"),
+        ("swing", "🌊 Swing"), ("position", "🏛️ Position"),
+    ):
+        mode_row.append(InlineKeyboardButton(
+            f"[{label}]" if mode == current_mode else label,
+            callback_data=f"set_mode:{mode}",
+        ))
+        if len(mode_row) == 2:
+            mode_buttons.append(mode_row)
+            mode_row = []
+    if mode_row:
+        mode_buttons.append(mode_row)
+
     rows = [
+        [InlineKeyboardButton("-- Analysis Mode --", callback_data="settings:mode_header")],
+        *mode_buttons,
         [InlineKeyboardButton("-- Timeframe --", callback_data="settings:tf_header")],
         *tf_buttons,
         [InlineKeyboardButton("Back", callback_data="settings:back")],

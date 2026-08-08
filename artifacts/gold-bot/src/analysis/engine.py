@@ -1057,9 +1057,9 @@ HTF_MAP = {
     "M30": "H4",
     "H1":  "H4",
     "H4":  "D1",
-    "D1":  "D1",
-    "W1":  "D1",
-    "MN1": "D1",
+    "D1":  "W1",
+    "W1":  "MN1",
+    "MN1": "MN1",
 }
 
 
@@ -1433,7 +1433,6 @@ async def _get_daily_bias(price: float, highs: List[float],
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 async def analyze(timeframe: str = "H1") -> MarketAnalysis:
-    from src.config import CONFIDENCE_THRESHOLD, MIN_RR_RATIO
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config()
@@ -1443,18 +1442,20 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     async def _neutral() -> str:
         return "Neutral"
 
-    data, htf_h4_bias, htf_d1_bias, ltf_h1_bias, ltf_m30_bias, ltf_m15_bias = await asyncio.gather(
+    bias_timeframes = {"H4", "D1", "H1", "M30", "M15", htf}
+    bias_results = await asyncio.gather(
         fetch_ohlcv(timeframe),
-        _get_htf_bias("H4"),
-        _get_htf_bias("D1"),
-        _get_htf_bias("H1"),
-        _get_htf_bias("M30"),
-        _get_htf_bias("M15"),
+        *(_get_htf_bias(bias_tf) for bias_tf in sorted(bias_timeframes)),
     )
+    data = bias_results[0]
+    bias_by_tf = dict(zip(sorted(bias_timeframes), bias_results[1:]))
+    htf_h4_bias = bias_by_tf.get("H4", "Neutral")
+    htf_d1_bias = bias_by_tf.get("D1", "Neutral")
+    ltf_h1_bias = bias_by_tf.get("H1", "Neutral")
+    ltf_m30_bias = bias_by_tf.get("M30", "Neutral")
+    ltf_m15_bias = bias_by_tf.get("M15", "Neutral")
     htf_bias = (
-        htf_h4_bias if htf == "H4"
-        else htf_d1_bias if htf == "D1"
-        else ltf_h1_bias
+        bias_by_tf.get(htf, "Neutral")
     )
     ltf_trends = {
         "H1": ltf_h1_bias,
@@ -1504,7 +1505,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     market_regime_v  = detect_market_regime(closes, highs, lows, adx, atr)
 
     session_label, session_mult = get_trading_session()
-    vol_spike = is_volume_spike(volumes, lookback=20, threshold=1.5)
+    vol_spike = is_volume_spike(
+        volumes, lookback=20, threshold=mode_cfg.volume_spike_threshold
+    )
 
     # Detect kill zone early — used to lower vote threshold and grade bars
     # so institutional moves at London/NY open are caught before full alignment
@@ -1515,7 +1518,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     div_sig, div_conf           = _score_divergence(rsi_div)
     candle_sig_v, candle_conf_v = _score_candle(candle_pat, candle_wt)
     fvg_dir, fvg_top, fvg_bot   = detect_fair_value_gap(highs, lows, closes, lookback=30)
-    liq_sweep                   = detect_liquidity_sweep(highs, lows, closes, lookback=15)
+    liq_sweep                   = detect_liquidity_sweep(
+        highs, lows, closes, lookback=mode_cfg.liquidity_lookback
+    )
 
     logger.info(
         f"[{timeframe}] Price={price:.2f} RSI={rsi} MACD={macd_line:.3f}/{sig_line:.3f} "
@@ -1594,6 +1599,11 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         Indicator("Williams%R", willr,     willr_sig,    0.05),
         Indicator("Supertrend", st_value,  st_sig,       0.02),
     ]
+    # The selected mode uses the same compatible indicator set, but each
+    # strategy persona weights those indicators differently.
+    for indicator in indicators:
+        if indicator.name in mode_cfg.indicator_weights:
+            indicator.weight = mode_cfg.indicator_weights[indicator.name]
     # Optional votes — only added when they have a clear directional stance
     if candle_sig_v != "NEUTRAL":
         indicators.append(Indicator("Candle", candle_wt, candle_sig_v, 0.10))
@@ -1645,7 +1655,11 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     margin    = abs(buy_score - sell_score)
     # Kill zone: institutions move fast at London/NY open — catch the signal one
     # indicator earlier so the alert fires at the start of the move, not the middle.
-    MIN_VOTES = 3 if is_kill_zone_early else 4
+    MIN_VOTES = (
+        mode_cfg.min_votes_kill_zone
+        if is_kill_zone_early
+        else mode_cfg.min_votes
+    )
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
@@ -1756,21 +1770,24 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     r1, r2, s1, s2 = find_sr_levels(highs, lows, closes, price, atr, volumes, timeframe)
 
     # Breakout / reversal
-    breakout = detect_breakout(closes, highs, 20)
+    breakout = detect_breakout(closes, highs, mode_cfg.breakout_lookback)
     reversal = detect_reversal(rsi, stoch_k, hist, closes)
 
     # Trade type
-    trade_type = classify_trade_type(timeframe, adx)
+    # The active mode, rather than the raw timeframe, defines the strategy
+    # persona shown to the user and used by the trade-plan helpers.
+    trade_type = mode_cfg.trade_type_label
 
     # ── Entry / SL / TP ───────────────────────────────────────────────────────
     # SL uses 2.0×–2.5× ATR so gold wicks don't stop us out before the move.
     # Previous 1.2–1.4× SL was the primary cause of SL hits.
-    sl_mult = (
+    default_sl_mult = (
         2.5 if timeframe in ("M5", "M15") else   # scalp: still needs wick protection
         2.2 if timeframe in ("M30", "H1") else
         2.3 if timeframe == "H4" else             # H4 swing candles have large wicks — needs more room than H1
         2.0                                        # D1: position trade, ATR is already large
     )
+    sl_mult = mode_cfg.sl_mult_override.get(timeframe, default_sl_mult)
     max_sl_dist = atr * 3.5   # cap so SL isn't absurdly far from price
 
     sl_min_dist = atr * sl_mult   # enforce this as the absolute floor for SL distance
@@ -1818,8 +1835,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             stop_loss = _structural_sl
 
     sl_dist  = abs(entry - stop_loss)
-    tp1_dist = sl_dist * 2.0
-    tp2_dist = sl_dist * 3.5
+    tp1_mult, tp2_mult, tp3_mult = mode_cfg.tp_mult
+    tp1_dist = sl_dist * tp1_mult
+    tp2_dist = sl_dist * tp2_mult
 
     if direction == "BUY":
         tp1 = round(min(entry + tp1_dist, r1 - atr * 0.1), 2) if r1 > entry + tp1_dist * 0.6 else round(entry + tp1_dist, 2)
@@ -1831,18 +1849,19 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         tp1 = round(entry + tp1_dist, 2)
         tp2 = round(entry + tp2_dist, 2)
 
-    # Guarantee minimum 1.5:1 R:R — S/R snapping must never leave TP1 too close to entry
+    # Guarantee the active mode's minimum target distance after S/R snapping.
     if sl_dist > 0:
-        min_tp1_dist = sl_dist * 1.5
+        min_tp1_dist = sl_dist * tp1_mult
         if direction == "BUY" and tp1 < entry + min_tp1_dist:
             tp1 = round(entry + min_tp1_dist, 2)
         elif direction == "SELL" and tp1 > entry - min_tp1_dist:
             tp1 = round(entry - min_tp1_dist, 2)
-        # TP2 must always be meaningfully beyond TP1 (at least 0.5× SL further)
-        if direction == "BUY" and tp2 < tp1 + sl_dist * 0.5:
-            tp2 = round(tp1 + sl_dist * 0.5, 2)
-        elif direction == "SELL" and tp2 > tp1 - sl_dist * 0.5:
-            tp2 = round(tp1 - sl_dist * 0.5, 2)
+        # Preserve the mode's TP ladder after S/R snapping.
+        tp2_gap = sl_dist * max(0.5, tp2_mult - tp1_mult)
+        if direction == "BUY" and tp2 < tp1 + tp2_gap:
+            tp2 = round(tp1 + tp2_gap, 2)
+        elif direction == "SELL" and tp2 > tp1 - tp2_gap:
+            tp2 = round(tp1 - tp2_gap, 2)
 
     rr_ratio = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 else 0.0
 
@@ -1852,12 +1871,9 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     )
 
     # ── Signal gating ─────────────────────────────────────────────────────────
-    # Policy: always emit BUY/SELL when there is a directional bias.
-    # Only two things produce WAIT:
-    #   1. Truly no direction (NEUTRAL bias — indicators split evenly)
-    #   2. Hard HTF block (confirmed opposite macro trend)
-    # Everything else (ADX, session, confidence, R:R, wall) lowers the
-    # setup_quality grade but does NOT suppress the signal.
+    # The mode controls how much confirmation is required. Scalp/Intraday can
+    # trade responsive moves, while Swing/Position require confidence, R:R and
+    # higher-timeframe alignment before exposing an actionable signal.
     wait_reason  = ""
     signal_notes = []   # collected caveats shown on the entry card
 
@@ -1877,16 +1893,42 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
             signal_notes.append(f"Entry near S1 {s1:.2f} — tight space below")
         if session_label == "Asian" and timeframe in ("M5", "M15", "M30", "H1"):
             signal_notes.append("Asian session — lower liquidity, expect wider spreads")
-        if confidence < CONFIDENCE_THRESHOLD:
-            signal_notes.append(f"Confidence {confidence}% — lower conviction setup")
-        if rr_ratio < MIN_RR_RATIO:
-            signal_notes.append(f"R:R 1:{rr_ratio} — below ideal 1:{int(MIN_RR_RATIO)}, use limit")
+        if confidence < mode_cfg.confidence_threshold:
+            signal_notes.append(
+                f"Confidence {confidence}% — below {mode_cfg.label} threshold "
+                f"({mode_cfg.confidence_threshold}%)"
+            )
+        if rr_ratio < mode_cfg.min_rr_ratio:
+            signal_notes.append(
+                f"R:R 1:{rr_ratio} — below {mode_cfg.label} minimum "
+                f"1:{mode_cfg.min_rr_ratio:g}, use limit"
+            )
         if max(buy_votes, sell_votes) < MIN_VOTES:
-            signal_notes.append(f"Only {max(buy_votes, sell_votes)}/5 indicators agree")
+            signal_notes.append(
+                f"Only {max(buy_votes, sell_votes)} indicators agree "
+                f"(mode requires {MIN_VOTES})"
+            )
         if htf_reason:
             signal_notes.append(htf_reason)
         # Attach notes to wait_reason field (repurposed as signal context)
         wait_reason = " | ".join(signal_notes) if signal_notes else ""
+        if confidence < mode_cfg.confidence_threshold:
+            action = "WAIT"
+            wait_reason = (
+                f"{mode_cfg.label} Mode requires confidence >= "
+                f"{mode_cfg.confidence_threshold}%"
+            )
+        elif rr_ratio < mode_cfg.min_rr_ratio:
+            action = "WAIT"
+            wait_reason = (
+                f"{mode_cfg.label} Mode requires minimum R:R 1:"
+                f"{mode_cfg.min_rr_ratio:g}"
+            )
+        elif mode_cfg.htf_gate_strict and not htf_align:
+            action = "WAIT"
+            wait_reason = (
+                f"{mode_cfg.label} Mode requires higher-timeframe alignment"
+            )
     else:
         action      = "WAIT"
         wait_reason = htf_reason or verdict_reason or "Indicators split — no directional edge"
@@ -1932,14 +1974,14 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         if r2 > tp2 and sl_dist * 3.0 <= (r2 - entry) <= sl_dist * 8.0:
             tp3 = round(r2 - atr * 0.10, 2)
         else:
-            tp3 = round(entry + sl_dist * 4.5, 2)
+            tp3 = round(entry + sl_dist * tp3_mult, 2)
     elif direction == "SELL":
         if s2 < tp2 and sl_dist * 3.0 <= (entry - s2) <= sl_dist * 8.0:
             tp3 = round(s2 + atr * 0.10, 2)
         else:
-            tp3 = round(entry - sl_dist * 4.5, 2)
+            tp3 = round(entry - sl_dist * tp3_mult, 2)
     else:
-        tp3 = round(entry + sl_dist * 4.5, 2)
+        tp3 = round(entry + sl_dist * tp3_mult, 2)
 
     # Confluence list
     confluence_list: List[str] = []
@@ -2292,7 +2334,8 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
         buy_votes=buy_votes, sell_votes=sell_votes, wait_votes=wait_votes,
         verdict_reason=verdict_reason,
         session=session_label, htf_bias=htf_bias, candle_pattern=candle_pat,
-        trade_type=trade_type, limit_entry=limit_entry, entry_note=entry_note,
+        trade_type=trade_type, analysis_mode=mode_cfg.name,
+        limit_entry=limit_entry, entry_note=entry_note,
         rsi_value=rsi, stoch_k_val=stoch_k, stoch_d_val=stoch_d,
         macd_hist=hist, plus_di=plus_di, minus_di=minus_di,
         market_structure=mkt_structure,

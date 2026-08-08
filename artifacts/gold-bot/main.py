@@ -83,31 +83,38 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Pre-fetch M15 + H1 analysis 15 s after startup so first request is instant."""
+    """Pre-fetch the active mode's analysis set after startup."""
     from src.market_hours import market_status
     from src.analysis.cache import warm
+    from src.mode_manager import get_mode_config
     if not market_status()["is_open"]:
         logger.info("Cache warm skipped — market closed.")
         return
-    await warm(["M15", "H1"])
+    cfg = get_mode_config()
+    logger.info(f"Warming {cfg.label} Mode cache: {cfg.scan_timeframes}")
+    await warm(cfg.scan_timeframes)
 
 
 async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Refresh M15 + H1 cache every minute while market is open."""
+    """Refresh the active mode's analysis set every minute while open."""
     from src.market_hours import market_status
     from src.analysis.cache import get_analysis
+    from src.mode_manager import get_mode_config
     import asyncio
     if not market_status()["is_open"]:
         return
     try:
-        m15, h1 = await asyncio.gather(
-            get_analysis("M15", max_age=0),
-            get_analysis("H1",  max_age=0),
+        cfg = get_mode_config()
+        results = await asyncio.gather(
+            *[get_analysis(tf, max_age=0) for tf in cfg.scan_timeframes],
+            return_exceptions=True,
         )
-        logger.info(
-            f"Cache refreshed — M15:{m15.action}/{m15.confidence}% "
-            f"H1:{h1.action}/{h1.confidence}% adx={h1.adx:.1f}"
+        summary = ", ".join(
+            f"{tf}:{result.action}/{result.confidence}%"
+            for tf, result in zip(cfg.scan_timeframes, results)
+            if not isinstance(result, Exception)
         )
+        logger.info(f"{cfg.label} Mode cache refreshed — {summary}")
     except Exception as e:
         logger.warning(f"Cache refresh failed: {e}")
 
@@ -125,7 +132,8 @@ BOT_COMMANDS = [
     BotCommand("chart",     "Send a chart image for AI analysis"),
     BotCommand("history",   "Recent closed trade results"),
     BotCommand("news",      "Latest gold market headlines"),
-    BotCommand("settings",  "Change your analysis timeframe"),
+    BotCommand("settings",  "Change mode and analysis timeframe"),
+    BotCommand("mode",      "Switch Scalp, Intraday, Swing, or Position mode"),
     BotCommand("help",      "Show all commands"),
 ]
 

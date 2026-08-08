@@ -3,6 +3,7 @@ import time
 import textwrap
 from src.analysis.engine import MarketAnalysis, Indicator
 from src.market_hours import market_status
+from src.mode_manager import get_mode_config
 
 TG_MSG_LIMIT = 4080   # Telegram hard limit is 4096; leave 16 chars headroom
 
@@ -68,9 +69,25 @@ def _trade_type_label(a: MarketAnalysis) -> str:
             "Swing": "SWING (1-5 days)", "Position": "POSITION (weeks)"}.get(a.trade_type, a.trade_type)
 
 
-_TF_MINUTES = {"M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+_TF_MINUTES = {
+    "M1": 1, "M3": 3, "M5": 5, "M15": 15, "M30": 30,
+    "H1": 60, "H4": 240, "D1": 1440, "W1": 10080, "MN1": 43200,
+}
 
-_TF_RANK = {"D1": 6, "H4": 5, "H1": 4, "M30": 3, "M15": 2, "M5": 1}
+_TF_RANK = {
+    "M1": 1, "M3": 2, "M5": 3, "M15": 4, "M30": 5,
+    "H1": 6, "H4": 7, "D1": 8, "W1": 9, "MN1": 10,
+}
+
+
+def timeframe_rank(timeframe: str) -> int:
+    """Return the common structural rank used by cards and alert references."""
+    return _TF_RANK.get(timeframe, 0)
+
+
+def _mode_line() -> str:
+    cfg = get_mode_config()
+    return f"  Mode      : {cfg.emoji} {cfg.label}"
 
 
 def _resolve_direction(analyses: list) -> dict:
@@ -194,6 +211,7 @@ def signal_card(a: MarketAnalysis) -> str:
             "",
             f"  Win Rate  : {_win_bar(a.win_probability)}",
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            _mode_line(),
             "",
             f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
@@ -502,8 +520,11 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         di_desc = "Balanced"
 
     # HTF context sentence
-    htf_map = {"M5": "H1", "M15": "H1", "M30": "H4",
-                "H1": "H4", "H4": "D1", "D1": "D1"}
+    htf_map = {
+        "M1": "H1", "M3": "H1", "M5": "H1", "M15": "H1",
+        "M30": "H4", "H1": "H4", "H4": "D1",
+        "D1": "W1", "W1": "MN1", "MN1": "MN1",
+    }
     htf_tf = htf_map.get(a.timeframe, "HTF")
     if a.htf_bias in ("Bullish", "Slightly Bullish"):
         htf_desc = f"{htf_tf} is {a.htf_bias} — macro supports longs"
@@ -806,7 +827,10 @@ def recommend_multi_card(analyses: list) -> str:
     ms     = market_status()
     mkt    = ms["note"]
 
-    TF_ORDER = ["M5", "M15", "M30", "H1", "H4", "D1"]
+    TF_ORDER = sorted(
+        {a.timeframe for a in analyses},
+        key=timeframe_rank,
+    )
     tf_map   = {a.timeframe: a for a in analyses}
 
     lines = [
@@ -1070,7 +1094,7 @@ def outlook_card(a: MarketAnalysis) -> str:
         SEP,
         "  TREND",
         SEP,
-        f"  HTF (H4/D1)  : {htf_bias}",
+        f"  HTF Context   : {htf_bias}",
         f"  LTF ({a.timeframe})  : {ltf_bias}  ({a.strength})",
         "",
         SEP,
@@ -1828,7 +1852,8 @@ def help_text() -> str:
         ("/history",   "View recent trade results"),
         ("/news",      "Latest gold market headlines"),
         ("/alerts",    "Toggle automatic signal notifications"),
-        ("/settings",  "Change timeframe (M5 to D1)"),
+        ("/mode",      "Switch Scalp, Intraday, Swing, or Position"),
+        ("/settings",  "Change mode and timeframe"),
         ("/help",      "This message"),
     ]
     lines = ["<b>Available Commands</b>\n"]
@@ -1840,11 +1865,11 @@ def help_text() -> str:
         "",
         f"<b>Market:</b> {mkt_status} — {ms['note']}",
         "",
-        "<b>Trade Types:</b>",
-        "Scalp    — M5/M15 (minutes-hours)",
-        "Intraday — M30/H1 (same session)",
-        "Swing    — H1/H4  (1-5 days)",
-        "Position — D1     (weeks)",
+        "<b>Analysis Modes:</b>",
+        "⚡ Scalp    — M1/M3/M5/M15 (fast momentum)",
+        "📊 Intraday — M15/M30/H1 (same session)",
+        "🌊 Swing    — H4/D1/W1 (multi-day structure)",
+        "🏛️ Position — D1/W1/MN1 (macro trend)",
     ]
     return "\n".join(lines)
 

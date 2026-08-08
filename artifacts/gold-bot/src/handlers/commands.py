@@ -12,12 +12,15 @@ from src.utils.formatting import (
     pro_analysis_card, early_entry_card, no_early_entry_card,
 )
 from src.utils.keyboards import main_menu_keyboard, settings_keyboard, refresh_keyboard
+from src.mode_manager import get_mode, get_mode_config, list_modes, set_mode
 
 logger = logging.getLogger(__name__)
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
-    return context.user_data.get("timeframe", "H1")
+    cfg = get_mode_config()
+    selected = context.user_data.get("timeframe")
+    return selected if selected in cfg.scan_timeframes else cfg.preferred_timeframe
 
 
 def _open_trade_banner(tf: str) -> str:
@@ -219,7 +222,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         # Sequential — see messages.py for explanation
         _analyses = []
-        for _tf in ("M5", "M15", "M30", "H1", "H4", "D1"):
+        for _tf in get_mode_config().scan_timeframes:
             try:
                 _analyses.append(await _analyze(_tf))
             except Exception as _e:
@@ -355,12 +358,37 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tf   = _get_tf(context)
+    mode = get_mode_config()
     text = (
         "<b>Settings</b>\n\n"
+        f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
+        f"{mode.description}\n\n"
         f"Current Timeframe: <b>{tf}</b>\n\n"
-        "Select a timeframe to update your default analysis window."
+        "Choose a mode to change the strategy, then choose a timeframe "
+        "within that mode."
     )
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
+    await update.message.reply_text(
+        text, parse_mode="HTML",
+        reply_markup=settings_keyboard(tf, mode.name),
+    )
+
+
+async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show and switch the active analysis persona."""
+    cfg = get_mode_config()
+    lines = [
+        f"<b>Analysis Mode</b>\nActive: {cfg.emoji} <b>{cfg.label}</b>",
+        f"<i>{cfg.description}</i>\n",
+        "Select a mode in <b>/settings</b> to change the strategy.",
+        "",
+    ]
+    for mode in list_modes():
+        marker = " ✅" if mode.name == cfg.name else ""
+        lines.append(f"{mode.emoji} <b>{mode.label}</b>{marker} — {mode.description}")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML",
+                                    reply_markup=settings_keyboard(
+                                        _get_tf(context), cfg.name
+                                    ))
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -498,6 +526,7 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("outlook",   cmd_outlook))
     app.add_handler(CommandHandler("active",    cmd_active))
     app.add_handler(CommandHandler("settings",  cmd_settings))
+    app.add_handler(CommandHandler("mode",      cmd_mode))
     app.add_handler(CommandHandler("news",      cmd_news))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("history",   cmd_history))

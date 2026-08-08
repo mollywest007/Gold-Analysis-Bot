@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
+from src.mode_manager import get_mode, get_mode_config
 from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
@@ -39,12 +40,16 @@ _reminded_trade_ids: Dict[str, Set[str]] = {}
 # enough to be caught without making a faster timeframe dictate reminders for
 # slower trades.
 _TF_PERIOD_SECONDS = {
+    "M1":  60,
+    "M3":  3 * 60,
     "M5":  5 * 60,
     "M15": 15 * 60,
     "M30": 30 * 60,
     "H1":  60 * 60,
     "H4": 4 * 60 * 60,
     "D1": 24 * 60 * 60,
+    "W1": 7 * 24 * 60 * 60,
+    "MN1": 30 * 24 * 60 * 60,
 }
 _DEFAULT_TF_PERIOD_SECONDS = 60 * 60
 
@@ -70,7 +75,9 @@ def _reminder_milestones(tf: str) -> list[tuple[str, int, int, bool]]:
         ("update_6x", third_min, third_max, False),
     ]
 
-SCAN_TIMEFRAMES = ["M15", "M30", "H1", "H4"]  # M5 removed — too noisy for gold entries
+def get_scan_timeframes() -> list[str]:
+    """Return the active mode's scan set without keeping a stale module global."""
+    return list(get_mode_config().scan_timeframes)
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -98,7 +105,7 @@ CONFLUENCE_MIN_TFS = 3
 
 # Higher timeframes used to determine the master trend bias.
 # Lower-TF signals that disagree with this bias are suppressed.
-HTF_ANCHOR = ["H4"]   # H4 is the sole trend anchor
+HTF_ANCHOR = ["H4"]   # legacy export; mode-aware scans use the engine's HTF map
 
 # File that persists signal state across bot restarts
 SIGNAL_STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "signal_state.json")
@@ -108,6 +115,7 @@ _prev_market_open: Optional[bool] = None
 _open_notif_sent_at: float  = 0.0
 _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
+_signal_state_mode: str = ""
 
 
 def _is_authorized(chat_id: int) -> bool:
@@ -186,12 +194,13 @@ def user_count() -> int:
 
 def _load_signal_state() -> None:
     """Load persisted signal state from disk — survives bot restarts."""
-    global _active_signal, _tf_last_fired
+    global _active_signal, _tf_last_fired, _signal_state_mode
     try:
         with open(SIGNAL_STATE_PATH) as f:
             s = json.load(f)
             _active_signal = s.get("active_signal", {})
             _tf_last_fired = s.get("last_fired", {})
+            _signal_state_mode = s.get("mode", "")
             logger.info(f"Signal state loaded: {_active_signal}")
     except FileNotFoundError:
         pass  # Normal on first run
@@ -203,7 +212,34 @@ def _save_signal_state() -> None:
     """Write signal state to disk so restarts don't re-fire stale signals."""
     os.makedirs(os.path.dirname(SIGNAL_STATE_PATH), exist_ok=True)
     with open(SIGNAL_STATE_PATH, "w") as f:
-        json.dump({"active_signal": _active_signal, "last_fired": _tf_last_fired}, f)
+        json.dump({
+            "mode": get_mode(),
+            "active_signal": _active_signal,
+            "last_fired": _tf_last_fired,
+        }, f)
+
+
+def _sync_mode_state() -> None:
+    """Clear signal locks when the strategy persona changes.
+
+    Open trades remain in the tracker and continue to receive TP/SL checks;
+    only entry locks and forming alerts are mode-specific.
+    """
+    global _signal_state_mode
+    active_mode = get_mode()
+    if _signal_state_mode and _signal_state_mode != active_mode:
+        logger.info(
+            f"Analysis mode changed {_signal_state_mode} → {active_mode}; "
+            "clearing stale entry locks."
+        )
+        _active_signal.clear()
+        _tf_last_fired.clear()
+        _forming_alert_sent.clear()
+        _momentum_shift_warned.clear()
+        _sl_cooldown_until.clear()
+    if _signal_state_mode != active_mode:
+        _signal_state_mode = active_mode
+        _save_signal_state()
 
 
 def _should_send(tf: str, action: str) -> bool:
@@ -550,8 +586,14 @@ async def _fire_confluence(
     """
     from src.utils.formatting import confluence_alert_card
 
-    # Reference TF priority for the trade plan (most reliable intraday TF first)
-    tf_priority = ["H4", "H1", "M30", "M15", "M5"]
+    # Reference TF priority is mode-independent: use the highest available
+    # timeframe because it carries the broadest structure.
+    from src.utils.formatting import timeframe_rank
+    tf_priority = sorted(
+        {tf for tf, _ in signal_list},
+        key=timeframe_rank,
+        reverse=True,
+    )
     tfs_present = {tf for tf, _ in signal_list}
     ref_tf = next((tf for tf in tf_priority if tf in tfs_present), signal_list[0][0])
     ref_a  = next(a for tf, a in signal_list if tf == ref_tf)
@@ -657,6 +699,9 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
+    _sync_mode_state()
+    mode_cfg = get_mode_config()
+    scan_timeframes = get_scan_timeframes()
 
     from src.market_hours import market_status
     ms       = market_status()
@@ -793,7 +838,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Each timeframe alerts independently. One card per timeframe per direction
     # change — lock releases only when the signal flips or the trade closes.
     analyses = await asyncio.gather(
-        *[_safe_analyze(tf) for tf in SCAN_TIMEFRAMES],
+        *[_safe_analyze(tf) for tf in scan_timeframes],
         return_exceptions=True,
     )
 
@@ -801,7 +846,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
     new_signals: list = []   # (tf, MarketAnalysis) pairs that should fire this cycle
     state_changed = False
 
-    for tf, a in zip(SCAN_TIMEFRAMES, analyses):
+    for tf, a in zip(scan_timeframes, analyses):
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
                 logger.error(f"[{tf}] Analysis raised: {a}")
@@ -874,7 +919,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             # the immediate price action; the HTF lagging indicators haven't
             # caught up yet. Block the contradicting signal until the lower lock
             # is released by a trade close or direction flip.
-            TF_ORDER = ["M15", "M30", "H1", "H4"]
+            TF_ORDER = scan_timeframes
             tf_rank  = TF_ORDER.index(tf) if tf in TF_ORDER else -1
             lower_conflict = False
             if tf_rank > 0:
@@ -929,16 +974,23 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             #   + win ≥ 58% — ChoCH IS the pro signal for early reversal entry.
             #   We allow it even when HTF hasn't caught up yet (ChoCH overrides
             #   the HTF block above, and lowers the win threshold here).
-            is_quality    = a.win_probability >= 62 and a.setup_quality in ("A+", "A")
-            choch_quality = choch_aligned and a.win_probability >= 58 and \
-                            a.setup_quality in ("A+", "A", "B")
+            is_quality    = (
+                a.win_probability >= mode_cfg.alert_min_win_probability
+                and a.setup_quality in mode_cfg.alert_min_grades
+            )
+            choch_quality = (
+                choch_aligned
+                and a.win_probability >= max(50, mode_cfg.alert_min_win_probability - 4)
+                and a.setup_quality in (*mode_cfg.alert_min_grades, "B")
+            )
 
             if not is_quality and not choch_quality:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} "
                     f"adx={a.adx:.1f} choch={choch or 'none'}). "
-                    f"Need win≥62%+A/A+, or ChoCH+win≥58%+B."
+                    f"Need win≥{mode_cfg.alert_min_win_probability}%+"
+                    f"{'/'.join(mode_cfg.alert_min_grades)}, or ChoCH bypass."
                 )
                 continue
 
@@ -1007,7 +1059,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         if not sig_list:
             return
 
-        if len(sig_list) >= CONFLUENCE_MIN_TFS:
+        if len(sig_list) >= mode_cfg.confluence_min_tfs:
             delivered = await _fire_confluence(bot, subs, sig_list, direction)
         else:
             delivered_signals = []
@@ -1018,7 +1070,9 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Do not lock or create a tracked trade when Telegram did not accept
         # the alert. The next scan must retry a transient delivery failure.
-        if not sig_list or (len(sig_list) >= CONFLUENCE_MIN_TFS and not delivered):
+        if not sig_list or (
+            len(sig_list) >= mode_cfg.confluence_min_tfs and not delivered
+        ):
             logger.warning(
                 f"[{direction}] Alert not delivered; leaving signal state unlocked "
                 "for retry."

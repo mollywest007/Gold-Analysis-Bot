@@ -10,12 +10,19 @@ from src.utils.formatting import (
     outlook_card, recommend_card, multi_timeframe_card,
 )
 from src.utils.keyboards import settings_keyboard, main_menu_keyboard, refresh_keyboard
+from src.mode_manager import get_mode_config, set_mode
 
 logger = logging.getLogger(__name__)
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
-    return context.user_data.get("timeframe", "H1")
+    cfg = get_mode_config()
+    selected = context.user_data.get("timeframe")
+    return selected if selected in cfg.scan_timeframes else cfg.preferred_timeframe
+
+
+def _scan_timeframes() -> list[str]:
+    return list(get_mode_config().scan_timeframes)
 
 
 def _closed_text() -> str:
@@ -48,13 +55,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("set_tf:"):
         await query.answer()
         tf = data.split(":")[1]
+        cfg = get_mode_config()
+        if tf not in cfg.scan_timeframes:
+            await query.answer(
+                f"{tf} is not available in {cfg.label} Mode.",
+                show_alert=True,
+            )
+            return
         context.user_data["timeframe"] = tf
         text = (
             "<b>Settings</b>\n\n"
-            f"Timeframe updated: <b>{tf}</b>\n\n"
+            f"Timeframe updated: <b>{tf}</b>\n"
+            f"Mode: <b>{cfg.emoji} {cfg.label}</b>\n\n"
             "Select a timeframe to update your default analysis window."
         )
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=settings_keyboard(tf))
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=settings_keyboard(tf, cfg.name),
+        )
+        return
+
+    if data.startswith("set_mode:"):
+        await query.answer()
+        mode_name = data.split(":", 1)[1]
+        try:
+            cfg = set_mode(mode_name)
+        except ValueError:
+            await query.answer("Unknown analysis mode.", show_alert=True)
+            return
+        context.user_data["timeframe"] = cfg.preferred_timeframe
+        text = (
+            "<b>Settings</b>\n\n"
+            f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
+            f"{cfg.description}\n\n"
+            f"Default timeframe: <b>{cfg.preferred_timeframe}</b>\n"
+            f"Scans: <b>{', '.join(cfg.scan_timeframes)}</b>\n\n"
+            f"{cfg.tip}"
+        )
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=settings_keyboard(cfg.preferred_timeframe, cfg.name),
+        )
         return
 
     # ── Back / navigation ─────────────────────────────────────────────────────
@@ -66,6 +107,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
         text = (
             f"Market: <b>{mkt_status}</b> — {ms['note']}\n\n"
+            f"Mode: <b>{get_mode_config().label}</b>\n"
             f"Timeframe: <b>{tf}</b>\n\n"
             "Use the menu below to continue."
         )
@@ -78,7 +120,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # ── Ignore header-only buttons ─────────────────────────────────────────────
-    if data in ("settings:tf_header",):
+    if data in ("settings:tf_header", "settings:mode_header"):
         await query.answer()
         return
 
@@ -148,7 +190,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
                     # Sequential — see messages.py for explanation
                     _analyses = []
-                    for _tf in ("M5", "M15", "M30", "H1", "H4", "D1"):
+                    for _tf in _scan_timeframes():
                         try:
                             _analyses.append(await analyze(_tf))
                         except Exception as _e:
@@ -189,8 +231,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     from src.utils.formatting import recommend_multi_card
                     await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
-                        analyze("M5"), analyze("M15"), analyze("M30"),
-                        analyze("H1"), analyze("H4"), analyze("D1"),
+                        *[analyze(tf_name) for tf_name in _scan_timeframes()],
                         return_exceptions=True,
                     )
                     analyses = [r for r in results if not isinstance(r, Exception)]
@@ -232,8 +273,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             from src.utils.formatting import recommend_multi_card as _rmc
             import re as _re
             results = await asyncio.gather(
-                analyze("M5"), analyze("M15"), analyze("M30"),
-                analyze("H1"), analyze("H4"), analyze("D1"),
+                *[analyze(tf_name) for tf_name in _scan_timeframes()],
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
@@ -254,8 +294,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("Analyzing all timeframes…", reply_markup=kb)
         try:
             results = await asyncio.gather(
-                analyze("M5"), analyze("M15"), analyze("M30"),
-                analyze("H1"), analyze("H4"), analyze("D1"),
+                *[analyze(tf_name) for tf_name in _scan_timeframes()],
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
