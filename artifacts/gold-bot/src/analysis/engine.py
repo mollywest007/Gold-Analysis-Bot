@@ -2044,6 +2044,18 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     else:
         tp3 = round(entry + sl_dist * tp3_mult, 2)
 
+    # S/R snapping can put a structural target on the wrong side of the mode's
+    # target ladder.  Normalize the final plan so the tracker can safely apply
+    # TP1 → TP2 → TP3 in order on every direction.
+    if direction == "BUY":
+        tp1 = round(max(tp1, entry + sl_dist * tp1_mult), 2)
+        tp2 = round(max(tp2, entry + sl_dist * tp2_mult, tp1 + 0.01), 2)
+        tp3 = round(max(tp3, entry + sl_dist * tp3_mult, tp2 + 0.01), 2)
+    elif direction == "SELL":
+        tp1 = round(min(tp1, entry - sl_dist * tp1_mult), 2)
+        tp2 = round(min(tp2, entry - sl_dist * tp2_mult, tp1 - 0.01), 2)
+        tp3 = round(min(tp3, entry - sl_dist * tp3_mult, tp2 - 0.01), 2)
+
     # Confluence list
     confluence_list: List[str] = []
     if direction in ("BUY", "SELL"):

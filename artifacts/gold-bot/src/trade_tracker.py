@@ -16,14 +16,34 @@ TRADES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "trades.json
 # Per-timeframe expiry — higher TFs need more time to reach their targets.
 # A flat 48h was too short for H4 trades, which routinely take 3–7 days.
 _TF_MAX_AGE = {
+    "M1":  12 * 3600,
+    "M3":  18 * 3600,
     "M5":  24 * 3600,
     "M15": 48 * 3600,
     "M30": 72 * 3600,
     "H1":  5 * 24 * 3600,   # 5 days
     "H4":  10 * 24 * 3600,  # 10 days
     "D1":  20 * 24 * 3600,  # 20 days
+    "W1":  120 * 24 * 3600, # 120 days
+    "MN1": 540 * 24 * 3600, # 18 months
 }
-_DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600  # 5 days fallback
+_DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
+
+
+def is_active_trade(trade: Dict[str, Any]) -> bool:
+    """Whether a trade still owns its timeframe.
+
+    TP2 is terminal when no TP3 was configured.  With TP3 configured, TP2 is
+    an intermediate milestone and the trade remains active until TP3 or SL.
+    """
+    status = trade.get("status")
+    if status in ("open", "tp1_hit"):
+        return True
+    return (
+        status == "tp2_hit"
+        and bool(trade.get("tp3"))
+        and not trade.get("tp3_hit")
+    )
 
 
 def _load() -> List[Dict[str, Any]]:
@@ -51,60 +71,50 @@ def open_trade(
     rr_ratio: float,
     tp3: float = None,
     atr: float = 0.0,
-) -> None:
+) -> bool:
     trades = _load()
 
-    # ── Duplicate-entry guard ──────────────────────────────────────────────────
-    # If there is already an open trade on this TF in the SAME direction,
-    # only replace it when the new entry is meaningfully far from the original.
-    # • When ATR is available (> 0): gap must exceed 0.5 × ATR.
-    # • When ATR is 0 (fallback): block any re-entry opened within 2 candle
-    #   periods — this prevents the 15-second scanner from spamming trades when
-    #   the analysis object doesn't expose an ATR attribute.
-    # A direction FLIP always replaces regardless (handled implicitly: if the
-    # existing trade is the opposite direction the filter below doesn't match).
-    _TF_PERIOD_SECS = {
-        "M5": 300, "M15": 900, "M30": 1800,
-        "H1": 3600, "H4": 14400, "D1": 86400,
-    }
-    _min_gap_secs = 2 * _TF_PERIOD_SECS.get(timeframe, 3600)
+    # Reject malformed plans before they can be broadcast or persisted.  A
+    # reversed target ladder makes the TP/SL checker report the wrong milestone
+    # (for example TP2 before TP1) and is never a valid trade plan.
+    try:
+        entry = float(entry)
+        sl = float(sl)
+        tp1 = float(tp1)
+        tp2 = float(tp2)
+        tp3 = float(tp3) if tp3 is not None else None
+    except (TypeError, ValueError):
+        logger.error(f"[{timeframe}] Trade open rejected — non-numeric plan.")
+        return False
+
+    if direction == "BUY":
+        valid = sl < entry < tp1 < tp2 and (tp3 is None or tp2 < tp3)
+    elif direction == "SELL":
+        valid = sl > entry > tp1 > tp2 and (tp3 is None or tp2 > tp3)
+    else:
+        valid = False
+    if not valid:
+        logger.error(
+            f"[{timeframe}] Trade open rejected — invalid {direction} levels: "
+            f"entry={entry:.2f} sl={sl:.2f} tp1={tp1:.2f} tp2={tp2:.2f} tp3={tp3}"
+        )
+        return False
+
+    # One timeframe represents one trade plan.  Never replace or stack an
+    # active trade just because a later analysis moved the entry by an ATR:
+    # that creates duplicate BUY/SELL entries and changes the TP/SL plan the
+    # user was already following.  The alert layer owns direction changes and
+    # waits for this trade to close before opening another.
     for t in trades:
         if (
-            t.get("status") in ("open", "tp1_hit", "tp2_hit")
+            is_active_trade(t)
             and t.get("timeframe") == timeframe
-            and t.get("direction") == direction
         ):
-            existing_entry = t.get("entry", 0.0)
-            gap = abs(entry - existing_entry)
-            if atr > 0:
-                # ATR available — use price-distance threshold
-                if gap < 0.5 * atr:
-                    logger.info(
-                        f"[{timeframe}] Trade replacement skipped — new entry {entry:.2f} is "
-                        f"only {gap:.2f} pts from existing {existing_entry:.2f} "
-                        f"(<0.5×ATR={0.5 * atr:.2f}). Keeping original trade."
-                    )
-                    return
-            else:
-                # ATR unavailable — fall back to time-based guard
-                age = time.time() - t.get("opened_at", 0)
-                if age < _min_gap_secs:
-                    logger.info(
-                        f"[{timeframe}] Trade replacement skipped — existing {direction} "
-                        f"@ {existing_entry:.2f} opened only {age:.0f}s ago "
-                        f"(min gap {_min_gap_secs}s). ATR unavailable."
-                    )
-                    return
-
-    # Close any existing open trade on this timeframe by marking it "replaced"
-    # rather than deleting it, so it still appears in /history.
-    for t in trades:
-        if t.get("status") in ("open", "tp1_hit", "tp2_hit") and t.get("timeframe") == timeframe:
-            t["status"] = "replaced"
             logger.info(
-                f"Trade {t['id']} ({t.get('direction')} @ {t.get('entry', 0):.2f}) "
-                f"marked REPLACED — new {direction} setup on {timeframe}."
+                f"[{timeframe}] Trade open skipped — active {t.get('direction')} "
+                f"trade {t.get('id')} already owns this timeframe."
             )
+            return False
     trade = {
         "id":          str(int(time.time() * 1000)),  # millisecond precision avoids duplicate IDs
         "direction":   direction,
@@ -126,6 +136,7 @@ def open_trade(
     _save(trades)
     tp3_str = f"  TP3={tp3:.2f}" if tp3 else ""
     logger.info(f"Trade opened: {direction} @ {entry:.2f}  SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}{tp3_str}")
+    return True
 
 
 def check_trades(current_price: float, recent_high: float = None,
@@ -295,10 +306,8 @@ def open_trade_count() -> int:
     count = 0
     for t in trades:
         s = t.get("status")
-        if s in ("open", "tp1_hit"):
+        if is_active_trade(t):
             count += 1
-        elif s == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"):
-            count += 1   # TP2 hit but still watching for TP3
     return count
 
 

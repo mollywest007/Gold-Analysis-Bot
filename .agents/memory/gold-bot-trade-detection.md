@@ -34,3 +34,13 @@ When `tp1_hit=True` and price is back below entry (BUY) or above entry (SELL):
 ## Near-entry reminder threshold
 
 Tightened from 0.5% (≈$20 on gold) to 0.15% (≈$6 on gold) for the "entry still reachable" missed-alert nudge.
+
+## Active timeframe ownership
+
+**A timeframe can have only one active trade plan.** The scanner claims a signal before Telegram I/O, serializes scans, and the tracker rejects a second plan even when its entry is far from the first. A TP2 trade is active only when it has a TP3; TP2 without TP3 is terminal.
+
+**Why:** Replacing same-direction trades on entry distance and overlapping 15-second scans caused repeated 1H BUY alerts. Treating terminal TP2 records as active would block legitimate re-entry after a genuine close.
+
+**How to apply:** Use the shared `is_active_trade` definition for alert suppression, duplicate-entry checks, and open-trade counts. Require a strictly ordered target ladder before persisting a trade.
+
+**Partial targets do not release locks:** TP1 and TP2-with-TP3 are milestones; only SL, break-even SL, terminal TP2, TP3, or expiry releases the timeframe lock.

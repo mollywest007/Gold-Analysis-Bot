@@ -25,6 +25,11 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 _active_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
+# A scan can take longer than the 15-second scheduler interval while charts
+# are being generated.  Claims are made before Telegram I/O so an overlapping
+# scan cannot send the same entry before the persistent lock is written.
+_pending_signal: Dict[str, str] = {}
+_scan_lock = asyncio.Lock()
 # Post-SL cooldown — after a loss, block re-entry on that TF for 2 candle periods.
 # Prevents the bot spamming re-entries every 15s in volatile/choppy conditions.
 # Structure: { "M15": <timestamp when cooldown expires> }
@@ -258,6 +263,24 @@ def _should_send(tf: str, action: str) -> bool:
         logger.info(f"[{tf}] Post-SL cooldown active — {remaining}m remaining. Skipping {action}.")
         return False
 
+    if tf in _pending_signal:
+        logger.info(
+            f"[{tf}] Suppressed — {action} is already being delivered "
+            f"({_pending_signal[tf]} claim in progress)."
+        )
+        return False
+
+    # A persisted signal lock is not enough to prove that the old plan closed.
+    # Never let the lock-age safety valve create a second trade on a timeframe
+    # while the original plan is still active.
+    if any(
+        trade_tracker.is_active_trade(t)
+        and t.get("timeframe") == tf
+        for t in trade_tracker.get_all_trades()
+    ):
+        logger.info(f"[{tf}] Suppressed — an active trade still owns this timeframe.")
+        return False
+
     prev = _active_signal.get(tf)
     if prev == action:
         last_fired = _tf_last_fired.get(tf, 0.0)
@@ -283,6 +306,7 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
     in volatile/choppy conditions.
     """
     _active_signal.pop(tf, None)
+    _pending_signal.pop(tf, None)
     _tf_last_fired.pop(tf, None)
     # Clear momentum-shift warning state so the next shift warns fresh
     _momentum_shift_warned.pop(tf, None)
@@ -697,7 +721,7 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Startup summary failed: {e}")
 
 
-async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
     _sync_mode_state()
     mode_cfg = get_mode_config()
@@ -805,10 +829,12 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                             hi = max(data.highs[i] for i in indices)
                             lo = min(data.lows[i]  for i in indices)
                     else:
-                        # No timestamp data — fall back to last completed candle
-                        # only (conservative; avoids false hits from stale data).
-                        hi = data.highs[-1]
-                        lo = data.lows[-1]
+                        # Without timestamps we cannot prove that a historical
+                        # candle formed after entry.  Use spot only rather than
+                        # reusing a pre-entry wick that can falsely hit SL/TP
+                        # immediately after a trade opens.
+                        hi = current_price
+                        lo = current_price
 
                     tf_extremes[tf] = (hi, lo)
 
@@ -825,12 +851,18 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                         tfs_closed_this_cycle.add(closed_tf)
                     continue
                 await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
-                # Trade closed — unlock this timeframe so the next entry signal fires fresh.
-                # SL hits apply a 2-candle cooldown to stop immediate re-entry spam.
-                if closed_tf:
+                # TP1 is a partial milestone, not a closed trade. Keep the
+                # timeframe locked while TP2/TP3 is still being tracked.
+                # Only terminal events release the entry lock.
+                if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
                     clear_signal_lock(closed_tf, after_sl=is_loss)
                     tfs_closed_this_cycle.add(closed_tf)
+                elif closed_tf:
+                    logger.info(
+                        f"[{closed_tf}] {ev['event']} recorded — trade remains active; "
+                        "entry lock retained."
+                    )
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 
@@ -994,6 +1026,10 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 continue
 
+            # Claim synchronously before the first await in pass 2.  A chart
+            # upload can take longer than the scheduler interval; without this
+            # claim, the next overlapping scan can pass _should_send too.
+            _pending_signal[tf] = a.action
             new_signals.append((tf, a))
 
     if state_changed:
@@ -1016,12 +1052,22 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         # the existing trade resolves (TP or SL hit).
         all_open = {
             t["timeframe"]: t for t in trade_tracker.get_all_trades()
-            if t.get("status") in ("open", "tp1_hit") and t.get("timeframe")
+            if trade_tracker.is_active_trade(t) and t.get("timeframe")
         }
         clean_signals = []
         for tf, a in sig_list:
             existing = all_open.get(tf)
-            if existing and existing.get("direction") != direction:
+            if existing:
+                # An active trade owns its timeframe regardless of direction.
+                # Do not send a second entry while the first plan is still
+                # being tracked; a direction change gets a single warning.
+                _pending_signal.pop(tf, None)
+                if existing.get("direction") == direction:
+                    logger.info(
+                        f"[{tf}] Entry suppressed — active {direction} trade "
+                        f"{existing.get('id')} already owns this timeframe."
+                    )
+                    continue
                 opp_dir   = existing["direction"]
                 opp_entry = existing.get("entry", 0.0)
                 opp_sl    = existing.get("sl", 0.0)
@@ -1059,6 +1105,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         if not sig_list:
             return
 
+        claimed_tfs = {tf for tf, _ in sig_list}
         if len(sig_list) >= mode_cfg.confluence_min_tfs:
             delivered = await _fire_confluence(bot, subs, sig_list, direction)
         else:
@@ -1070,9 +1117,12 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Do not lock or create a tracked trade when Telegram did not accept
         # the alert. The next scan must retry a transient delivery failure.
+        delivered_tfs = {tf for tf, _ in sig_list}
         if not sig_list or (
             len(sig_list) >= mode_cfg.confluence_min_tfs and not delivered
         ):
+            for tf in claimed_tfs:
+                _pending_signal.pop(tf, None)
             logger.warning(
                 f"[{direction}] Alert not delivered; leaving signal state unlocked "
                 "for retry."
@@ -1080,19 +1130,34 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         now_ts = time.time()
+        delivered_tfs = {tf for tf, _ in sig_list}
+        # Individual delivery can partially succeed.  Release claims for
+        # failed timeframes so a later scan can retry them, while preserving
+        # the lock for the timeframes whose alert was accepted.
+        for tf in claimed_tfs - delivered_tfs:
+            _pending_signal.pop(tf, None)
         for tf, a in sig_list:
             _active_signal[tf] = direction
             _tf_last_fired[tf] = now_ts
             try:
                 invalidate_cache(tf)
-                trade_tracker.open_trade(
+                opened = trade_tracker.open_trade(
                     direction=a.action, entry=a.entry, sl=a.stop_loss,
                     tp1=a.tp1, tp2=a.tp2, timeframe=tf,
                     confidence=a.confidence, rr_ratio=a.rr_ratio,
                     tp3=getattr(a, "tp3", None),
                     atr=getattr(a, "atr", 0.0),
                 )
+                if not opened:
+                    logger.warning(
+                        f"[{tf}] Alert delivered but trade plan was not opened; "
+                        "keeping a local signal lock to prevent re-entry spam."
+                    )
+                    _active_signal[tf] = direction
+                    _tf_last_fired[tf] = now_ts
+                _pending_signal.pop(tf, None)
             except Exception as e:
+                _pending_signal.pop(tf, None)
                 logger.error(f"Trade open failed ({tf}): {e}")
         _save_signal_state()
 
@@ -1104,6 +1169,20 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         await _process(buys, "BUY")
     if sells:
         await _process(sells, "SELL")
+
+
+async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run one alert scan at a time.
+
+    The scheduler interval is intentionally short, but analysis and chart
+    delivery are network-bound.  Serializing scans prevents duplicate entry
+    claims while preserving the fast polling cadence when a scan is quick.
+    """
+    if _scan_lock.locked():
+        logger.info("Alert scan skipped — previous scan is still running.")
+        return
+    async with _scan_lock:
+        await _check_and_alert_once(context)
 
 
 def _determine_htf_bias(analyses: list, timeframes: list) -> str:
