@@ -10,7 +10,7 @@ from src.utils.formatting import (
     outlook_card, recommend_card, multi_timeframe_card,
 )
 from src.utils.keyboards import settings_keyboard, main_menu_keyboard, refresh_keyboard
-from src.mode_manager import get_mode_config, set_mode
+from src.mode_manager import get_mode_config, get_timeframe, set_mode, set_timeframe
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     cfg = get_mode_config()
     selected = context.user_data.get("timeframe")
-    return selected if selected in cfg.scan_timeframes else cfg.preferred_timeframe
+    return selected if selected in cfg.scan_timeframes else get_timeframe()
 
 
 def _scan_timeframes() -> list[str]:
@@ -62,6 +62,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 show_alert=True,
             )
             return
+        set_timeframe(tf)
         context.user_data["timeframe"] = tf
         text = (
             "<b>Settings</b>\n\n"
@@ -78,20 +79,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("set_mode:"):
         await query.answer()
         mode_name = data.split(":", 1)[1]
-        previous_tf = context.user_data.get("timeframe")
         try:
             cfg = set_mode(mode_name)
         except ValueError:
             await query.answer("Unknown analysis mode.", show_alert=True)
             return
-        # Keep the user's selected chart when it is available in the new mode.
-        # Previously every mode switch unconditionally reset Scalp to M5,
-        # Intraday to H1, etc., so selecting Scalp + M15 was immediately lost.
-        selected_tf = (
-            previous_tf
-            if previous_tf in cfg.scan_timeframes
-            else cfg.preferred_timeframe
-        )
+        # set_mode persists the previous timeframe when it is valid in the new
+        # mode, otherwise it selects that mode's preferred timeframe.
+        selected_tf = get_timeframe()
         context.user_data["timeframe"] = selected_tf
         text = (
             "<b>Settings</b>\n\n"

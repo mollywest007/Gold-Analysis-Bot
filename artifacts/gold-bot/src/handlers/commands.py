@@ -12,7 +12,7 @@ from src.utils.formatting import (
     pro_analysis_card, early_entry_card, no_early_entry_card,
 )
 from src.utils.keyboards import main_menu_keyboard, settings_keyboard, refresh_keyboard
-from src.mode_manager import get_mode, get_mode_config, list_modes, set_mode
+from src.mode_manager import get_mode, get_mode_config, get_timeframe, list_modes, set_mode
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     cfg = get_mode_config()
     selected = context.user_data.get("timeframe")
-    return selected if selected in cfg.scan_timeframes else cfg.preferred_timeframe
+    return selected if selected in cfg.scan_timeframes else get_timeframe()
 
 
 def _open_trade_banner(tf: str) -> str:

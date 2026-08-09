@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
-from src.mode_manager import get_mode, get_mode_config
+from src.mode_manager import get_mode, get_mode_config, get_timeframe
 from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
@@ -81,8 +81,13 @@ def _reminder_milestones(tf: str) -> list[tuple[str, int, int, bool]]:
     ]
 
 def get_scan_timeframes() -> list[str]:
-    """Return the active mode's scan set without keeping a stale module global."""
-    return list(get_mode_config().scan_timeframes)
+    """Return the user's selected timeframe for automatic alert scanning.
+
+    Reports can still request every timeframe in a mode, but background alerts
+    must honor the timeframe selected in Settings instead of silently scanning
+    M5 whenever Scalp mode is active.
+    """
+    return [get_timeframe()]
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -121,6 +126,7 @@ _open_notif_sent_at: float  = 0.0
 _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
 _signal_state_mode: str = ""
+_signal_state_timeframe: str = ""
 
 
 def _is_authorized(chat_id: int) -> bool:
@@ -199,13 +205,14 @@ def user_count() -> int:
 
 def _load_signal_state() -> None:
     """Load persisted signal state from disk — survives bot restarts."""
-    global _active_signal, _tf_last_fired, _signal_state_mode
+    global _active_signal, _tf_last_fired, _signal_state_mode, _signal_state_timeframe
     try:
         with open(SIGNAL_STATE_PATH) as f:
             s = json.load(f)
             _active_signal = s.get("active_signal", {})
             _tf_last_fired = s.get("last_fired", {})
             _signal_state_mode = s.get("mode", "")
+            _signal_state_timeframe = s.get("timeframe", "")
             logger.info(f"Signal state loaded: {_active_signal}")
     except FileNotFoundError:
         pass  # Normal on first run
@@ -219,31 +226,45 @@ def _save_signal_state() -> None:
     with open(SIGNAL_STATE_PATH, "w") as f:
         json.dump({
             "mode": get_mode(),
+            "timeframe": get_timeframe(),
             "active_signal": _active_signal,
             "last_fired": _tf_last_fired,
         }, f)
 
 
 def _sync_mode_state() -> None:
-    """Clear signal locks when the strategy persona changes.
+    """Clear signal locks when the strategy mode or timeframe changes.
 
     Open trades remain in the tracker and continue to receive TP/SL checks;
-    only entry locks and forming alerts are mode-specific.
+    only entry locks and forming alerts are mode/timeframe-specific.
     """
-    global _signal_state_mode
+    global _signal_state_mode, _signal_state_timeframe
     active_mode = get_mode()
-    if _signal_state_mode and _signal_state_mode != active_mode:
+    active_timeframe = get_timeframe()
+    settings_changed = (
+        _signal_state_mode
+        and (
+            _signal_state_mode != active_mode
+            or _signal_state_timeframe != active_timeframe
+        )
+    )
+    if settings_changed:
         logger.info(
-            f"Analysis mode changed {_signal_state_mode} → {active_mode}; "
-            "clearing stale entry locks."
+            f"Analysis settings changed "
+            f"{_signal_state_mode}/{_signal_state_timeframe} → "
+            f"{active_mode}/{active_timeframe}; clearing stale entry locks."
         )
         _active_signal.clear()
         _tf_last_fired.clear()
         _forming_alert_sent.clear()
         _momentum_shift_warned.clear()
         _sl_cooldown_until.clear()
-    if _signal_state_mode != active_mode:
+    if (
+        _signal_state_mode != active_mode
+        or _signal_state_timeframe != active_timeframe
+    ):
         _signal_state_mode = active_mode
+        _signal_state_timeframe = active_timeframe
         _save_signal_state()
 
 
