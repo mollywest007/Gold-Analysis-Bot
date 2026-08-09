@@ -9,6 +9,18 @@ def refresh_keyboard(command: str, tf: str = "all") -> InlineKeyboardMarkup:
     ])
 
 
+def alerts_keyboard(is_on: bool) -> InlineKeyboardMarkup:
+    """Show explicit alert state controls instead of an ambiguous toggle."""
+    state = "ON" if is_on else "OFF"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🔔 Alerts: {state}", callback_data="alerts:status")],
+        [
+            InlineKeyboardButton("✅ Turn alerts ON", callback_data="alerts:on"),
+            InlineKeyboardButton("🔕 Turn alerts OFF", callback_data="alerts:off"),
+        ],
+    ])
+
+
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         ["Recommend", "Analyze"],

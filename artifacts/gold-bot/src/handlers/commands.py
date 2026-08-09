@@ -11,7 +11,9 @@ from src.utils.formatting import (
     trend_card, levels_card, outlook_card, recommend_card, news_card,
     pro_analysis_card, early_entry_card, no_early_entry_card,
 )
-from src.utils.keyboards import main_menu_keyboard, settings_keyboard, refresh_keyboard
+from src.utils.keyboards import (
+    alerts_keyboard, main_menu_keyboard, settings_keyboard, refresh_keyboard,
+)
 from src.mode_manager import get_mode, get_mode_config, get_timeframe, list_modes, set_mode
 
 logger = logging.getLogger(__name__)
@@ -103,23 +105,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Toggle automatic signal notifications for the current authorized chat."""
+    """Show explicit ON/OFF controls for automatic signal notifications."""
     chat_id = update.effective_chat.id
-    if is_registered(chat_id):
-        unregister_user(chat_id)
-        text = (
-            "🔕 <b>Automatic alerts are OFF</b>\n\n"
-            "You will still receive replies to commands. Use /alerts again "
-            "to turn signal notifications back on."
-        )
-    else:
-        register_user(chat_id)
-        text = (
-            "🔔 <b>Automatic alerts are ON</b>\n\n"
-            "You will receive new BUY/SELL signals, trade updates, and "
-            "market notifications."
-        )
-    await update.message.reply_text(text, parse_mode="HTML")
+    is_on = is_registered(chat_id)
+    state_text = "ON" if is_on else "OFF"
+    await update.message.reply_text(
+        f"<b>Automatic alerts: {state_text}</b>\n\n"
+        "Choose exactly what you want. Your choice is saved immediately.\n\n"
+        "You will still receive replies to commands when alerts are OFF.",
+        parse_mode="HTML",
+        reply_markup=alerts_keyboard(is_on),
+    )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

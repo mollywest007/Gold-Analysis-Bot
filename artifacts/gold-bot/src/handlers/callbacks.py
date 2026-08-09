@@ -9,7 +9,10 @@ from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card, multi_timeframe_card,
 )
-from src.utils.keyboards import settings_keyboard, main_menu_keyboard, refresh_keyboard
+from src.utils.keyboards import (
+    alerts_keyboard, settings_keyboard, main_menu_keyboard, refresh_keyboard,
+)
+from src.alerts import is_registered, register_user, unregister_user
 from src.mode_manager import get_mode_config, get_timeframe, set_mode, set_timeframe
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,29 @@ def _is_open() -> bool:
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     data = query.data or ""
+
+    # ── Explicit automatic-alert controls ──────────────────────────────────────
+    if data in ("alerts:on", "alerts:off", "alerts:status"):
+        chat_id = update.effective_chat.id
+        if data == "alerts:on":
+            register_user(chat_id)
+            await query.answer("Automatic alerts turned ON.")
+        elif data == "alerts:off":
+            unregister_user(chat_id)
+            await query.answer("Automatic alerts turned OFF.")
+        else:
+            await query.answer()
+
+        is_on = is_registered(chat_id)
+        state_text = "ON" if is_on else "OFF"
+        await query.edit_message_text(
+            f"<b>Automatic alerts: {state_text}</b>\n\n"
+            "Choose exactly what you want. Your choice is saved immediately.\n\n"
+            "You will still receive replies to commands when alerts are OFF.",
+            parse_mode="HTML",
+            reply_markup=alerts_keyboard(is_on),
+        )
+        return
 
     # ── Timeframe settings (always available) ─────────────────────────────────
     if data.startswith("set_tf:"):

@@ -66,8 +66,15 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         # /alerts must be able to unsubscribe the chat; all other authorized
         # interactions keep the chat subscribed so alerts work by default.
+        callback_data = (
+            update.callback_query.data
+            if update.callback_query and update.callback_query.data
+            else ""
+        )
+        is_alert_control = callback_data in ("alerts:on", "alerts:off", "alerts:status")
         if (
             message_text not in ("/alerts", "alerts")
+            and not is_alert_control
             and not is_alerts_disabled(update.effective_chat.id)
         ):
             register_user(update.effective_chat.id)

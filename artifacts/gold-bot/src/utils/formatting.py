@@ -1861,7 +1861,7 @@ def help_text() -> str:
         ("/active",    "View open trades and live P&L"),
         ("/history",   "View recent trade results"),
         ("/news",      "Latest gold market headlines"),
-        ("/alerts",    "Toggle automatic signal notifications"),
+        ("/alerts",    "Open automatic alert ON/OFF controls"),
         ("/mode",      "Switch Scalp, Intraday, Swing, or Position"),
         ("/settings",  "Change mode and timeframe"),
         ("/help",      "This message"),
