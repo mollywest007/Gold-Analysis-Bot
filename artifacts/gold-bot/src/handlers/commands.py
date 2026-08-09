@@ -39,7 +39,7 @@ def _open_trade_banner(tf: str) -> str:
     from src import trade_tracker
     open_trades = [
         t for t in trade_tracker.get_all_trades()
-        if t.get("status") in ("open", "tp1_hit") and t.get("timeframe") == tf
+        if trade_tracker.is_active_trade(t) and t.get("timeframe") == tf
     ]
     if not open_trades:
         return ""

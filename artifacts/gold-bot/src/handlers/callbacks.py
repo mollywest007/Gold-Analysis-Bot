@@ -78,23 +78,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("set_mode:"):
         await query.answer()
         mode_name = data.split(":", 1)[1]
+        previous_tf = context.user_data.get("timeframe")
         try:
             cfg = set_mode(mode_name)
         except ValueError:
             await query.answer("Unknown analysis mode.", show_alert=True)
             return
-        context.user_data["timeframe"] = cfg.preferred_timeframe
+        # Keep the user's selected chart when it is available in the new mode.
+        # Previously every mode switch unconditionally reset Scalp to M5,
+        # Intraday to H1, etc., so selecting Scalp + M15 was immediately lost.
+        selected_tf = (
+            previous_tf
+            if previous_tf in cfg.scan_timeframes
+            else cfg.preferred_timeframe
+        )
+        context.user_data["timeframe"] = selected_tf
         text = (
             "<b>Settings</b>\n\n"
             f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
             f"{cfg.description}\n\n"
-            f"Default timeframe: <b>{cfg.preferred_timeframe}</b>\n"
+            f"Current timeframe: <b>{selected_tf}</b>\n"
             f"Scans: <b>{', '.join(cfg.scan_timeframes)}</b>\n\n"
             f"{cfg.tip}"
         )
         await query.edit_message_text(
             text, parse_mode="HTML",
-            reply_markup=settings_keyboard(cfg.preferred_timeframe, cfg.name),
+            reply_markup=settings_keyboard(selected_tf, cfg.name),
         )
         return
 

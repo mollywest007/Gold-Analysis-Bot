@@ -85,7 +85,9 @@ MODES: Dict[str, ModeConfig] = {
         emoji       = "⚡",
         description = "Quick entries on M5/M15. Tight stops, fast targets. Pure momentum.",
         scan_timeframes = ["M1", "M3", "M5", "M15"],
-        preferred_timeframe = "M5",
+        # M15 is the stable default for a new Scalp session. M1/M3/M5 remain
+        # available in Settings for traders who want faster execution.
+        preferred_timeframe = "M15",
         confirmation_map = {"M1": "M15", "M3": "M15", "M5": "M30", "M15": "H1"},
         context_timeframes = ["M15", "M30", "H1"],
         min_votes           = 2,   # fire faster — scalp windows close quickly
