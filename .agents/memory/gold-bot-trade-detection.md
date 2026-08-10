@@ -44,3 +44,19 @@ Tightened from 0.5% (≈$20 on gold) to 0.15% (≈$6 on gold) for the "entry sti
 **How to apply:** Use the shared `is_active_trade` definition for alert suppression, duplicate-entry checks, and open-trade counts. Require a strictly ordered target ladder before persisting a trade.
 
 **Partial targets do not release locks:** TP1 and TP2-with-TP3 are milestones; only SL, break-even SL, terminal TP2, TP3, or expiry releases the timeframe lock.
+
+## Opposite-signal warnings
+
+**A blocked opposite signal must warn before entry filters run.** When an active
+trade owns a timeframe, a new opposite direction is never opened, but the
+momentum-shift warning must be sent before higher-timeframe/counter-trend
+filters can reject the candidate. The warning is deduplicated per timeframe and
+direction.
+
+**Why:** A valid short-term reversal can be classified as a full signal and
+then silently disappear at the higher-timeframe gate, leaving the trader
+unaware that the active plan is under pressure.
+
+**How to apply:** Keep notification of an active-trade conflict separate from
+eligibility to open a new trade. Full signals should warn; only forming signals
+use the three-vote pre-alert.

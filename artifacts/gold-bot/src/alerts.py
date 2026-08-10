@@ -403,6 +403,38 @@ async def _send_setup_forming_alert(
     logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/5 votes)")
 
 
+async def _send_momentum_shift_warning(
+    bot, subs: Set[int], trade: dict, tf: str, new_direction: str
+) -> None:
+    """Notify once when a new direction conflicts with an active trade."""
+    global _momentum_shift_warned
+    if _momentum_shift_warned.get(tf) == new_direction:
+        return
+
+    old_direction = trade.get("direction", "UNKNOWN")
+    entry = float(trade.get("entry", 0.0))
+    sl = float(trade.get("sl", 0.0))
+    text = (
+        f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
+        f"{'─' * 36}\n"
+        f"  Open trade  : {old_direction} from {entry:,.2f}\n"
+        f"  Stop loss   : {sl:,.2f}\n"
+        f"  New bias    : {new_direction} forming\n"
+        f"{'─' * 36}\n"
+        f"  No new entry fired — the current\n"
+        f"  {old_direction} trade still owns {tf}.\n"
+        f"  Higher-timeframe filters may block\n"
+        f"  the reversal until this trade closes.\n"
+        f"{'─' * 36}</pre>"
+    )
+    await _broadcast_text(bot, subs, text)
+    _momentum_shift_warned[tf] = new_direction
+    logger.info(
+        f"[{tf}] Momentum shift warning sent — open {old_direction} "
+        f"vs new {new_direction} bias."
+    )
+
+
 async def _broadcast_text(
     bot, subs: Set[int], text: str, *, return_result: bool = False
 ):
@@ -959,6 +991,22 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         _forming_alert_sent.pop(tf, None)
 
         if _should_send(tf, a.action):
+            # Warn before the higher-timeframe gate below. A valid reversal
+            # must not disappear silently just because it cannot become a new
+            # entry while the current trade still owns this timeframe.
+            active_trade = next(
+                (
+                    t for t in trade_tracker.get_active_trades()
+                    if t.get("timeframe") == tf
+                    and t.get("direction") != a.action
+                ),
+                None,
+            )
+            if active_trade:
+                await _send_momentum_shift_warning(
+                    bot, subs, active_trade, tf, a.action
+                )
+
             # Block simulated data — never alert on fake prices
             if getattr(a, "is_simulated", False):
                 logger.warning(
@@ -1092,30 +1140,12 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                         f"{existing.get('id')} already owns this timeframe."
                     )
                     continue
-                opp_dir   = existing["direction"]
-                opp_entry = existing.get("entry", 0.0)
-                opp_sl    = existing.get("sl", 0.0)
                 # Only send the warning once per TF per shift direction —
                 # the scanner runs every 15s so without this it spams the
                 # same message continuously while the trade is open.
-                already_warned = _momentum_shift_warned.get(tf) == direction
-                if not already_warned:
-                    warn = (
-                        f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
-                        f"{'─' * 36}\n"
-                        f"  Open trade  : {opp_dir} from {opp_entry:,.2f}\n"
-                        f"  Stop loss   : {opp_sl:,.2f}\n"
-                        f"  New bias    : {direction} forming\n"
-                        f"{'─' * 36}\n"
-                        f"  No new entry fired — holding until your\n"
-                        f"  {opp_dir} trade closes (TP or SL).\n"
-                        f"{'─' * 36}</pre>"
-                    )
-                    await _broadcast_text(bot, subs, warn)
-                    _momentum_shift_warned[tf] = direction
-                    logger.info(
-                        f"[{tf}] Momentum shift warning sent — open {opp_dir} @ {opp_entry:.2f} "
-                        f"vs new {direction} bias. Entry suppressed until trade closes."
+                if _momentum_shift_warned.get(tf) != direction:
+                    await _send_momentum_shift_warning(
+                        bot, subs, existing, tf, direction
                     )
                 else:
                     logger.info(
