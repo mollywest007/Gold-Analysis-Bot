@@ -1881,7 +1881,7 @@
       "confidence": 96,
       "rr_ratio": 1.5,
       "opened_at": 1786093324.51858,
-      "status": "tp1_hit",
+      "status": "expired",
       "tp1_hit": true,
       "tp2_hit": false,
       "tp3_hit": false
