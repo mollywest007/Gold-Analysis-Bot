@@ -1405,6 +1405,7 @@ def weekly_closed_recap_text() -> str:
 
 def news_card(items: list) -> str:
     from datetime import datetime, timezone
+    from html import escape
     now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
     lines = ["<pre>",
         "GOLD NEWS  |  XAU/USD",
@@ -1417,7 +1418,7 @@ def news_card(items: list) -> str:
     else:
         for i, item in enumerate(items, 1):
             date_part = f"  [{item['date']}]" if item.get("date") else ""
-            title = item.get("title", "")
+            title = escape(item.get("title", ""))
             words = title.split()
             wrapped, line = [], ""
             for w in words:
@@ -1431,12 +1432,17 @@ def news_card(items: list) -> str:
             lines.append(first_line)
             for extra in wrapped[1:]:
                 lines.append(f"   {extra}")
-            src = item.get("source", "")
+            src = escape(item.get("source", ""))
             lines.append(f"   {src}{date_part}")
             if i < len(items):
                 lines.append("─" * 32)
-    lines += ["=" * 32, "Source: Yahoo Finance / RSS", "Refreshes every 30 minutes.", "</pre>"]
-    return "\n".join(lines)
+    lines += ["=" * 32, "Source: Google News RSS", "Refreshes every 15 minutes.", "</pre>"]
+    links = [
+        f'<a href="{escape(item["url"], quote=True)}">Open article {i}</a>'
+        for i, item in enumerate(items, 1)
+        if item.get("url")
+    ]
+    return "\n".join(lines + ([""] + links if links else []))
 
 
 def multi_timeframe_card(analyses: list) -> str:
