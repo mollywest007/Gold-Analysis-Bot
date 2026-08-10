@@ -317,12 +317,22 @@ def get_all_trades() -> List[Dict[str, Any]]:
     return sorted(trades, key=lambda t: t.get("opened_at", 0), reverse=True)
 
 
+def get_active_trades() -> List[Dict[str, Any]]:
+    """Return every trade that still owns its timeframe.
+
+    Keep this query next to ``is_active_trade`` so the scanner, /active panel,
+    reminders, and chart context cannot disagree about whether TP2 is terminal
+    or still being managed toward TP3.
+    """
+    return [t for t in get_all_trades() if is_active_trade(t)]
+
+
 def get_stats() -> Dict[str, Any]:
     """Return win/loss/open counts and win rate across all closed trades."""
     trades = _load()
     wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
-    open_  = sum(1 for t in trades if t.get("status") == "open")
+    open_  = sum(1 for t in trades if is_active_trade(t))
     expired = sum(1 for t in trades if t.get("status") in ("expired", "replaced"))
     total_closed = wins + losses
     win_rate = round((wins / total_closed) * 100) if total_closed > 0 else 0

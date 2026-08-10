@@ -40,8 +40,8 @@ def _open_trade_banner(tf: str) -> str:
     """
     from src import trade_tracker
     open_trades = [
-        t for t in trade_tracker.get_all_trades()
-        if trade_tracker.is_active_trade(t) and t.get("timeframe") == tf
+        t for t in trade_tracker.get_active_trades()
+        if t.get("timeframe") == tf
     ]
     if not open_trades:
         return ""
@@ -338,11 +338,7 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from src.analysis.market_data import get_gold_price
     from src.utils.formatting import active_trades_card
     msg   = await update.message.reply_text("Fetching active trades...")
-    open_trades = [
-        t for t in trade_tracker.get_all_trades()
-        if t.get("status") in ("open", "tp1_hit")
-        or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
-    ]
+    open_trades = trade_tracker.get_active_trades()
     try:
         price = await get_gold_price()
     except Exception:

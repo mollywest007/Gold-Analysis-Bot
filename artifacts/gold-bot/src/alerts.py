@@ -292,15 +292,29 @@ def _should_send(tf: str, action: str) -> bool:
         return False
 
     # A persisted signal lock is not enough to prove that the old plan closed.
-    # Never let the lock-age safety valve create a second trade on a timeframe
-    # while the original plan is still active.
-    if any(
-        trade_tracker.is_active_trade(t)
-        and t.get("timeframe") == tf
-        for t in trade_tracker.get_all_trades()
-    ):
-        logger.info(f"[{tf}] Suppressed — an active trade still owns this timeframe.")
-        return False
+    # A same-direction signal is suppressed while its plan is active.  An
+    # opposite-direction signal is intentionally allowed through to _process:
+    # that path sends the user a momentum-shift warning instead of silently
+    # dropping the change in bias.  It must not open a second trade.
+    active_trade = next(
+        (
+            t for t in trade_tracker.get_all_trades()
+            if trade_tracker.is_active_trade(t) and t.get("timeframe") == tf
+        ),
+        None,
+    )
+    if active_trade:
+        if active_trade.get("direction") == action:
+            logger.info(
+                f"[{tf}] Suppressed — active {action} trade "
+                f"{active_trade.get('id')} still owns this timeframe."
+            )
+            return False
+        logger.info(
+            f"[{tf}] Opposite signal {action} detected while "
+            f"{active_trade.get('direction')} trade is active — warning path."
+        )
+        return True
 
     prev = _active_signal.get(tf)
     if prev == action:
@@ -463,9 +477,10 @@ async def _send_result_image(
                    f"Profit: +{abs(entry - exit_price):,.2f} pts{watching}")
     elif event == "TP1_SL":
         result  = "LOSS"
-        caption = (f"🔴 SL HIT (after TP1)  |  XAU/USD  |  {timeframe}\n"
-                   f"{direction}  Entry: {entry:,.2f}  SL: {sl:,.2f}\n"
-                   f"TP1 {tp1:,.2f} was hit — SL then triggered at {exit_price:,.2f}")
+        caption = (f"🟠 BREAK-EVEN EXIT (after TP1)  |  XAU/USD  |  {timeframe}\n"
+                   f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
+                   f"TP1 {tp1:,.2f} was hit — protection moved to entry; "
+                   f"the original SL was {sl:,.2f}")
     else:
         result  = "WIN_TP1"
         tp3_val = trade.get("tp3")
@@ -728,8 +743,8 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         all_trades   = trade_tracker.get_all_trades()
-        open_trades  = [t for t in all_trades if t.get("status") == "open"]
-        recent       = [t for t in all_trades if t.get("status") != "open"][:5]
+        open_trades  = trade_tracker.get_active_trades()
+        recent       = [t for t in all_trades if not trade_tracker.is_active_trade(t)][:5]
         stats        = trade_tracker.get_stats()
         text         = restart_summary_card(open_trades, recent, stats)
         dead         = await _broadcast_text(bot, subs, text)
@@ -795,11 +810,8 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_price > 0:
             # Include tp2_hit trades that are still watching for TP3
             active_trades = [
-                t for t in trade_tracker.get_all_trades()
-                if (
-                    t.get("status") in ("open", "tp1_hit")
-                    or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
-                ) and t.get("timeframe")
+                t for t in trade_tracker.get_active_trades()
+                if t.get("timeframe")
             ]
             open_tfs = {t.get("timeframe") for t in active_trades}
 
@@ -947,15 +959,6 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         _forming_alert_sent.pop(tf, None)
 
         if _should_send(tf, a.action):
-            # Rotate lock immediately when direction flips — even if the new
-            # signal doesn't pass the quality gate. Without this, a stale BUY
-            # lock blocks the NEXT valid BUY after a failed SELL attempt.
-            old_dir = _active_signal.get(tf)
-            if old_dir and old_dir != a.action:
-                _active_signal.pop(tf, None)
-                state_changed = True
-                logger.info(f"[{tf}] Lock rotated {old_dir} → {a.action}")
-
             # Block simulated data — never alert on fake prices
             if getattr(a, "is_simulated", False):
                 logger.warning(
@@ -1072,8 +1075,8 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         # opposing trades simultaneously. The new signal is suppressed until
         # the existing trade resolves (TP or SL hit).
         all_open = {
-            t["timeframe"]: t for t in trade_tracker.get_all_trades()
-            if trade_tracker.is_active_trade(t) and t.get("timeframe")
+            t["timeframe"]: t for t in trade_tracker.get_active_trades()
+            if t.get("timeframe")
         }
         clean_signals = []
         for tf, a in sig_list:
@@ -1245,10 +1248,7 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _reminded_trade_ids
 
     all_trades = trade_tracker.get_all_trades()
-    open_trades = [
-        t for t in all_trades
-        if t.get("status") in ("open", "tp1_hit")
-    ]
+    open_trades = trade_tracker.get_active_trades()
     if not open_trades:
         return
 

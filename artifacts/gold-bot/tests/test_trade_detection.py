@@ -59,6 +59,20 @@ class TradeDetectionTests(unittest.TestCase):
         )
         self.assertEqual(len(trade_tracker.get_all_trades()), 1)
 
+    def test_active_trade_query_matches_timeframe_ownership(self):
+        self.assertTrue(self._open_buy(timeframe="M15", tp3=130.0))
+        self.assertTrue(self._open_buy(timeframe="M30", tp3=None))
+
+        trades = trade_tracker.get_all_trades()
+        trades[0]["status"] = "tp2_hit"
+        trades[0]["tp2_hit"] = True
+        with open(self.tmp.name, "w") as f:
+            json.dump({"trades": trades}, f)
+
+        active = trade_tracker.get_active_trades()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["timeframe"], "M15")
+
     def test_no_post_entry_candle_does_not_trigger_old_wick(self):
         self.assertTrue(self._open_buy())
         events = trade_tracker.check_trades(

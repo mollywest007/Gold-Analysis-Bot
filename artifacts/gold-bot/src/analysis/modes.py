@@ -113,7 +113,9 @@ MODES: Dict[str, ModeConfig] = {
             "M1":  1.1,
             "M3":  1.2,
             "M5":  1.3,   # very tight — scalpers cut losses fast
-            "M15": 1.6,
+            # M15 is the default scalp chart. Keep the stop responsive to the
+            # setup instead of inheriting an intraday-sized risk distance.
+            "M15": 1.25,
         },
         tp_mult = (1.5, 2.5, 3.5),   # quick, realistic scalping targets
         htf_gate_strict  = False,     # ignore macro trend; trade the micro move

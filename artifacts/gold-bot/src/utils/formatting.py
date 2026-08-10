@@ -1246,11 +1246,7 @@ def outlook_card(a: MarketAnalysis) -> str:
     # breach or a confirmed structural invalidation does.
     try:
         from src import trade_tracker
-        open_trades = [
-            t for t in trade_tracker.get_all_trades()
-            if t.get("status") in ("open", "tp1_hit")
-            or (t.get("status") == "tp2_hit" and t.get("tp3") and not t.get("tp3_hit"))
-        ]
+        open_trades = trade_tracker.get_active_trades()
     except Exception:
         open_trades = []
     matching_trade = next((t for t in open_trades if t.get("timeframe") == a.timeframe), None)
@@ -1925,8 +1921,12 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
         pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
 
         # Distances
-        sl_dist  = abs(current_price - sl)
-        tp1_dist = abs(current_price - tp1) if tp1 else None
+        # The trade plan is frozen at entry.  Distances in this panel must
+        # describe the actual risk/reward plan, not change every time price
+        # moves; using current_price here made SL/TP look misleadingly alike.
+        risk_dist = abs(entry - sl)
+        sl_dist  = risk_dist
+        tp1_dist = abs(entry - tp1) if tp1 else None
 
         # Age
         age_secs = time.time() - opened_at if opened_at else 0
@@ -1949,16 +1949,19 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             f"Now        : {current_price:,.2f}",
             f"P&L        : {pnl_sign}{pnl:,.1f} pts  ({pnl_label})",
             SEP,
-            f"SL         : {sl:,.2f}  ({sl_dist:,.1f} pts away)",
+            f"SL         : {sl:,.2f}  ({sl_dist:,.1f} pts risk)",
         ]
         if tp1:
-            lines.append(f"TP1        : {tp1:,.2f}  ({tp1_dist:,.1f} pts away)")
+            tp1_r = (tp1_dist / risk_dist) if risk_dist else 0
+            lines.append(f"TP1        : {tp1:,.2f}  ({tp1_dist:,.1f} pts, 1:{tp1_r:.1f}R)")
         if tp2:
-            tp2_dist = abs(current_price - tp2)
-            lines.append(f"TP2        : {tp2:,.2f}  ({tp2_dist:,.1f} pts away)")
+            tp2_dist = abs(entry - tp2)
+            tp2_r = (tp2_dist / risk_dist) if risk_dist else 0
+            lines.append(f"TP2        : {tp2:,.2f}  ({tp2_dist:,.1f} pts, 1:{tp2_r:.1f}R)")
         if tp3:
-            tp3_dist = abs(current_price - tp3)
-            lines.append(f"TP3        : {tp3:,.2f}  ({tp3_dist:,.1f} pts away)")
+            tp3_dist = abs(entry - tp3)
+            tp3_r = (tp3_dist / risk_dist) if risk_dist else 0
+            lines.append(f"TP3        : {tp3:,.2f}  ({tp3_dist:,.1f} pts, 1:{tp3_r:.1f}R)")
 
         if i < len(open_trades) - 1:
             lines.append(WIDE)
