@@ -1350,6 +1350,20 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 and abs(current_price - entry) / entry <= 0.0015
             )
 
+            # The first milestone is specifically a missed-entry nudge.  If
+            # price has already moved away, do not send a confusing "missed
+            # alert" telling the trader not to chase.  Mark the milestone as
+            # handled so the same stale entry is not reconsidered every ten
+            # minutes.  Later milestones are status updates and still send.
+            if require_near and not entry_reachable:
+                sent_milestones.add(label)
+                logger.info(
+                    f"[REMINDER:{label}] {direction} {tf} skipped — "
+                    f"price moved away from entry ({entry:,.2f} → "
+                    f"{current_price:,.2f})"
+                )
+                continue
+
             age_min = int(age_secs // 60)
             age_str = f"{age_min}m" if age_min < 60 else f"{age_min // 60}h {age_min % 60}m"
 
@@ -1391,15 +1405,8 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
             if label == "entry":
-                if entry_reachable:
-                    header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
-                    subtext = f"Fired {age_str} ago — entry still reachable\n"
-                else:
-                    header = f"⚠️ <b>MISSED ALERT — ENTRY MOVED</b>"
-                    subtext = (
-                        f"Fired {age_str} ago — price has moved away from entry; "
-                        "do not chase\n"
-                    )
+                header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
+                subtext = f"Fired {age_str} ago — entry still reachable\n"
                 pnl_note = ""   # no P&L at the first-candle reminder
             elif label == "update_2x":
                 header = f"📊 <b>TRADE UPDATE — {direction} STILL RUNNING</b>"
