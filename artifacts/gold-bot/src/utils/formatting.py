@@ -1944,6 +1944,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             status_note = ""
         lines += [
             f"{tf}  {direction}  |  Conf: {conf}%{status_note}",
+            f"Mode      : {t.get('mode', 'unknown').title()}",
             f"Opened     : {age_str}",
             f"Entry      : {entry:,.2f}",
             f"Now        : {current_price:,.2f}",

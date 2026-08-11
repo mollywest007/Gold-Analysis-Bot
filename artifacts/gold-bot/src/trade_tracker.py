@@ -71,6 +71,7 @@ def open_trade(
     rr_ratio: float,
     tp3: float = None,
     atr: float = 0.0,
+    mode: str = "",
 ) -> bool:
     trades = _load()
 
@@ -124,6 +125,7 @@ def open_trade(
         "tp2":         tp2,
         "tp3":         tp3,
         "timeframe":   timeframe,
+        "mode":        mode or "unknown",
         "confidence":  confidence,
         "rr_ratio":    rr_ratio,
         "opened_at":   time.time(),

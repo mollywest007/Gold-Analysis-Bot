@@ -74,10 +74,13 @@ def _reminder_milestones(tf: str) -> list[tuple[str, int, int, bool]]:
     second_max = int(period * 3.5)
     third_min = int(period * 6)
     third_max = int(period * 7)
+    # The reminder job runs every 10 minutes, so bounded windows can expire
+    # between runs (especially for M1/M3/M5).  max_age is retained in the
+    # tuple shape for callers, but reminders are now due-based after min_age.
     return [
-        ("entry", first_min, first_max, True),
-        ("update_2x", second_min, second_max, False),
-        ("update_6x", third_min, third_max, False),
+        ("entry", first_min, 0, True),
+        ("update_2x", second_min, 0, False),
+        ("update_6x", third_min, 0, False),
     ]
 
 def get_scan_timeframes() -> list[str]:
@@ -981,7 +984,23 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 elif a.sell_votes >= 3 and a.sell_votes > a.buy_votes and a.adx >= 15:
                     forming_dir = "SELL"
                 if forming_dir:
-                    await _send_setup_forming_alert(bot, subs, a, tf, forming_dir)
+                    active_trade = next(
+                        (
+                            t for t in trade_tracker.get_active_trades()
+                            if t.get("timeframe") == tf
+                            and t.get("direction") != forming_dir
+                        ),
+                        None,
+                    )
+                    if active_trade:
+                        # An opposing pre-signal is still actionable
+                        # information even though it cannot open a second
+                        # trade. Warn before the full signal is confirmed.
+                        await _send_momentum_shift_warning(
+                            bot, subs, active_trade, tf, forming_dir
+                        )
+                    elif not _active_signal.get(tf):
+                        await _send_setup_forming_alert(bot, subs, a, tf, forming_dir)
                 else:
                     # Direction collapsed — reset forming state so next build-up fires fresh
                     _forming_alert_sent.pop(tf, None)
@@ -1201,6 +1220,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     confidence=a.confidence, rr_ratio=a.rr_ratio,
                     tp3=getattr(a, "tp3", None),
                     atr=getattr(a, "atr", 0.0),
+                    mode=get_mode(),
                 )
                 if not opened:
                     logger.warning(
@@ -1309,6 +1329,7 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         if trade_id not in _reminded_trade_ids:
             _reminded_trade_ids[trade_id] = set()
         sent_milestones = _reminded_trade_ids[trade_id]
+        reminder_sent_this_run = False
 
         sl_dist = abs(entry - sl)
         rr1 = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 and tp1 else 0
@@ -1319,15 +1340,15 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         for label, min_age, max_age, require_near in _reminder_milestones(tf):
             if label in sent_milestones:
                 continue
-            if not (min_age <= age_secs <= max_age):
+            if age_secs < min_age:
                 continue
+            if reminder_sent_this_run:
+                break
 
-            # 10-min nudge: only send when entry is still reachable.
-            # 0.15% of entry ≈ $6 on $4000 gold — if price has moved further
-            # than that from entry, the setup is invalidated; skip the nudge.
-            if require_near and (entry <= 0 or abs(current_price - entry) / entry > 0.0015):
-                sent_milestones.add(label)   # price moved away; mark done, don't retry
-                continue
+            entry_reachable = (
+                entry > 0
+                and abs(current_price - entry) / entry <= 0.0015
+            )
 
             age_min = int(age_secs // 60)
             age_str = f"{age_min}m" if age_min < 60 else f"{age_min // 60}h {age_min % 60}m"
@@ -1370,8 +1391,15 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
             if label == "entry":
-                header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
-                subtext = f"Fired {age_str} ago — entry still reachable\n"
+                if entry_reachable:
+                    header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
+                    subtext = f"Fired {age_str} ago — entry still reachable\n"
+                else:
+                    header = f"⚠️ <b>MISSED ALERT — ENTRY MOVED</b>"
+                    subtext = (
+                        f"Fired {age_str} ago — price has moved away from entry; "
+                        "do not chase\n"
+                    )
                 pnl_note = ""   # no P&L at the first-candle reminder
             elif label == "update_2x":
                 header = f"📊 <b>TRADE UPDATE — {direction} STILL RUNNING</b>"
@@ -1403,6 +1431,7 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 _save(subs)
 
             sent_milestones.add(label)
+            reminder_sent_this_run = True
             logger.info(
                 f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
                 f"age={age_str}, price={current_price:.2f}, sent to {len(subs)} sub(s)"

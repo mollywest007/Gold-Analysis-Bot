@@ -60,3 +60,18 @@ unaware that the active plan is under pressure.
 **How to apply:** Keep notification of an active-trade conflict separate from
 eligibility to open a new trade. Full signals should warn; only forming signals
 use the three-vote pre-alert.
+
+## Mode-specific plans and reminders
+
+**Risk settings belong to the mode that created the trade.** New Scalp plans
+use their scalp ATR stop and 1.5R/2.5R/3.5R target ladder; Intraday, Swing,
+and Position use their own wider stop and target policies. Existing trades keep
+their frozen levels when the user switches modes.
+
+**Why:** Recalculating an active trade after a mode switch would move the
+promised SL/TP and invalidate the plan the trader entered.
+
+**How to apply:** Persist the originating mode on new trades and show it in
+the active panel. Missed-entry reminders must be due-based after their minimum
+age because the reminder job runs every 10 minutes and bounded windows miss
+short timeframes.
