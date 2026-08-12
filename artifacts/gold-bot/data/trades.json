@@ -1985,7 +1985,7 @@
       "confidence": 77,
       "rr_ratio": 1.5,
       "opened_at": 1786428177.114439,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
