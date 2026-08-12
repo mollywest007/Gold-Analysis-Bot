@@ -1989,6 +1989,24 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "1786542983416",
+      "direction": "BUY",
+      "entry": 4431.9,
+      "sl": 4416.96,
+      "tp1": 4454.31,
+      "tp2": 4469.25,
+      "tp3": 4484.19,
+      "timeframe": "M15",
+      "mode": "scalp",
+      "confidence": 83,
+      "rr_ratio": 1.5,
+      "opened_at": 1786542983.4168859,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
