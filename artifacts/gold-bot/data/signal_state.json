@@ -1,1 +1,1 @@
-{"mode": "scalp", "timeframe": "M15", "active_signal": {"M15": "SELL"}, "last_fired": {"M15": 1786554357.7960436}}
+{"mode": "intraday", "timeframe": "H1", "active_signal": {}, "last_fired": {}}

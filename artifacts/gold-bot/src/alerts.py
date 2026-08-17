@@ -385,7 +385,6 @@ async def _send_setup_forming_alert(
     if _forming_alert_sent.get(tf) == forming_dir:
         return  # already warned this direction on this TF
 
-    _forming_alert_sent[tf] = forming_dir
     arrow = "📈" if forming_dir == "BUY" else "📉"
     kz_tag = f"  🔔 {a.kill_zone}" if getattr(a, "is_kill_zone", False) else ""
     votes  = a.buy_votes if forming_dir == "BUY" else a.sell_votes
@@ -394,7 +393,7 @@ async def _send_setup_forming_alert(
         f"{'─' * 34}\n"
         f"{arrow}  Direction : {forming_dir}\n"
         f"   Price    : {a.price:,.2f}\n"
-        f"   Votes    : {votes}/5 indicators agree\n"
+         f"   Votes    : {votes}/8 core indicators agree\n"
         f"   ADX      : {a.adx:.1f}   Conf: {a.confidence}%\n"
         f"   HTF      : {a.htf_bias}{kz_tag}\n"
         f"{'─' * 34}\n"
@@ -402,8 +401,20 @@ async def _send_setup_forming_alert(
         f"  Early limit @ OTE zone if available.\n"
         f"</pre>"
     )
-    await _broadcast_text(bot, subs, text)
-    logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/5 votes)")
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
+    if dead:
+        subs -= dead
+        _save(subs)
+    if delivered:
+        _forming_alert_sent[tf] = forming_dir
+        logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
+    else:
+        logger.warning(
+            f"[{tf}] Setup-forming pre-alert not delivered — "
+            "leaving notification state available for retry."
+        )
 
 
 async def _send_momentum_shift_warning(
@@ -430,12 +441,23 @@ async def _send_momentum_shift_warning(
         f"  the reversal until this trade closes.\n"
         f"{'─' * 36}</pre>"
     )
-    await _broadcast_text(bot, subs, text)
-    _momentum_shift_warned[tf] = new_direction
-    logger.info(
-        f"[{tf}] Momentum shift warning sent — open {old_direction} "
-        f"vs new {new_direction} bias."
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
     )
+    if dead:
+        subs -= dead
+        _save(subs)
+    if delivered:
+        _momentum_shift_warned[tf] = new_direction
+        logger.info(
+            f"[{tf}] Momentum shift warning sent — open {old_direction} "
+            f"vs new {new_direction} bias."
+        )
+    else:
+        logger.warning(
+            f"[{tf}] Momentum shift warning not delivered — "
+            "leaving notification state available for retry."
+        )
 
 
 async def _broadcast_text(
@@ -973,6 +995,15 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # a confirmed flip to the opposite direction.
             logger.info(f"[{tf}] No signal ({a.action}) — signal lock preserved.")
 
+            # Never send a setup-forming notification from fallback prices.
+            # Simulated data is useful for keeping the engine alive, but it is
+            # not safe for an actionable market notification.
+            if getattr(a, "is_simulated", False):
+                logger.warning(
+                    f"[{tf}] Setup notification blocked — running on simulated data."
+                )
+                continue
+
             # Pre-signal: 3 indicators agree but full signal not confirmed yet.
             # Warn the trader to watch the chart and prepare — early enough to
             # place a limit order in the OTE zone before the move starts.
@@ -1009,6 +1040,14 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         # Full signal fired — reset the forming-alert state for this TF
         _forming_alert_sent.pop(tf, None)
 
+        # Block simulated data before any entry or momentum-shift notification.
+        if getattr(a, "is_simulated", False):
+            logger.warning(
+                f"[{tf}] Alert BLOCKED — running on simulated data (YF fetch failed). "
+                f"Will retry on next scan cycle."
+            )
+            continue
+
         if _should_send(tf, a.action):
             # Warn before the higher-timeframe gate below. A valid reversal
             # must not disappear silently just because it cannot become a new
@@ -1025,14 +1064,6 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await _send_momentum_shift_warning(
                     bot, subs, active_trade, tf, a.action
                 )
-
-            # Block simulated data — never alert on fake prices
-            if getattr(a, "is_simulated", False):
-                logger.warning(
-                    f"[{tf}] Alert BLOCKED — running on simulated data (YF fetch failed). "
-                    f"Will retry on next scan cycle."
-                )
-                continue
 
             # ── Cross-TF coherence block ──────────────────────────────────────
             # Prevent HTF signals from contradicting a confirmed lower-TF lock.
@@ -1432,17 +1463,29 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"Use /active to track live.  Use /signal for latest scan."
             )
 
-            dead = await _broadcast_text(context.bot, subs, text)
+            dead, delivered = await _broadcast_text(
+                context.bot, subs, text, return_result=True
+            )
             if dead:
                 subs -= dead
                 _save(subs)
 
-            sent_milestones.add(label)
-            reminder_sent_this_run = True
-            logger.info(
-                f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
-                f"age={age_str}, price={current_price:.2f}, sent to {len(subs)} sub(s)"
-            )
+            if delivered:
+                sent_milestones.add(label)
+                reminder_sent_this_run = True
+                logger.info(
+                    f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
+                    f"age={age_str}, price={current_price:.2f}, sent to {len(subs)} sub(s)"
+                )
+            else:
+                logger.warning(
+                    f"[REMINDER:{label}] {direction} {tf} was not delivered — "
+                    "leaving milestone available for retry."
+                )
+                # Do not attempt later milestones in the same run when the
+                # current send failed; that would turn one Telegram outage
+                # into a burst of duplicate reminder attempts.
+                break
 
 
 # Load persisted signal state on module import

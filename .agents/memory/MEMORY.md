@@ -2,3 +2,4 @@
 - [Gold Bot Operations](gold-bot-operations.md) — Telegram long polling allows only one active instance; keep HTTP client request logging below INFO
 - [Gold Bot Trade Detection Bugs](gold-bot-trade-detection.md) — false immediate SL (pre-entry candle), TP candle-extreme detection, break-even SL after TP1, reminder message suppression on retrace
 - [Gold Bot News Sources](gold-bot-news-sources.md) — only clearly relevant, recent gold headlines from filtered financial publishers should be labeled gold news
+- [Gold Bot Notification Delivery](gold-bot-notification-delivery.md) — only consume alert deduplication state after Telegram delivery succeeds; failed sends remain retryable
