@@ -75,3 +75,16 @@ promised SL/TP and invalidate the plan the trader entered.
 the active panel. Missed-entry reminders must be due-based after their minimum
 age because the reminder job runs every 10 minutes and bounded windows miss
 short timeframes.
+
+## Exit-data safety
+
+Simulated or fallback OHLCV must never be used to trigger TP/SL state changes.
+If verified post-entry candle data is unavailable, use the live spot price only
+and leave wick-based exit detection for a later scan.
+
+**Why:** Generated fallback candles can invent a wick through a real trade's
+stop, especially during market-data outages or weekend sessions.
+
+**How to apply:** Reject simulated candle extremes before passing timeframe
+high/low data to the trade tracker; a missing or failed candle fetch must not
+be treated as evidence of an exit.

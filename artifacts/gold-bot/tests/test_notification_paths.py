@@ -32,6 +32,22 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.data_patch.stop()
         os.unlink(self.users_file.name)
 
+    def test_simulated_ohlcv_is_never_used_for_exit_detection(self):
+        simulated = SimpleNamespace(
+            highs=[4405.0],
+            lows=[4300.0],
+            timestamps=[1786946400.0],
+            is_simulated=True,
+        )
+
+        self.assertIsNone(
+            alerts._post_entry_tf_extremes(
+                simulated,
+                current_price=4395.0,
+                opened_at=1786946400.0,
+            )
+        )
+
     def _analysis(self):
         return SimpleNamespace(
             kill_zone="",

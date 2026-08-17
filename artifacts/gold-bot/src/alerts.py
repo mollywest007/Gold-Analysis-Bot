@@ -362,6 +362,39 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
     _save_signal_state()
 
 
+def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
+    """Return verified candle extremes for exit checks.
+
+    Simulated OHLCV is suitable for keeping charts and analysis alive, but it
+    must never close a real tracked trade.  A generated wick can otherwise
+    fabricate an SL/TP touch while the spot feed shows the trade is still
+    live.
+    """
+    if data is None or not getattr(data, "highs", None) or not getattr(data, "lows", None):
+        return None
+    if getattr(data, "is_simulated", False):
+        return None
+
+    highs = data.highs
+    lows = data.lows
+    timestamps = getattr(data, "timestamps", [])
+    if timestamps and opened_at > 0:
+        indices = [
+            i for i, ts in enumerate(timestamps)
+            if ts >= opened_at and i < len(highs) and i < len(lows)
+        ]
+        if not indices:
+            # No verified post-entry candle exists yet.  Use spot only.
+            return (current_price, current_price)
+        return (
+            max(highs[i] for i in indices),
+            min(lows[i] for i in indices),
+        )
+
+    # Without timestamps we cannot prove that a candle formed after entry.
+    return (current_price, current_price)
+
+
 def get_signal_lock_info(tf: str) -> str:
     """Return a human-readable lock status for a timeframe, or '' if no lock."""
     direction = _active_signal.get(tf)
@@ -889,44 +922,20 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     return_exceptions=True,
                 )
                 for tf, data in zip(open_tfs, ohlcv_results):
-                    if isinstance(data, Exception) or data is None or not data.highs:
+                    if isinstance(data, Exception):
+                        logger.warning(f"[{tf}] Skipping candle extremes — OHLCV fetch failed.")
                         continue
+                    if data is None or not data.highs:
+                        continue
+                    if getattr(data, "is_simulated", False):
+                        logger.warning(
+                            f"[{tf}] Skipping simulated OHLCV for TP/SL detection."
+                        )
 
                     opened_at = tf_opened_at.get(tf, 0.0)
-                    ts_list   = getattr(data, "timestamps", [])
-
-                    if ts_list and opened_at > 0:
-                        # Prefer candles whose open time is on or after the trade
-                        # open.  Include one candle before open_at as a buffer for
-                        # the candle that was forming when the trade was entered.
-                        indices = [
-                            i for i, ts in enumerate(ts_list)
-                            if ts >= opened_at
-                        ]
-                        if not indices:
-                            # No candle has opened since this trade was placed.
-                            # Using the pre-entry candle's extremes for SL
-                            # detection causes false immediate SL hits: for a
-                            # SELL the SL sits just above the candle that formed
-                            # the signal high, so that same candle's high would
-                            # instantly trigger SL on the very next scan.
-                            # Fall back to current_price only — the next poll
-                            # after a new candle forms gives proper post-entry
-                            # extremes.
-                            hi = current_price
-                            lo = current_price
-                        else:
-                            hi = max(data.highs[i] for i in indices)
-                            lo = min(data.lows[i]  for i in indices)
-                    else:
-                        # Without timestamps we cannot prove that a historical
-                        # candle formed after entry.  Use spot only rather than
-                        # reusing a pre-entry wick that can falsely hit SL/TP
-                        # immediately after a trade opens.
-                        hi = current_price
-                        lo = current_price
-
-                    tf_extremes[tf] = (hi, lo)
+                    extremes = _post_entry_tf_extremes(data, current_price, opened_at)
+                    if extremes is not None:
+                        tf_extremes[tf] = extremes
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:
