@@ -19,6 +19,7 @@ from src.mode_manager import get_mode, get_mode_config, get_timeframe, list_mode
 logger = logging.getLogger(__name__)
 
 _COMMAND_MESSAGES_KEY = "_last_command_messages"
+_LAST_COMMAND_KEY = "_global"
 
 
 async def _prepare_command(
@@ -26,10 +27,10 @@ async def _prepare_command(
     context: ContextTypes.DEFAULT_TYPE,
     command: str,
 ) -> None:
-    """Delete the previous response(s) for this command in this chat."""
+    """Delete the previous command response(s) in this chat."""
     chat_id = update.effective_chat.id
     messages_by_command = context.chat_data.setdefault(_COMMAND_MESSAGES_KEY, {})
-    previous_ids = messages_by_command.get(command, [])
+    previous_ids = messages_by_command.get(_LAST_COMMAND_KEY, [])
 
     for message_id in previous_ids:
         try:
@@ -37,13 +38,13 @@ async def _prepare_command(
         except Exception as exc:
             # The message may have been manually deleted already.
             logger.debug(
-                "Could not delete previous /%s response %s: %s",
+                "Could not delete previous command response %s (triggered by /%s): %s",
                 command,
                 message_id,
                 exc,
             )
 
-    messages_by_command[command] = []
+    messages_by_command[_LAST_COMMAND_KEY] = []
 
 
 def _remember_command_message(
@@ -51,11 +52,11 @@ def _remember_command_message(
     command: str,
     message,
 ) -> None:
-    """Remember a bot message so the next invocation can remove it."""
+    """Remember a bot message so the next command can remove it."""
     if message is None or getattr(message, "message_id", None) is None:
         return
     messages_by_command = context.chat_data.setdefault(_COMMAND_MESSAGES_KEY, {})
-    messages_by_command.setdefault(command, []).append(message.message_id)
+    messages_by_command.setdefault(_LAST_COMMAND_KEY, []).append(message.message_id)
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
