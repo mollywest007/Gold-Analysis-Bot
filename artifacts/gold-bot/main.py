@@ -133,6 +133,7 @@ BOT_COMMANDS = [
     BotCommand("active",    "View open trades with live P&L"),
     BotCommand("signal",    "Current BUY / SELL / WAIT signal"),
     BotCommand("analyze",   "Detailed market analysis"),
+    BotCommand("analysis",  "Detailed market analysis"),
     BotCommand("trend",     "Trend direction and momentum"),
     BotCommand("levels",    "Key support and resistance levels"),
     BotCommand("outlook",   "Market outlook report"),
