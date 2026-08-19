@@ -439,7 +439,12 @@ async def _send_momentum_shift_warning(
 
 
 async def _broadcast_text(
-    bot, subs: Set[int], text: str, *, return_result: bool = False
+    bot,
+    subs: Set[int],
+    text: str,
+    *,
+    return_result: bool = False,
+    reply_markup=None,
 ):
     """Send text to subscribers.
 
@@ -451,7 +456,12 @@ async def _broadcast_text(
     delivered = 0
     for chat_id in list(subs):
         try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
             delivered += 1
         except Exception as e:
             err = str(e).lower()
@@ -790,6 +800,51 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"Startup summary sent to {len(subs)} subscriber(s).")
     except Exception as e:
         logger.error(f"Startup summary failed: {e}")
+
+
+async def send_startup_dashboard(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the live multi-timeframe dashboard automatically after startup."""
+    from src.market_hours import market_status
+    from src.utils.formatting import multi_timeframe_card
+    from src.utils.keyboards import main_menu_keyboard
+
+    ms = market_status()
+    if not ms["is_open"]:
+        logger.info("Startup dashboard skipped — market closed.")
+        return
+
+    subs = _load()
+    if not subs:
+        logger.info("Startup dashboard: no subscribers.")
+        return
+
+    try:
+        cfg = get_mode_config()
+        analyses = await asyncio.gather(
+            *[analyze(tf) for tf in cfg.scan_timeframes],
+            return_exceptions=True,
+        )
+        valid_analyses = [
+            result for result in analyses
+            if not isinstance(result, Exception)
+        ]
+        if not valid_analyses:
+            logger.warning("Startup dashboard skipped — no timeframe analysis succeeded.")
+            return
+
+        text = multi_timeframe_card(valid_analyses)
+        dead = await _broadcast_text(
+            context.application.bot,
+            subs,
+            text,
+            reply_markup=main_menu_keyboard(),
+        )
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(f"Startup dashboard sent to {len(subs)} subscriber(s).")
+    except Exception as e:
+        logger.error(f"Startup dashboard failed: {e}")
 
 
 async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) -> None:

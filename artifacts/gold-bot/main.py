@@ -20,6 +20,7 @@ from src.alerts import (
     check_and_alert,
     send_market_conditions_summary,
     send_startup_summary,
+    send_startup_dashboard,
     send_restart_missed_entry_alert,
     register_user,
     is_alerts_disabled,
@@ -190,6 +191,13 @@ def main() -> None:
     # One-time startup summary — sent 30s after boot so cache is warm
     app.job_queue.run_once(send_startup_summary, when=30, name="startup_summary")
 
+    # One-time live dashboard — sent automatically after the cache has warmed
+    app.job_queue.run_once(
+        send_startup_dashboard,
+        when=60,
+        name="startup_dashboard",
+    )
+
     # Recurring background cache refresh (keeps commands fast)
     app.job_queue.run_repeating(
         _refresh_cache,
@@ -236,6 +244,7 @@ def main() -> None:
         f"Jobs scheduled — cache warm: 15s | "
         f"cache refresh: {CACHE_REFRESH_SECONDS}s | "
         f"alert scan: {ALERT_INTERVAL_SECONDS}s | "
+        f"startup dashboard: 60s | "
         f"market conditions: 4h | key health: 6h"
     )
 
