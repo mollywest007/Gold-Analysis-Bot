@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _COMMAND_MESSAGES_KEY = "_last_command_messages"
 _LAST_COMMAND_KEY = "_global"
+_LAST_COMMAND_INPUT_KEY = "_last_command_input_id"
 
 
 async def _prepare_command(
@@ -31,6 +32,7 @@ async def _prepare_command(
     chat_id = update.effective_chat.id
     messages_by_command = context.chat_data.setdefault(_COMMAND_MESSAGES_KEY, {})
     previous_ids = messages_by_command.get(_LAST_COMMAND_KEY, [])
+    previous_input_id = context.chat_data.get(_LAST_COMMAND_INPUT_KEY)
 
     for message_id in previous_ids:
         try:
@@ -44,7 +46,40 @@ async def _prepare_command(
                 exc,
             )
 
+    if previous_input_id is not None:
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=previous_input_id,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Could not delete previous command message %s: %s",
+                previous_input_id,
+                exc,
+            )
+
     messages_by_command[_LAST_COMMAND_KEY] = []
+
+    # Remove the command that triggered this handler as well.  If Telegram
+    # rejects deletion (for example due to chat permissions), keep its ID so a
+    # later invocation can retry cleaning it up.
+    current_message = update.message
+    current_input_id = getattr(current_message, "message_id", None)
+    if current_input_id is not None:
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=current_input_id,
+            )
+            context.chat_data.pop(_LAST_COMMAND_INPUT_KEY, None)
+        except Exception as exc:
+            context.chat_data[_LAST_COMMAND_INPUT_KEY] = current_input_id
+            logger.debug(
+                "Could not delete current command message %s: %s",
+                current_input_id,
+                exc,
+            )
 
 
 def _remember_command_message(
