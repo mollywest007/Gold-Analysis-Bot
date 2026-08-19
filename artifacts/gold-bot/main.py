@@ -20,7 +20,7 @@ from src.alerts import (
     check_and_alert,
     send_market_conditions_summary,
     send_startup_summary,
-    send_trade_reminder,
+    send_restart_missed_entry_alert,
     register_user,
     is_alerts_disabled,
 )
@@ -215,12 +215,12 @@ def main() -> None:
         name="market_conditions",
     )
 
-    # Missed-alert reminder — check every 10 minutes for open trades still near entry
-    app.job_queue.run_repeating(
-        send_trade_reminder,
-        interval=10 * 60,
-        first=10 * 60,
-        name="trade_reminder",
+    # One-time missed-entry check after a restart.  It must not repeat while the
+    # bot stays online; recurring reminders caused the missed-entry alert spam.
+    app.job_queue.run_once(
+        send_restart_missed_entry_alert,
+        when=45,
+        name="restart_missed_entry",
     )
 
     # API key health check — runs every 6 hours, sends Telegram warning if a

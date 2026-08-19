@@ -792,6 +792,75 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Startup summary failed: {e}")
 
 
+async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send one entry decision after the bot comes back online.
+
+    This is intentionally a one-shot startup job.  It replaces the old
+    ten-minute reminder loop so an entry cannot generate repeated notifications
+    while the bot remains online.
+    """
+    open_trades = trade_tracker.get_active_trades()
+    if not open_trades:
+        return
+
+    subs = _load()
+    if not subs:
+        return
+
+    try:
+        current_price = await get_gold_price()
+    except Exception as e:
+        logger.warning(f"Restart missed-entry check — could not fetch price: {e}")
+        return
+
+    for trade in open_trades:
+        entry = float(trade.get("entry", 0) or 0)
+        if entry <= 0:
+            continue
+
+        direction = trade.get("direction", "?")
+        timeframe = trade.get("timeframe", "?")
+        sl = float(trade.get("sl", 0) or 0)
+        tp1 = float(trade.get("tp1", 0) or 0)
+        confidence = trade.get("confidence", 0)
+        near_entry = abs(current_price - entry) / entry <= 0.0015
+
+        if near_entry:
+            header = "⚠️ <b>MISSED ENTRY — STILL VALID</b>"
+            decision = (
+                "✅ <b>You can still enter</b> — price is still close to the planned entry."
+            )
+        else:
+            header = "⚠️ <b>MISSED ENTRY — DO NOT CHASE</b>"
+            decision = (
+                "⛔ <b>Leave this trade</b> — price has moved away from the planned entry."
+            )
+
+        text = (
+            f"{header}\n"
+            f"{'─' * 30}\n"
+            f"{'🟢' if direction == 'BUY' else '🔴'} "
+            f"<b>{direction} XAU/USD {timeframe}</b>  |  Conf {confidence}%\n"
+            f"Planned entry: <b>{entry:,.2f}</b>\n"
+            f"Current price : <b>{current_price:,.2f}</b>\n"
+            f"SL: <b>{sl:,.2f}</b>   TP1: <b>{tp1:,.2f}</b>\n\n"
+            f"{decision}\n"
+            f"{'─' * 30}\n"
+            "This is the only missed-entry check for this restart."
+        )
+
+        dead = await _broadcast_text(context.bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+
+        logger.info(
+            f"[RESTART:missed-entry] {direction} {timeframe} — "
+            f"{'still valid' if near_entry else 'leave trade'}; "
+            f"sent to {len(subs)} subscriber(s)"
+        )
+
+
 async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
     _sync_mode_state()
