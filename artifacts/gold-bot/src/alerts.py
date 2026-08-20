@@ -852,12 +852,11 @@ async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) ->
 
     This is intentionally a one-shot startup job.  It replaces the old
     ten-minute reminder loop so an entry cannot generate repeated notifications
-    while the bot remains online.
+    while the bot remains online.  Because no trade is persisted while the bot
+    is offline, also re-analyze the configured alert timeframe here; otherwise
+    a signal that appeared during downtime could never produce a missed-entry
+    notification.
     """
-    open_trades = trade_tracker.get_active_trades()
-    if not open_trades:
-        return
-
     subs = _load()
     if not subs:
         return
@@ -868,6 +867,65 @@ async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) ->
         logger.warning(f"Restart missed-entry check — could not fetch price: {e}")
         return
 
+    # Re-check the timeframe used by the background alert scanner.  A signal
+    # found after restart is treated as a missed entry, not as a fresh
+    # automatic trade alert, so it never opens a trade or changes signal locks.
+    try:
+        restart_signals = []
+        for timeframe in get_scan_timeframes():
+            analysis = await analyze(timeframe)
+            if analysis.action in ("BUY", "SELL"):
+                restart_signals.append((timeframe, analysis))
+    except Exception as e:
+        logger.warning(f"Restart missed-entry analysis failed: {e}")
+        restart_signals = []
+
+    for timeframe, analysis in restart_signals:
+        entry = float(getattr(analysis, "entry", 0) or 0)
+        if entry <= 0:
+            continue
+
+        direction = analysis.action
+        near_entry = abs(current_price - entry) / entry <= 0.0015
+        header = (
+            "⚠️ <b>MISSED ENTRY — STILL VALID</b>"
+            if near_entry
+            else "⚠️ <b>MISSED ENTRY — DO NOT CHASE</b>"
+        )
+        decision = (
+            "✅ <b>You can still enter</b> — price is still close to the planned entry."
+            if near_entry
+            else "⛔ <b>Leave this trade</b> — price has moved away from the planned entry."
+        )
+        text = (
+            f"{header}\n"
+            f"{'─' * 30}\n"
+            f"{'🟢' if direction == 'BUY' else '🔴'} "
+            f"<b>{direction} XAU/USD {timeframe}</b>  | "
+            f"Conf {getattr(analysis, 'confidence', 0)}%  | "
+            f"Win {getattr(analysis, 'win_probability', 0)}%\n"
+            f"Planned entry: <b>{entry:,.2f}</b>\n"
+            f"Current price : <b>{current_price:,.2f}</b>\n"
+            f"SL: <b>{getattr(analysis, 'stop_loss', 0):,.2f}</b>   "
+            f"TP1: <b>{getattr(analysis, 'tp1', 0):,.2f}</b>\n\n"
+            f"{decision}\n"
+            f"{'─' * 30}\n"
+            "The bot was offline, so this is a one-time restart check."
+        )
+        dead = await _broadcast_text(context.bot, subs, text)
+        if dead:
+            subs -= dead
+            _save(subs)
+        logger.info(
+            f"[RESTART:missed-entry] {direction} {timeframe} — "
+            f"{'still valid' if near_entry else 'leave trade'}; "
+            f"sent to {len(subs)} subscriber(s)"
+        )
+
+    # Also report plans that were already open before shutdown.  This preserves
+    # the existing behavior for trades whose entry alert was delivered before
+    # the outage.
+    open_trades = trade_tracker.get_active_trades()
     for trade in open_trades:
         entry = float(trade.get("entry", 0) or 0)
         if entry <= 0:
