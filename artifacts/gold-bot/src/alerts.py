@@ -880,6 +880,7 @@ async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) ->
         logger.warning(f"Restart missed-entry analysis failed: {e}")
         restart_signals = []
 
+    missed_entry_sent = False
     for timeframe, analysis in restart_signals:
         entry = float(getattr(analysis, "entry", 0) or 0)
         if entry <= 0:
@@ -921,11 +922,25 @@ async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) ->
             f"{'still valid' if near_entry else 'leave trade'}; "
             f"sent to {len(subs)} subscriber(s)"
         )
+        missed_entry_sent = True
+        # A restart produces one actionable missed-entry decision, not one
+        # message per timeframe.  The configured scanner normally has one
+        # timeframe, but this also protects against future multi-TF settings.
+        break
 
     # Also report plans that were already open before shutdown.  This preserves
     # the existing behavior for trades whose entry alert was delivered before
     # the outage.
     open_trades = trade_tracker.get_active_trades()
+    if missed_entry_sent:
+        # The current restart analysis already represents the same missed
+        # entry.  Do not send a second card for the persisted open trade.
+        logger.info(
+            "Restart missed-entry check: current signal sent; "
+            "skipping persisted-trade duplicate."
+        )
+        return
+
     for trade in open_trades:
         entry = float(trade.get("entry", 0) or 0)
         if entry <= 0:
