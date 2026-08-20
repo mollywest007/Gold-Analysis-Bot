@@ -534,6 +534,18 @@ async def _send_result_image(
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
                    f"Partial profit: +{abs(entry - exit_price):,.2f} pts{watching}")
 
+    if event in ("SL", "TP1_SL"):
+        cooldown_minutes = int(
+            _SL_COOLDOWN_CANDLES
+            * _TF_PERIOD_SECONDS.get(timeframe, _DEFAULT_TF_PERIOD_SECONDS)
+            / 60
+        )
+        caption += (
+            f"\n\n⏳ <b>{timeframe} re-entry cooldown started</b>\n"
+            f"Next {direction} entry checks are blocked for "
+            f"<b>{cooldown_minutes} minutes</b>."
+        )
+
     try:
         img_bytes = generate_result_image(
             direction=direction, entry=entry, sl=sl, tp1=tp1, tp2=tp2,
