@@ -18,81 +18,6 @@ from src.mode_manager import get_mode, get_mode_config, get_timeframe, list_mode
 
 logger = logging.getLogger(__name__)
 
-_COMMAND_MESSAGES_KEY = "_last_command_messages"
-_LAST_COMMAND_KEY = "_global"
-_LAST_COMMAND_INPUT_KEY = "_last_command_input_id"
-
-
-async def _prepare_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    command: str,
-) -> None:
-    """Delete the previous command response(s) in this chat."""
-    chat_id = update.effective_chat.id
-    messages_by_command = context.chat_data.setdefault(_COMMAND_MESSAGES_KEY, {})
-    previous_ids = messages_by_command.get(_LAST_COMMAND_KEY, [])
-    previous_input_id = context.chat_data.get(_LAST_COMMAND_INPUT_KEY)
-
-    for message_id in previous_ids:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except Exception as exc:
-            # The message may have been manually deleted already.
-            logger.debug(
-                "Could not delete previous command response %s (triggered by /%s): %s",
-                command,
-                message_id,
-                exc,
-            )
-
-    if previous_input_id is not None:
-        try:
-            await context.bot.delete_message(
-                chat_id=chat_id,
-                message_id=previous_input_id,
-            )
-        except Exception as exc:
-            logger.debug(
-                "Could not delete previous command message %s: %s",
-                previous_input_id,
-                exc,
-            )
-
-    messages_by_command[_LAST_COMMAND_KEY] = []
-
-    # Remove the command that triggered this handler as well.  If Telegram
-    # rejects deletion (for example due to chat permissions), keep its ID so a
-    # later invocation can retry cleaning it up.
-    current_message = update.message
-    current_input_id = getattr(current_message, "message_id", None)
-    if current_input_id is not None:
-        try:
-            await context.bot.delete_message(
-                chat_id=chat_id,
-                message_id=current_input_id,
-            )
-            context.chat_data.pop(_LAST_COMMAND_INPUT_KEY, None)
-        except Exception as exc:
-            context.chat_data[_LAST_COMMAND_INPUT_KEY] = current_input_id
-            logger.debug(
-                "Could not delete current command message %s: %s",
-                current_input_id,
-                exc,
-            )
-
-
-def _remember_command_message(
-    context: ContextTypes.DEFAULT_TYPE,
-    command: str,
-    message,
-) -> None:
-    """Remember a bot message so the next command can remove it."""
-    if message is None or getattr(message, "message_id", None) is None:
-        return
-    messages_by_command = context.chat_data.setdefault(_COMMAND_MESSAGES_KEY, {})
-    messages_by_command.setdefault(_LAST_COMMAND_KEY, []).append(message.message_id)
-
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
     cfg = get_mode_config()
@@ -169,52 +94,43 @@ def _age_note(tf: str) -> str:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "start")
     name    = update.effective_user.first_name or "Trader"
     chat_id = update.effective_chat.id
     register_user(chat_id)
-    msg = await update.message.reply_text(
+    await update.message.reply_text(
         welcome_text(name),
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
-    _remember_command_message(context, "start", msg)
 
 
 async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show explicit ON/OFF controls for automatic signal notifications."""
-    await _prepare_command(update, context, "alerts")
     chat_id = update.effective_chat.id
     is_on = is_registered(chat_id)
     state_text = "ON" if is_on else "OFF"
-    msg = await update.message.reply_text(
+    await update.message.reply_text(
         f"<b>Automatic alerts: {state_text}</b>\n\n"
         "Choose exactly what you want. Your choice is saved immediately.\n\n"
         "You will still receive replies to commands when alerts are OFF.",
         parse_mode="HTML",
         reply_markup=alerts_keyboard(is_on),
     )
-    _remember_command_message(context, "alerts", msg)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "help")
-    msg = await update.message.reply_text(help_text(), parse_mode="HTML")
-    _remember_command_message(context, "help", msg)
+    await update.message.reply_text(help_text(), parse_mode="HTML")
 
 
 async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "recommend")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "recommend", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     tf   = _get_tf(context)
     note = _age_note(tf)
     msg  = await update.message.reply_text(
         f"Running full market analysis on {tf}...{' (' + note + ')' if note else ''}"
     )
-    _remember_command_message(context, "recommend", msg)
     try:
         a = await get_analysis(tf)
 
@@ -235,15 +151,14 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         banner = _open_trade_banner(tf)
         if banner:
-            banner_msg = await update.message.reply_text(banner, parse_mode="HTML")
-            _remember_command_message(context, "recommend", banner_msg)
+            await update.message.reply_text(banner, parse_mode="HTML")
 
         # ── Part 2: Entry signal — only A/A+ setups get an entry card ────────────
         if a.action in ("BUY", "SELL"):
 
             # Grade gate — C setups should never be traded
             if a.setup_quality == "C":
-                grade_msg = await update.message.reply_text(
+                await update.message.reply_text(
                     f"⚠️ <b>Grade C — Do NOT enter this trade</b>\n\n"
                     f"The engine sees a {a.action} direction but the setup quality is too low "
                     f"(win probability {a.win_probability}%, ADX {a.adx:.1f}). "
@@ -251,11 +166,9 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     f"<b>Wait for a Grade A or A+ setup.</b> Use /signal to keep scanning.",
                     parse_mode="HTML",
                 )
-                _remember_command_message(context, "recommend", grade_msg)
                 return
 
-            entry_msg = await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
-            _remember_command_message(context, "recommend", entry_msg)
+            await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
 
             # Always attach the live chart for every BUY/SELL signal
             try:
@@ -277,11 +190,10 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         f"Limit Entry : {entry_display:,.2f}  |  SL: {a.stop_loss:,.2f}\n"
                         f"TP1: {a.tp1:,.2f} (1:{rr1})  TP3: {a.tp3:,.2f} (1:{rr3})"
                     )
-                    chart_result = await update.message.reply_photo(
+                    await update.message.reply_photo(
                         photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_entry.jpg"),
                         caption=caption,
                     )
-                    _remember_command_message(context, "recommend", chart_result)
                 else:
                     await chart_msg.delete()
             except Exception as chart_err:
@@ -289,10 +201,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         else:
             # Genuinely no direction — engine gated it (ranging, Asian session, HTF block, etc.)
-            no_entry_msg = await update.message.reply_text(
-                no_early_entry_card(a), parse_mode="HTML"
-            )
-            _remember_command_message(context, "recommend", no_entry_msg)
+            await update.message.reply_text(no_early_entry_card(a), parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"recommend error: {e}")
@@ -300,15 +209,12 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "analyze")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "analyze", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     from src.analysis import analyze as _analyze
     from src.utils.formatting import multi_timeframe_card
     msg = await update.message.reply_text("Analyzing all timeframes...")
-    _remember_command_message(context, "analyze", msg)
     try:
         # Sequential — see messages.py for explanation
         _analyses = []
@@ -327,15 +233,12 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa: F811
-    await _prepare_command(update, context, "signal")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "signal", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     tf   = _get_tf(context)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
-    _remember_command_message(context, "signal", msg)
     try:
         a = await get_analysis(tf)
         # Send signal card first (always fast)
@@ -354,8 +257,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         banner = _open_trade_banner(tf)
         if banner:
-            banner_msg = await update.message.reply_text(banner, parse_mode="HTML")
-            _remember_command_message(context, "signal", banner_msg)
+            await update.message.reply_text(banner, parse_mode="HTML")
 
         # When there is an actionable signal, attach a live chart automatically
         if a.action in ("BUY", "SELL"):
@@ -369,11 +271,10 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
                     await chart_msg.delete()
-                    chart_result = await update.message.reply_photo(
+                    await update.message.reply_photo(
                         photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_signal.jpg"),
                         caption=f"XAU/USD {tf} — {a.action} setup  |  Entry {a.entry:,.2f}  SL {a.stop_loss:,.2f}  TP1 {a.tp1:,.2f}",
                     )
-                    _remember_command_message(context, "signal", chart_result)
                 else:
                     await chart_msg.delete()
             except Exception as chart_err:
@@ -384,15 +285,12 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "trend")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "trend", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     tf   = _get_tf(context)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
-    _remember_command_message(context, "trend", msg)
     try:
         a = await get_analysis(tf)
         await msg.edit_text(trend_card(a), parse_mode="HTML",
@@ -403,15 +301,12 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "levels")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "levels", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     tf   = _get_tf(context)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
-    _remember_command_message(context, "levels", msg)
     try:
         a = await get_analysis(tf)
         await msg.edit_text(levels_card(a), parse_mode="HTML",
@@ -422,15 +317,12 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "outlook")
     if not _is_market_open():
-        msg = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        _remember_command_message(context, "outlook", msg)
+        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
     tf   = _get_tf(context)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
-    _remember_command_message(context, "outlook", msg)
     try:
         a = await get_analysis(tf)
         await msg.edit_text(outlook_card(a), parse_mode="HTML",
@@ -442,12 +334,10 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "active")
     from src import trade_tracker
     from src.analysis.market_data import get_gold_price
     from src.utils.formatting import active_trades_card
     msg   = await update.message.reply_text("Fetching active trades...")
-    _remember_command_message(context, "active", msg)
     open_trades = trade_tracker.get_active_trades()
     try:
         price = await get_gold_price()
@@ -459,7 +349,6 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "settings")
     tf   = _get_tf(context)
     mode = get_mode_config()
     text = (
@@ -470,16 +359,14 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Choose a mode to change the strategy, then choose a timeframe "
         "within that mode."
     )
-    msg = await update.message.reply_text(
+    await update.message.reply_text(
         text, parse_mode="HTML",
         reply_markup=settings_keyboard(tf, mode.name),
     )
-    _remember_command_message(context, "settings", msg)
 
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show and switch the active analysis persona."""
-    await _prepare_command(update, context, "mode")
     cfg = get_mode_config()
     lines = [
         f"<b>Analysis Mode</b>\nActive: {cfg.emoji} <b>{cfg.label}</b>",
@@ -490,18 +377,14 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for mode in list_modes():
         marker = " ✅" if mode.name == cfg.name else ""
         lines.append(f"{mode.emoji} <b>{mode.label}</b>{marker} — {mode.description}")
-    msg = await update.message.reply_text(
-        "\n".join(lines),
-        parse_mode="HTML",
-        reply_markup=settings_keyboard(_get_tf(context), cfg.name),
-    )
-    _remember_command_message(context, "mode", msg)
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML",
+                                    reply_markup=settings_keyboard(
+                                        _get_tf(context), cfg.name
+                                    ))
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "news")
     msg = await update.message.reply_text("Fetching gold headlines...")
-    _remember_command_message(context, "news", msg)
     try:
         from src.news import fetch_gold_news
         items = await fetch_gold_news()
@@ -513,22 +396,16 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _prepare_command(update, context, "history")
     from src import trade_tracker
     from src.utils.formatting import history_card
     trades = trade_tracker.get_all_trades()
     stats  = trade_tracker.get_stats()
-    msg = await update.message.reply_text(
-        history_card(trades, stats),
-        parse_mode="HTML",
-        reply_markup=refresh_keyboard("history", "none"),
-    )
-    _remember_command_message(context, "history", msg)
+    await update.message.reply_text(history_card(trades, stats), parse_mode="HTML",
+                                    reply_markup=refresh_keyboard("history", "none"))
 
 
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch live OHLCV data, render a chart, analyse it with Gemini Vision."""
-    await _prepare_command(update, context, "chart")
     import html as _html
     import asyncio as _asyncio
     from src.chart_generator import generate_chart_image
@@ -545,7 +422,6 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Generating XAU/USD {tf} chart...",
         parse_mode="HTML",
     )
-    _remember_command_message(context, "chart", msg)
 
     # ── Step 1: Generate chart ─────────────────────────────────────────────────
     try:
@@ -564,11 +440,10 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for attempt in range(2):
         try:
             market_note = "" if ms["is_open"] else "  (market closed — showing last session data)"
-            chart_photo = await update.message.reply_photo(
+            await update.message.reply_photo(
                 photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_chart.jpg"),
                 caption=f"XAU/USD {tf}{market_note}",
             )
-            _remember_command_message(context, "chart", chart_photo)
             sent_photo = True
             break
         except (NetworkError, TimedOut) as e:
@@ -611,12 +486,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Step 4: Send analysis card ────────────────────────────────────────────
     if gemini_ok:
         try:
-            result_msg = await update.message.reply_text(
-                _result_card(result),
-                parse_mode="HTML",
-                reply_markup=refresh_keyboard("chart", tf),
-            )
-            _remember_command_message(context, "chart", result_msg)
+            await update.message.reply_text(_result_card(result), parse_mode="HTML",
+                                            reply_markup=refresh_keyboard("chart", tf))
             await msg.delete()
         except Exception as e:
             logger.warning(f"cmd_chart — result card send failed: {e}")
@@ -626,16 +497,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             from src.analysis import analyze
             from src.utils.formatting import pro_analysis_card, early_entry_card
             a = await analyze(tf)
-            result_msg = await update.message.reply_text(
-                pro_analysis_card(a),
-                parse_mode="HTML",
-                reply_markup=refresh_keyboard("chart", tf),
-            )
-            _remember_command_message(context, "chart", result_msg)
-            entry_msg = await update.message.reply_text(
-                early_entry_card(a), parse_mode="HTML"
-            )
-            _remember_command_message(context, "chart", entry_msg)
+            await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
+                                            reply_markup=refresh_keyboard("chart", tf))
+            await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
             await msg.delete()
         except Exception as e:
             logger.error(f"cmd_chart — engine fallback failed: {e}")
@@ -648,7 +512,6 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(CommandHandler("recommend", cmd_recommend))
     app.add_handler(CommandHandler("analyze",   cmd_analyze))
-    app.add_handler(CommandHandler("analysis",  cmd_analyze))
     app.add_handler(CommandHandler("signal",    cmd_signal))
     app.add_handler(CommandHandler("trend",     cmd_trend))
     app.add_handler(CommandHandler("levels",    cmd_levels))

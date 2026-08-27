@@ -362,6 +362,39 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
     _save_signal_state()
 
 
+def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
+    """Return verified candle extremes for exit checks.
+
+    Simulated OHLCV is suitable for keeping charts and analysis alive, but it
+    must never close a real tracked trade.  A generated wick can otherwise
+    fabricate an SL/TP touch while the spot feed shows the trade is still
+    live.
+    """
+    if data is None or not getattr(data, "highs", None) or not getattr(data, "lows", None):
+        return None
+    if getattr(data, "is_simulated", False):
+        return None
+
+    highs = data.highs
+    lows = data.lows
+    timestamps = getattr(data, "timestamps", [])
+    if timestamps and opened_at > 0:
+        indices = [
+            i for i, ts in enumerate(timestamps)
+            if ts >= opened_at and i < len(highs) and i < len(lows)
+        ]
+        if not indices:
+            # No verified post-entry candle exists yet.  Use spot only.
+            return (current_price, current_price)
+        return (
+            max(highs[i] for i in indices),
+            min(lows[i] for i in indices),
+        )
+
+    # Without timestamps we cannot prove that a candle formed after entry.
+    return (current_price, current_price)
+
+
 def get_signal_lock_info(tf: str) -> str:
     """Return a human-readable lock status for a timeframe, or '' if no lock."""
     direction = _active_signal.get(tf)
@@ -385,7 +418,6 @@ async def _send_setup_forming_alert(
     if _forming_alert_sent.get(tf) == forming_dir:
         return  # already warned this direction on this TF
 
-    _forming_alert_sent[tf] = forming_dir
     arrow = "📈" if forming_dir == "BUY" else "📉"
     kz_tag = f"  🔔 {a.kill_zone}" if getattr(a, "is_kill_zone", False) else ""
     votes  = a.buy_votes if forming_dir == "BUY" else a.sell_votes
@@ -394,7 +426,7 @@ async def _send_setup_forming_alert(
         f"{'─' * 34}\n"
         f"{arrow}  Direction : {forming_dir}\n"
         f"   Price    : {a.price:,.2f}\n"
-        f"   Votes    : {votes}/5 indicators agree\n"
+         f"   Votes    : {votes}/8 core indicators agree\n"
         f"   ADX      : {a.adx:.1f}   Conf: {a.confidence}%\n"
         f"   HTF      : {a.htf_bias}{kz_tag}\n"
         f"{'─' * 34}\n"
@@ -402,8 +434,20 @@ async def _send_setup_forming_alert(
         f"  Early limit @ OTE zone if available.\n"
         f"</pre>"
     )
-    await _broadcast_text(bot, subs, text)
-    logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/5 votes)")
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
+    if dead:
+        subs -= dead
+        _save(subs)
+    if delivered:
+        _forming_alert_sent[tf] = forming_dir
+        logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
+    else:
+        logger.warning(
+            f"[{tf}] Setup-forming pre-alert not delivered — "
+            "leaving notification state available for retry."
+        )
 
 
 async def _send_momentum_shift_warning(
@@ -430,21 +474,27 @@ async def _send_momentum_shift_warning(
         f"  the reversal until this trade closes.\n"
         f"{'─' * 36}</pre>"
     )
-    await _broadcast_text(bot, subs, text)
-    _momentum_shift_warned[tf] = new_direction
-    logger.info(
-        f"[{tf}] Momentum shift warning sent — open {old_direction} "
-        f"vs new {new_direction} bias."
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
     )
+    if dead:
+        subs -= dead
+        _save(subs)
+    if delivered:
+        _momentum_shift_warned[tf] = new_direction
+        logger.info(
+            f"[{tf}] Momentum shift warning sent — open {old_direction} "
+            f"vs new {new_direction} bias."
+        )
+    else:
+        logger.warning(
+            f"[{tf}] Momentum shift warning not delivered — "
+            "leaving notification state available for retry."
+        )
 
 
 async def _broadcast_text(
-    bot,
-    subs: Set[int],
-    text: str,
-    *,
-    return_result: bool = False,
-    reply_markup=None,
+    bot, subs: Set[int], text: str, *, return_result: bool = False
 ):
     """Send text to subscribers.
 
@@ -456,12 +506,7 @@ async def _broadcast_text(
     delivered = 0
     for chat_id in list(subs):
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             delivered += 1
         except Exception as e:
             err = str(e).lower()
@@ -533,18 +578,6 @@ async def _send_result_image(
         caption = (f"✅ TP1 HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
                    f"Partial profit: +{abs(entry - exit_price):,.2f} pts{watching}")
-
-    if event in ("SL", "TP1_SL"):
-        cooldown_minutes = int(
-            _SL_COOLDOWN_CANDLES
-            * _TF_PERIOD_SECONDS.get(timeframe, _DEFAULT_TF_PERIOD_SECONDS)
-            / 60
-        )
-        caption += (
-            f"\n\n⏳ <b>{timeframe} re-entry cooldown started</b>\n"
-            f"Next {direction} entry checks are blocked for "
-            f"<b>{cooldown_minutes} minutes</b>."
-        )
 
     try:
         img_bytes = generate_result_image(
@@ -814,193 +847,6 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Startup summary failed: {e}")
 
 
-async def send_startup_dashboard(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show the live multi-timeframe dashboard automatically after startup."""
-    from src.market_hours import market_status
-    from src.utils.formatting import multi_timeframe_card
-    from src.utils.keyboards import main_menu_keyboard
-
-    ms = market_status()
-    if not ms["is_open"]:
-        logger.info("Startup dashboard skipped — market closed.")
-        return
-
-    subs = _load()
-    if not subs:
-        logger.info("Startup dashboard: no subscribers.")
-        return
-
-    try:
-        cfg = get_mode_config()
-        analyses = await asyncio.gather(
-            *[analyze(tf) for tf in cfg.scan_timeframes],
-            return_exceptions=True,
-        )
-        valid_analyses = [
-            result for result in analyses
-            if not isinstance(result, Exception)
-        ]
-        if not valid_analyses:
-            logger.warning("Startup dashboard skipped — no timeframe analysis succeeded.")
-            return
-
-        text = multi_timeframe_card(valid_analyses)
-        dead = await _broadcast_text(
-            context.application.bot,
-            subs,
-            text,
-            reply_markup=main_menu_keyboard(),
-        )
-        if dead:
-            subs -= dead
-            _save(subs)
-        logger.info(f"Startup dashboard sent to {len(subs)} subscriber(s).")
-    except Exception as e:
-        logger.error(f"Startup dashboard failed: {e}")
-
-
-async def send_restart_missed_entry_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send one entry decision after the bot comes back online.
-
-    This is intentionally a one-shot startup job.  It replaces the old
-    ten-minute reminder loop so an entry cannot generate repeated notifications
-    while the bot remains online.  Because no trade is persisted while the bot
-    is offline, also re-analyze the configured alert timeframe here; otherwise
-    a signal that appeared during downtime could never produce a missed-entry
-    notification.
-    """
-    subs = _load()
-    if not subs:
-        return
-
-    try:
-        current_price = await get_gold_price()
-    except Exception as e:
-        logger.warning(f"Restart missed-entry check — could not fetch price: {e}")
-        return
-
-    # Re-check the timeframe used by the background alert scanner.  A signal
-    # found after restart is treated as a missed entry, not as a fresh
-    # automatic trade alert, so it never opens a trade or changes signal locks.
-    try:
-        restart_signals = []
-        for timeframe in get_scan_timeframes():
-            analysis = await analyze(timeframe)
-            if analysis.action in ("BUY", "SELL"):
-                restart_signals.append((timeframe, analysis))
-    except Exception as e:
-        logger.warning(f"Restart missed-entry analysis failed: {e}")
-        restart_signals = []
-
-    missed_entry_sent = False
-    for timeframe, analysis in restart_signals:
-        entry = float(getattr(analysis, "entry", 0) or 0)
-        if entry <= 0:
-            continue
-
-        direction = analysis.action
-        near_entry = abs(current_price - entry) / entry <= 0.0015
-        header = (
-            "⚠️ <b>MISSED ENTRY — STILL VALID</b>"
-            if near_entry
-            else "⚠️ <b>MISSED ENTRY — DO NOT CHASE</b>"
-        )
-        decision = (
-            "✅ <b>You can still enter</b> — price is still close to the planned entry."
-            if near_entry
-            else "⛔ <b>Leave this trade</b> — price has moved away from the planned entry."
-        )
-        text = (
-            f"{header}\n"
-            f"{'─' * 30}\n"
-            f"{'🟢' if direction == 'BUY' else '🔴'} "
-            f"<b>{direction} XAU/USD {timeframe}</b>  | "
-            f"Conf {getattr(analysis, 'confidence', 0)}%  | "
-            f"Win {getattr(analysis, 'win_probability', 0)}%\n"
-            f"Planned entry: <b>{entry:,.2f}</b>\n"
-            f"Current price : <b>{current_price:,.2f}</b>\n"
-            f"SL: <b>{getattr(analysis, 'stop_loss', 0):,.2f}</b>   "
-            f"TP1: <b>{getattr(analysis, 'tp1', 0):,.2f}</b>\n\n"
-            f"{decision}\n"
-            f"{'─' * 30}\n"
-            "The bot was offline, so this is a one-time restart check."
-        )
-        dead = await _broadcast_text(context.bot, subs, text)
-        if dead:
-            subs -= dead
-            _save(subs)
-        logger.info(
-            f"[RESTART:missed-entry] {direction} {timeframe} — "
-            f"{'still valid' if near_entry else 'leave trade'}; "
-            f"sent to {len(subs)} subscriber(s)"
-        )
-        missed_entry_sent = True
-        # A restart produces one actionable missed-entry decision, not one
-        # message per timeframe.  The configured scanner normally has one
-        # timeframe, but this also protects against future multi-TF settings.
-        break
-
-    # Also report plans that were already open before shutdown.  This preserves
-    # the existing behavior for trades whose entry alert was delivered before
-    # the outage.
-    open_trades = trade_tracker.get_active_trades()
-    if missed_entry_sent:
-        # The current restart analysis already represents the same missed
-        # entry.  Do not send a second card for the persisted open trade.
-        logger.info(
-            "Restart missed-entry check: current signal sent; "
-            "skipping persisted-trade duplicate."
-        )
-        return
-
-    for trade in open_trades:
-        entry = float(trade.get("entry", 0) or 0)
-        if entry <= 0:
-            continue
-
-        direction = trade.get("direction", "?")
-        timeframe = trade.get("timeframe", "?")
-        sl = float(trade.get("sl", 0) or 0)
-        tp1 = float(trade.get("tp1", 0) or 0)
-        confidence = trade.get("confidence", 0)
-        near_entry = abs(current_price - entry) / entry <= 0.0015
-
-        if near_entry:
-            header = "⚠️ <b>MISSED ENTRY — STILL VALID</b>"
-            decision = (
-                "✅ <b>You can still enter</b> — price is still close to the planned entry."
-            )
-        else:
-            header = "⚠️ <b>MISSED ENTRY — DO NOT CHASE</b>"
-            decision = (
-                "⛔ <b>Leave this trade</b> — price has moved away from the planned entry."
-            )
-
-        text = (
-            f"{header}\n"
-            f"{'─' * 30}\n"
-            f"{'🟢' if direction == 'BUY' else '🔴'} "
-            f"<b>{direction} XAU/USD {timeframe}</b>  |  Conf {confidence}%\n"
-            f"Planned entry: <b>{entry:,.2f}</b>\n"
-            f"Current price : <b>{current_price:,.2f}</b>\n"
-            f"SL: <b>{sl:,.2f}</b>   TP1: <b>{tp1:,.2f}</b>\n\n"
-            f"{decision}\n"
-            f"{'─' * 30}\n"
-            "This is the only missed-entry check for this restart."
-        )
-
-        dead = await _broadcast_text(context.bot, subs, text)
-        if dead:
-            subs -= dead
-            _save(subs)
-
-        logger.info(
-            f"[RESTART:missed-entry] {direction} {timeframe} — "
-            f"{'still valid' if near_entry else 'leave trade'}; "
-            f"sent to {len(subs)} subscriber(s)"
-        )
-
-
 async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
     _sync_mode_state()
@@ -1076,44 +922,20 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     return_exceptions=True,
                 )
                 for tf, data in zip(open_tfs, ohlcv_results):
-                    if isinstance(data, Exception) or data is None or not data.highs:
+                    if isinstance(data, Exception):
+                        logger.warning(f"[{tf}] Skipping candle extremes — OHLCV fetch failed.")
                         continue
+                    if data is None or not data.highs:
+                        continue
+                    if getattr(data, "is_simulated", False):
+                        logger.warning(
+                            f"[{tf}] Skipping simulated OHLCV for TP/SL detection."
+                        )
 
                     opened_at = tf_opened_at.get(tf, 0.0)
-                    ts_list   = getattr(data, "timestamps", [])
-
-                    if ts_list and opened_at > 0:
-                        # Prefer candles whose open time is on or after the trade
-                        # open.  Include one candle before open_at as a buffer for
-                        # the candle that was forming when the trade was entered.
-                        indices = [
-                            i for i, ts in enumerate(ts_list)
-                            if ts >= opened_at
-                        ]
-                        if not indices:
-                            # No candle has opened since this trade was placed.
-                            # Using the pre-entry candle's extremes for SL
-                            # detection causes false immediate SL hits: for a
-                            # SELL the SL sits just above the candle that formed
-                            # the signal high, so that same candle's high would
-                            # instantly trigger SL on the very next scan.
-                            # Fall back to current_price only — the next poll
-                            # after a new candle forms gives proper post-entry
-                            # extremes.
-                            hi = current_price
-                            lo = current_price
-                        else:
-                            hi = max(data.highs[i] for i in indices)
-                            lo = min(data.lows[i]  for i in indices)
-                    else:
-                        # Without timestamps we cannot prove that a historical
-                        # candle formed after entry.  Use spot only rather than
-                        # reusing a pre-entry wick that can falsely hit SL/TP
-                        # immediately after a trade opens.
-                        hi = current_price
-                        lo = current_price
-
-                    tf_extremes[tf] = (hi, lo)
+                    extremes = _post_entry_tf_extremes(data, current_price, opened_at)
+                    if extremes is not None:
+                        tf_extremes[tf] = extremes
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             for ev in events:
@@ -1182,6 +1004,15 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # a confirmed flip to the opposite direction.
             logger.info(f"[{tf}] No signal ({a.action}) — signal lock preserved.")
 
+            # Never send a setup-forming notification from fallback prices.
+            # Simulated data is useful for keeping the engine alive, but it is
+            # not safe for an actionable market notification.
+            if getattr(a, "is_simulated", False):
+                logger.warning(
+                    f"[{tf}] Setup notification blocked — running on simulated data."
+                )
+                continue
+
             # Pre-signal: 3 indicators agree but full signal not confirmed yet.
             # Warn the trader to watch the chart and prepare — early enough to
             # place a limit order in the OTE zone before the move starts.
@@ -1218,6 +1049,14 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         # Full signal fired — reset the forming-alert state for this TF
         _forming_alert_sent.pop(tf, None)
 
+        # Block simulated data before any entry or momentum-shift notification.
+        if getattr(a, "is_simulated", False):
+            logger.warning(
+                f"[{tf}] Alert BLOCKED — running on simulated data (YF fetch failed). "
+                f"Will retry on next scan cycle."
+            )
+            continue
+
         if _should_send(tf, a.action):
             # Warn before the higher-timeframe gate below. A valid reversal
             # must not disappear silently just because it cannot become a new
@@ -1234,14 +1073,6 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await _send_momentum_shift_warning(
                     bot, subs, active_trade, tf, a.action
                 )
-
-            # Block simulated data — never alert on fake prices
-            if getattr(a, "is_simulated", False):
-                logger.warning(
-                    f"[{tf}] Alert BLOCKED — running on simulated data (YF fetch failed). "
-                    f"Will retry on next scan cycle."
-                )
-                continue
 
             # ── Cross-TF coherence block ──────────────────────────────────────
             # Prevent HTF signals from contradicting a confirmed lower-TF lock.
@@ -1641,17 +1472,29 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"Use /active to track live.  Use /signal for latest scan."
             )
 
-            dead = await _broadcast_text(context.bot, subs, text)
+            dead, delivered = await _broadcast_text(
+                context.bot, subs, text, return_result=True
+            )
             if dead:
                 subs -= dead
                 _save(subs)
 
-            sent_milestones.add(label)
-            reminder_sent_this_run = True
-            logger.info(
-                f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
-                f"age={age_str}, price={current_price:.2f}, sent to {len(subs)} sub(s)"
-            )
+            if delivered:
+                sent_milestones.add(label)
+                reminder_sent_this_run = True
+                logger.info(
+                    f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
+                    f"age={age_str}, price={current_price:.2f}, sent to {len(subs)} sub(s)"
+                )
+            else:
+                logger.warning(
+                    f"[REMINDER:{label}] {direction} {tf} was not delivered — "
+                    "leaving milestone available for retry."
+                )
+                # Do not attempt later milestones in the same run when the
+                # current send failed; that would turn one Telegram outage
+                # into a burst of duplicate reminder attempts.
+                break
 
 
 # Load persisted signal state on module import

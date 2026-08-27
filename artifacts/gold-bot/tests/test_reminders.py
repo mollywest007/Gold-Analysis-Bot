@@ -62,11 +62,15 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
                 f,
             )
 
-    async def _run_reminder(self, price):
+    async def _run_reminder(self, price, broadcast_result=(set(), True)):
         bot = AsyncMock()
         context = type("Context", (), {"bot": bot})()
         with patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=price)), \
-             patch.object(alerts, "_broadcast_text", new=AsyncMock(return_value=set())) as broadcast:
+             patch.object(
+                 alerts,
+                 "_broadcast_text",
+                 new=AsyncMock(return_value=broadcast_result),
+             ) as broadcast:
             await alerts.send_trade_reminder(context)
         return broadcast
 
@@ -84,6 +88,17 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         broadcast = await self._run_reminder(102.00)
 
         broadcast.assert_not_awaited()
+        self.assertIn("entry", alerts._reminded_trade_ids["reminder-test"])
+
+    async def test_missed_alert_retries_after_delivery_failure(self):
+        self._write_trade(time.time() - 15 * 60)
+
+        first = await self._run_reminder(100.10, (set(), False))
+        self.assertEqual(first.await_count, 1)
+        self.assertNotIn("entry", alerts._reminded_trade_ids["reminder-test"])
+
+        second = await self._run_reminder(100.10, (set(), True))
+        self.assertEqual(second.await_count, 1)
         self.assertIn("entry", alerts._reminded_trade_ids["reminder-test"])
 
 
