@@ -1,4 +1,5 @@
 import html
+import math
 import time
 import textwrap
 from src.analysis.engine import MarketAnalysis, Indicator
@@ -1887,88 +1888,140 @@ def help_text() -> str:
 
 
 def active_trades_card(open_trades: list, current_price: float) -> str:
+    """Render the live trade panel without showing misleading fallback data.
+
+    A failed spot-price request is represented by ``0.0`` by the data layer.
+    That value must never be rendered as a real market price or used to
+    calculate P&L.  Trade records are persisted JSON, so this renderer also
+    validates the fields it reads instead of allowing one malformed record to
+    break the whole Telegram message.
+    """
     SEP  = "─" * 30
     WIDE = "═" * 30
+
+    try:
+        live_price = float(current_price)
+        price_available = math.isfinite(live_price) and live_price > 0
+    except (TypeError, ValueError):
+        live_price = 0.0
+        price_available = False
+
     lines = [
         "<pre>",
         "ACTIVE TRADES  |  XAU/USD",
         WIDE,
-        f"Live Price : {current_price:,.2f}",
+        (
+            f"Live Price : {live_price:,.2f}"
+            if price_available
+            else "Live Price : UNAVAILABLE"
+        ),
         SEP,
     ]
 
     if not open_trades:
         lines += ["No open trades.", WIDE, "</pre>"]
-        return "\n".join(lines)
+        return safe_html("\n".join(lines))
 
     for i, t in enumerate(open_trades):
-        direction = t["direction"]
-        entry     = t["entry"]
-        sl        = t["sl"]
-        tp1       = t["tp1"]
-        tp2       = t.get("tp2")
-        tp3       = t.get("tp3")
-        tf        = t.get("timeframe", "?")
-        conf      = t.get("confidence", 0)
+        direction = _esc(str(t.get("direction", "?")).upper())
+        tf        = _esc(t.get("timeframe", "?"))
+        conf      = _esc(t.get("confidence", "—"))
         opened_at = t.get("opened_at", 0)
 
-        # P&L in points
-        if direction == "BUY":
-            pnl = current_price - entry
+        try:
+            entry = float(t["entry"])
+            sl = float(t["sl"])
+            tp1 = float(t["tp1"])
+            tp2 = float(t["tp2"]) if t.get("tp2") is not None else None
+            tp3 = float(t["tp3"]) if t.get("tp3") is not None else None
+            valid_levels = all(
+                math.isfinite(value)
+                for value in (entry, sl, tp1)
+                if value is not None
+            )
+            valid_levels = valid_levels and all(
+                value is None or math.isfinite(value)
+                for value in (tp2, tp3)
+            )
+        except (KeyError, TypeError, ValueError):
+            valid_levels = False
+
+        if not valid_levels:
+            lines += [
+                f"Trade {i + 1}  |  DATA ERROR",
+                "This saved trade has incomplete price levels.",
+            ]
+            if i < len(open_trades) - 1:
+                lines.append(WIDE)
+            continue
+
+        # P&L is a price move, not account currency: lot size is not known.
+        if price_available:
+            pnl = (live_price - entry) if direction == "BUY" else (entry - live_price)
+            pnl_sign = "+" if pnl >= 0 else ""
+            pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
+            pnl_line = f"Move        : {pnl_sign}{pnl:,.2f}  ({pnl_label})"
+            now_line = f"Now         : {live_price:,.2f}"
         else:
-            pnl = entry - current_price
-        pnl_sign  = "+" if pnl >= 0 else ""
-        pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
+            pnl_line = "Move        : unavailable (no live price)"
+            now_line = "Now         : unavailable"
 
         # Distances
         # The trade plan is frozen at entry.  Distances in this panel must
         # describe the actual risk/reward plan, not change every time price
         # moves; using current_price here made SL/TP look misleadingly alike.
         risk_dist = abs(entry - sl)
-        sl_dist  = risk_dist
-        tp1_dist = abs(entry - tp1) if tp1 else None
+        tp1_dist = abs(entry - tp1)
 
         # Age
-        age_secs = time.time() - opened_at if opened_at else 0
+        try:
+            age_secs = max(0, time.time() - float(opened_at)) if opened_at else 0
+        except (TypeError, ValueError):
+            age_secs = 0
         if age_secs < 3600:
             age_str = f"{int(age_secs // 60)}m ago"
         else:
             age_str = f"{int(age_secs // 3600)}h {int((age_secs % 3600) // 60)}m ago"
 
-        _st = t.get("status")
-        if _st == "tp1_hit":
-            status_note = "  ✅ TP1 HIT — watching for TP2"
-        elif _st == "tp2_hit" and t.get("tp3"):
-            status_note = "  ✅✅ TP1+TP2 HIT — watching for TP3"
+        # Flags are retained on every trade and are more reliable than a
+        # status string from an older saved record.
+        if t.get("tp2_hit") and tp3:
+            status_note = "TP1 + TP2 HIT — next TP3"
+        elif t.get("tp1_hit"):
+            status_note = "TP1 HIT — next TP2"
         else:
-            status_note = ""
+            status_note = "OPEN — watching TP1"
+
+        mode = _esc(str(t.get("mode", "unknown")).title())
         lines += [
-            f"{tf}  {direction}  |  Conf: {conf}%{status_note}",
-            f"Mode      : {t.get('mode', 'unknown').title()}",
-            f"Opened     : {age_str}",
-            f"Entry      : {entry:,.2f}",
-            f"Now        : {current_price:,.2f}",
-            f"P&L        : {pnl_sign}{pnl:,.1f} pts  ({pnl_label})",
+            f"{tf}  {direction}  |  {status_note}",
+            f"Mode        : {mode}  |  Confidence: {conf}%",
+            f"Opened      : {age_str}",
+            f"Entry       : {entry:,.2f}",
+            now_line,
+            pnl_line,
             SEP,
-            f"SL         : {sl:,.2f}  ({sl_dist:,.1f} pts risk)",
+            f"SL          : {sl:,.2f}  ({risk_dist:,.2f} risk)",
         ]
-        if tp1:
-            tp1_r = (tp1_dist / risk_dist) if risk_dist else 0
-            lines.append(f"TP1        : {tp1:,.2f}  ({tp1_dist:,.1f} pts, 1:{tp1_r:.1f}R)")
+        tp1_r = (tp1_dist / risk_dist) if risk_dist else 0
+        tp1_mark = "  ✓ HIT" if t.get("tp1_hit") else ""
+        lines.append(f"TP1         : {tp1:,.2f}  ({tp1_dist:,.2f}, 1:{tp1_r:.1f}R){tp1_mark}")
         if tp2:
             tp2_dist = abs(entry - tp2)
             tp2_r = (tp2_dist / risk_dist) if risk_dist else 0
-            lines.append(f"TP2        : {tp2:,.2f}  ({tp2_dist:,.1f} pts, 1:{tp2_r:.1f}R)")
+            tp2_mark = "  ✓ HIT" if t.get("tp2_hit") else ""
+            lines.append(f"TP2         : {tp2:,.2f}  ({tp2_dist:,.2f}, 1:{tp2_r:.1f}R){tp2_mark}")
         if tp3:
             tp3_dist = abs(entry - tp3)
             tp3_r = (tp3_dist / risk_dist) if risk_dist else 0
-            lines.append(f"TP3        : {tp3:,.2f}  ({tp3_dist:,.1f} pts, 1:{tp3_r:.1f}R)")
+            tp3_mark = "  ✓ HIT" if t.get("tp3_hit") else ""
+            lines.append(f"TP3         : {tp3:,.2f}  ({tp3_dist:,.2f}, 1:{tp3_r:.1f}R){tp3_mark}")
 
         if i < len(open_trades) - 1:
             lines.append(WIDE)
 
     lines += [WIDE, "</pre>"]
-    return "\n".join(lines)
+    return safe_html("\n".join(lines))
 
 
 def confluence_alert_card(signal_list: list, direction: str, ref_tf: str) -> str:
