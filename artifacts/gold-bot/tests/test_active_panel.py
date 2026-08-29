@@ -36,23 +36,44 @@ class ActivePanelTests(unittest.TestCase):
             card = active_trades_card([_trade()], 0.0)
 
         self.assertIn("Live Price : UNAVAILABLE", card)
-        self.assertIn("Move        : unavailable (no live price)", card)
+        self.assertIn("Price Move  : unavailable (no live price)", card)
         self.assertNotIn("Now         : 0.00", card)
         self.assertNotIn("P&L", card)
 
     def test_direction_and_milestone_are_readable(self):
         with patch("src.utils.formatting.time.time", return_value=1100):
             card = active_trades_card(
-                [_trade(direction="BUY", tp1_hit=True, status="tp1_hit")],
+                [
+                    _trade(
+                        direction="BUY",
+                        sl=4553.80,
+                        tp1=4621.55,
+                        tp2=4648.65,
+                        tp3=4675.75,
+                        tp1_hit=True,
+                        status="tp1_hit",
+                    )
+                ],
                 4590.0,
             )
 
         self.assertIn("M15  BUY  |  TP1 HIT — next TP2", card)
         self.assertIn("Mode        : Scalp  |  Confidence: 95%", card)
         self.assertIn("Now         : 4,590.00", card)
-        self.assertIn("Move        : +9.10  (IN PROFIT)", card)
-        self.assertIn("TP1         : 4,540.25", card)
-        self.assertIn("✓ HIT", card)
+        self.assertIn("Price Move  : +9.10  (IN PROFIT)", card)
+        self.assertIn("TP1         : 4,621.55", card)
+        self.assertIn("✓ recorded", card)
+
+    def test_crossed_target_is_not_presented_as_a_pip_conversion(self):
+        with patch("src.utils.formatting.time.time", return_value=1100):
+            card = active_trades_card([_trade()], 4456.40)
+
+        self.assertIn("TP3 REACHED — tracker update pending", card)
+        self.assertIn("Price Move  : +124.50  (IN PROFIT)", card)
+        self.assertIn("Unit        : XAU/USD price difference (not broker pips)", card)
+        self.assertIn("TP1         : 4,540.25  (distance 40.65", card)
+        self.assertIn("⚠ crossed", card)
+        self.assertNotIn("124.50 pips", card)
 
     def test_malformed_record_does_not_break_panel(self):
         card = active_trades_card([{"direction": "BUY"}], 4500.0)

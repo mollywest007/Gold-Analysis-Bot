@@ -1955,15 +1955,17 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
                 lines.append(WIDE)
             continue
 
-        # P&L is a price move, not account currency: lot size is not known.
+        # This is the quoted XAU/USD price move, not account currency or
+        # broker pips. Pip size varies by broker, while the trade levels in
+        # this bot are stored directly as XAU/USD prices.
         if price_available:
             pnl = (live_price - entry) if direction == "BUY" else (entry - live_price)
             pnl_sign = "+" if pnl >= 0 else ""
             pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
-            pnl_line = f"Move        : {pnl_sign}{pnl:,.2f}  ({pnl_label})"
+            pnl_line = f"Price Move  : {pnl_sign}{pnl:,.2f}  ({pnl_label})"
             now_line = f"Now         : {live_price:,.2f}"
         else:
-            pnl_line = "Move        : unavailable (no live price)"
+            pnl_line = "Price Move  : unavailable (no live price)"
             now_line = "Now         : unavailable"
 
         # Distances
@@ -1984,13 +1986,34 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             age_str = f"{int(age_secs // 3600)}h {int((age_secs % 3600) // 60)}m ago"
 
         # Flags are retained on every trade and are more reliable than a
-        # status string from an older saved record.
+        # status string from an older saved record.  If the live quote has
+        # already crossed a target but the background tracker has not recorded
+        # it yet (for example while the market is closed), show that explicitly
+        # instead of making the trade look as though it is still before TP1.
         if t.get("tp2_hit") and tp3:
             status_note = "TP1 + TP2 HIT — next TP3"
         elif t.get("tp1_hit"):
             status_note = "TP1 HIT — next TP2"
         else:
             status_note = "OPEN — watching TP1"
+
+        def _target_reached(target):
+            if not price_available or target is None:
+                return False
+            return live_price >= target if direction == "BUY" else live_price <= target
+
+        crossed_target = None
+        for target_name, target_value in (
+            ("TP1", tp1),
+            ("TP2", tp2),
+            ("TP3", tp3),
+        ):
+            if _target_reached(target_value):
+                crossed_target = target_name
+        tracker_status = ""
+        if crossed_target:
+            status_note = f"{crossed_target} REACHED — tracker update pending"
+            tracker_status = f"Tracker     : saved as {str(t.get('status', 'unknown')).upper()}"
 
         mode = _esc(str(t.get("mode", "unknown")).title())
         lines += [
@@ -2000,22 +2023,31 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             f"Entry       : {entry:,.2f}",
             now_line,
             pnl_line,
+            "Unit        : XAU/USD price difference (not broker pips)",
             SEP,
-            f"SL          : {sl:,.2f}  ({risk_dist:,.2f} risk)",
+            f"SL          : {sl:,.2f}  (distance {risk_dist:,.2f})",
         ]
+        if tracker_status:
+            lines.insert(-2, tracker_status)
         tp1_r = (tp1_dist / risk_dist) if risk_dist else 0
-        tp1_mark = "  ✓ HIT" if t.get("tp1_hit") else ""
-        lines.append(f"TP1         : {tp1:,.2f}  ({tp1_dist:,.2f}, 1:{tp1_r:.1f}R){tp1_mark}")
+        tp1_mark = "  ✓ recorded" if t.get("tp1_hit") else (
+            "  ⚠ crossed" if _target_reached(tp1) else ""
+        )
+        lines.append(f"TP1         : {tp1:,.2f}  (distance {tp1_dist:,.2f}, 1:{tp1_r:.1f}R){tp1_mark}")
         if tp2:
             tp2_dist = abs(entry - tp2)
             tp2_r = (tp2_dist / risk_dist) if risk_dist else 0
-            tp2_mark = "  ✓ HIT" if t.get("tp2_hit") else ""
-            lines.append(f"TP2         : {tp2:,.2f}  ({tp2_dist:,.2f}, 1:{tp2_r:.1f}R){tp2_mark}")
+            tp2_mark = "  ✓ recorded" if t.get("tp2_hit") else (
+                "  ⚠ crossed" if _target_reached(tp2) else ""
+            )
+            lines.append(f"TP2         : {tp2:,.2f}  (distance {tp2_dist:,.2f}, 1:{tp2_r:.1f}R){tp2_mark}")
         if tp3:
             tp3_dist = abs(entry - tp3)
             tp3_r = (tp3_dist / risk_dist) if risk_dist else 0
-            tp3_mark = "  ✓ HIT" if t.get("tp3_hit") else ""
-            lines.append(f"TP3         : {tp3:,.2f}  ({tp3_dist:,.2f}, 1:{tp3_r:.1f}R){tp3_mark}")
+            tp3_mark = "  ✓ recorded" if t.get("tp3_hit") else (
+                "  ⚠ crossed" if _target_reached(tp3) else ""
+            )
+            lines.append(f"TP3         : {tp3:,.2f}  (distance {tp3_dist:,.2f}, 1:{tp3_r:.1f}R){tp3_mark}")
 
         if i < len(open_trades) - 1:
             lines.append(WIDE)
