@@ -83,6 +83,15 @@ def _reminder_milestones(tf: str) -> list[tuple[str, int, int, bool]]:
         ("update_6x", third_min, 0, False),
     ]
 
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """Parse persisted numeric fields without aborting a notification pass."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_scan_timeframes() -> list[str]:
     """Return the user's selected timeframe for automatic alert scanning.
 
@@ -420,18 +429,32 @@ async def _send_setup_forming_alert(
 
     arrow = "📈" if forming_dir == "BUY" else "📉"
     kz_tag = f"  🔔 {a.kill_zone}" if getattr(a, "is_kill_zone", False) else ""
-    votes  = a.buy_votes if forming_dir == "BUY" else a.sell_votes
+    votes  = getattr(a, "buy_votes", 0) if forming_dir == "BUY" else getattr(a, "sell_votes", 0)
+    price = getattr(a, "price", 0.0)
+    adx = getattr(a, "adx", 0.0)
+    confidence = getattr(a, "confidence", 0)
+    htf_bias = getattr(a, "htf_bias", "Neutral")
+    early_entry = getattr(a, "early_entry", 0.0) or getattr(a, "limit_entry", 0.0)
+    ote_high = getattr(a, "ote_high", 0.0)
+    ote_low = getattr(a, "ote_low", 0.0)
+    if early_entry and early_entry != price:
+        watch_line = f"  Watch limit : {early_entry:,.2f}\n"
+    elif ote_low and ote_high:
+        watch_line = f"  Watch OTE    : {ote_low:,.2f} – {ote_high:,.2f}\n"
+    else:
+        watch_line = ""
     text = (
         f"<pre>⚠️  SETUP FORMING  —  XAU/USD  {tf}\n"
         f"{'─' * 34}\n"
         f"{arrow}  Direction : {forming_dir}\n"
-        f"   Price    : {a.price:,.2f}\n"
-         f"   Votes    : {votes}/8 core indicators agree\n"
-        f"   ADX      : {a.adx:.1f}   Conf: {a.confidence}%\n"
-        f"   HTF      : {a.htf_bias}{kz_tag}\n"
+        f"   Price    : {price:,.2f}\n"
+        f"   Votes    : {votes}/8 core indicators agree\n"
+        f"   ADX      : {adx:.1f}   Conf: {confidence}%\n"
+        f"   HTF      : {htf_bias}{kz_tag}\n"
+        f"{watch_line}"
         f"{'─' * 34}\n"
         f"  Not a signal yet. Watch for entry.\n"
-        f"  Early limit @ OTE zone if available.\n"
+        f"  Wait for confirmation before entering.\n"
         f"</pre>"
     )
     dead, delivered = await _broadcast_text(
@@ -451,9 +474,14 @@ async def _send_setup_forming_alert(
 
 
 async def _send_momentum_shift_warning(
-    bot, subs: Set[int], trade: dict, tf: str, new_direction: str
+    bot, subs: Set[int], trade: dict, tf: str, new_direction: str,
+    *, confirmed: bool = False,
 ) -> None:
-    """Notify once when a new direction conflicts with an active trade."""
+    """Notify once when a new direction conflicts with an active trade.
+
+    ``confirmed`` distinguishes a full reversal signal from a three-vote
+    setup-forming warning so the Telegram card does not understate the signal.
+    """
     global _momentum_shift_warned
     if _momentum_shift_warned.get(tf) == new_direction:
         return
@@ -461,12 +489,13 @@ async def _send_momentum_shift_warning(
     old_direction = trade.get("direction", "UNKNOWN")
     entry = float(trade.get("entry", 0.0))
     sl = float(trade.get("sl", 0.0))
+    bias_state = "confirmed" if confirmed else "forming"
     text = (
         f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
         f"{'─' * 36}\n"
         f"  Open trade  : {old_direction} from {entry:,.2f}\n"
         f"  Stop loss   : {sl:,.2f}\n"
-        f"  New bias    : {new_direction} forming\n"
+        f"  New bias    : {new_direction} {bias_state}\n"
         f"{'─' * 36}\n"
         f"  No new entry fired — the current\n"
         f"  {old_direction} trade still owns {tf}.\n"
@@ -1037,7 +1066,8 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                         # information even though it cannot open a second
                         # trade. Warn before the full signal is confirmed.
                         await _send_momentum_shift_warning(
-                            bot, subs, active_trade, tf, forming_dir
+                            bot, subs, active_trade, tf, forming_dir,
+                            confirmed=False,
                         )
                     elif not _active_signal.get(tf):
                         await _send_setup_forming_alert(bot, subs, a, tf, forming_dir)
@@ -1071,7 +1101,8 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             if active_trade:
                 await _send_momentum_shift_warning(
-                    bot, subs, active_trade, tf, a.action
+                    bot, subs, active_trade, tf, a.action,
+                    confirmed=True,
                 )
 
             # ── Cross-TF coherence block ──────────────────────────────────────
@@ -1204,7 +1235,8 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # same message continuously while the trade is open.
                 if _momentum_shift_warned.get(tf) != direction:
                     await _send_momentum_shift_warning(
-                        bot, subs, existing, tf, direction
+                        bot, subs, existing, tf, direction,
+                        confirmed=True,
                     )
                 else:
                     logger.info(
@@ -1354,17 +1386,32 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     now = time.time()
     for trade in open_trades:
-        trade_id  = trade.get("id", "")
-        opened_at = trade.get("opened_at", 0)
+        trade_id  = str(trade.get("id") or "")
+        opened_at = _safe_float(trade.get("opened_at"))
         age_secs  = now - opened_at
-        entry     = trade.get("entry", 0)
+        entry     = _safe_float(trade.get("entry"))
         direction = trade.get("direction", "")
         tf        = trade.get("timeframe", "")
-        sl        = trade.get("sl", 0)
-        tp1       = trade.get("tp1", 0)
-        tp2       = trade.get("tp2")
-        tp3       = trade.get("tp3")
-        conf      = trade.get("confidence", 0)
+        sl        = _safe_float(trade.get("sl"))
+        tp1       = _safe_float(trade.get("tp1"))
+        tp2       = _safe_float(trade.get("tp2")) if trade.get("tp2") is not None else None
+        tp3       = _safe_float(trade.get("tp3")) if trade.get("tp3") is not None else None
+        conf      = _safe_float(trade.get("confidence"))
+
+        if (
+            not trade_id
+            or opened_at <= 0
+            or entry <= 0
+            or sl <= 0
+            or tp1 <= 0
+            or direction not in ("BUY", "SELL")
+            or not tf
+        ):
+            logger.warning(
+                f"[REMINDER] Skipping malformed open trade "
+                f"{trade_id or '<missing id>'}."
+            )
+            continue
 
         if trade_id not in _reminded_trade_ids:
             _reminded_trade_ids[trade_id] = set()

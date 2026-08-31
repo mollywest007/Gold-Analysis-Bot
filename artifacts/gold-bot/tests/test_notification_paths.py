@@ -58,6 +58,10 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             adx=25.0,
             confidence=78,
             htf_bias="Bullish",
+            early_entry=2348.5,
+            limit_entry=0.0,
+            ote_high=2352.0,
+            ote_low=2344.0,
         )
 
     async def test_setup_forming_alert_is_deduplicated_after_delivery(self):
@@ -73,6 +77,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_message.await_count, 1)
         self.assertIn("SETUP FORMING", bot.send_message.await_args.kwargs["text"])
         self.assertIn("4/8 core indicators", bot.send_message.await_args.kwargs["text"])
+        self.assertIn("Watch limit : 2,348.50", bot.send_message.await_args.kwargs["text"])
         self.assertEqual(alerts._forming_alert_sent["M15"], "BUY")
 
     async def test_setup_forming_alert_retries_after_delivery_failure(self):
@@ -104,6 +109,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bot.send_message.await_count, 1)
         self.assertIn("MOMENTUM SHIFT", bot.send_message.await_args.kwargs["text"])
+        self.assertIn("New bias    : SELL forming", bot.send_message.await_args.kwargs["text"])
         self.assertEqual(alerts._momentum_shift_warned["M15"], "SELL")
 
     async def test_momentum_shift_retries_after_delivery_failure(self):
@@ -122,6 +128,110 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bot.send_message.await_count, 2)
         self.assertEqual(alerts._momentum_shift_warned["M15"], "SELL")
+
+    async def test_setup_forming_alert_is_reached_by_live_scan(self):
+        from src import market_hours
+
+        forming = SimpleNamespace(
+            action="WAIT",
+            setup_quality="FORMING",
+            confidence=78,
+            win_probability=0,
+            is_simulated=False,
+            buy_votes=4,
+            sell_votes=2,
+            adx=25.0,
+            price=2350.0,
+            htf_bias="Bullish",
+            kill_zone="",
+            is_kill_zone=False,
+            early_entry=2348.5,
+            limit_entry=0.0,
+            ote_high=2352.0,
+            ote_low=2344.0,
+        )
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_mode_config", return_value=SimpleNamespace(
+                 confluence_min_tfs=3,
+             )), \
+             patch.object(alerts, "get_scan_timeframes", return_value=["M15"]), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(alerts, "_safe_analyze", new=AsyncMock(return_value=forming)), \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ):
+            await alerts._check_and_alert_once(context)
+
+        self.assertEqual(context.application.bot.send_message.await_count, 1)
+        text = context.application.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("SETUP FORMING", text)
+        self.assertIn("Watch limit : 2,348.50", text)
+
+    async def test_confirmed_momentum_shift_is_reached_by_live_scan(self):
+        from src import market_hours
+
+        reversal = SimpleNamespace(
+            action="SELL",
+            setup_quality="A",
+            confidence=85,
+            win_probability=70,
+            buy_votes=1,
+            sell_votes=7,
+            adx=25.0,
+            is_simulated=False,
+            htf_bias="Neutral",
+            choch="NONE",
+        )
+        open_trade = {
+            "id": "open-buy",
+            "timeframe": "M15",
+            "direction": "BUY",
+            "entry": 2350.0,
+            "sl": 2335.0,
+        }
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_mode_config", return_value=SimpleNamespace(
+                 confluence_min_tfs=3,
+                 alert_min_win_probability=60,
+                 alert_min_grades=("A+", "A"),
+             )), \
+             patch.object(alerts, "get_scan_timeframes", return_value=["M15"]), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(alerts, "_safe_analyze", new=AsyncMock(return_value=reversal)), \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts, "fetch_ohlcv", new=AsyncMock(return_value=None)), \
+             patch.object(alerts.trade_tracker, "get_active_trades", return_value=[open_trade]), \
+             patch.object(alerts.trade_tracker, "get_all_trades", return_value=[open_trade]), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ):
+            await alerts._check_and_alert_once(context)
+
+        self.assertEqual(context.application.bot.send_message.await_count, 1)
+        text = context.application.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("MOMENTUM SHIFT", text)
+        self.assertIn("New bias    : SELL confirmed", text)
+        self.assertNotIn("XAU/USD  SELL", text.split("MOMENTUM SHIFT", 1)[-1])
 
     async def test_entry_alert_delivers_card_even_when_chart_is_unavailable(self):
         bot = AsyncMock()

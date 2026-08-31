@@ -101,6 +101,29 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.await_count, 1)
         self.assertIn("entry", alerts._reminded_trade_ids["reminder-test"])
 
+    async def test_malformed_open_trade_does_not_block_valid_reminder(self):
+        self._write_trade(time.time() - 15 * 60)
+        with open(self.trades_file.name, "r+") as f:
+            payload = json.load(f)
+            payload["trades"].insert(
+                0,
+                {
+                    "id": "malformed",
+                    "direction": "BUY",
+                    "entry": "not-a-price",
+                    "opened_at": time.time() - 15 * 60,
+                },
+            )
+            f.seek(0)
+            json.dump(payload, f)
+            f.truncate()
+
+        broadcast = await self._run_reminder(100.10)
+
+        self.assertEqual(broadcast.await_count, 1)
+        self.assertIn("MISSED ALERT — ENTRY STILL OPEN", broadcast.await_args.args[2])
+        self.assertNotIn("malformed", alerts._reminded_trade_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
