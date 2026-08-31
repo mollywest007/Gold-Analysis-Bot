@@ -64,6 +64,57 @@ def _clean(series: list) -> list:
     return [x for x in series if x is not None and x > 0]
 
 
+def _aligned_ohlcv_rows(quote: dict, raw_timestamps: list) -> tuple:
+    """Clean OHLCV rows without breaking candle-column alignment.
+
+    Yahoo can return an occasional null inside one quote column. Cleaning each
+    column independently shifts later values against the wrong timestamp and
+    creates synthetic candles. Invalid price rows are discarded as a unit;
+    missing/zero volume is safe and becomes zero.
+    """
+    price_keys = ("open", "high", "low", "close")
+    price_columns = [quote.get(key, []) for key in price_keys]
+    if not all(price_columns):
+        return [], [], [], [], [], []
+
+    row_count = min(len(column) for column in price_columns)
+    raw_volumes = quote.get("volume", [])
+    rows = []
+    valid_indices = []
+    for i in range(row_count):
+        try:
+            prices = tuple(float(column[i]) for column in price_columns)
+        except (TypeError, ValueError):
+            continue
+        if any(price <= 0 for price in prices):
+            continue
+        try:
+            volume = float(raw_volumes[i]) if i < len(raw_volumes) and raw_volumes[i] else 0.0
+        except (TypeError, ValueError):
+            volume = 0.0
+        rows.append((*prices, max(volume, 0.0)))
+        valid_indices.append(i)
+
+    opens = [row[0] for row in rows]
+    highs = [row[1] for row in rows]
+    lows = [row[2] for row in rows]
+    closes = [row[3] for row in rows]
+    volumes = [row[4] for row in rows]
+
+    # Timestamps must stay aligned with the filtered rows. If Yahoo's
+    # timestamps are incomplete, omit them rather than guessing.
+    timestamps = []
+    if len(raw_timestamps) >= row_count:
+        try:
+            timestamps = [float(raw_timestamps[i]) for i in valid_indices]
+        except (TypeError, ValueError):
+            timestamps = []
+        if len(timestamps) != len(rows):
+            timestamps = []
+
+    return opens, highs, lows, closes, volumes, timestamps
+
+
 def _aggregate_bars(data: "OHLCVData", step: int) -> "OHLCVData":
     n    = len(data.closes)
     opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
@@ -114,6 +165,16 @@ async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
                             return mid
     except Exception as e:
         logger.warning(f"swissquote fetch failed: {e}")
+    return None
+
+
+def _first_valid_spot(results: list) -> Optional[float]:
+    """Return the first validated spot quote from concurrent source results."""
+    for result in results:
+        if isinstance(result, (int, float)) and not isinstance(result, bool):
+            value = float(result)
+            if 500 < value < 25000:
+                return value
     return None
 
 
@@ -175,10 +236,15 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
     try:
         async with aiohttp.ClientSession() as session:
             # Fetch OHLCV and spot price concurrently
-            ohlcv_resp, spot_price = await asyncio.gather(
+            ohlcv_resp, spot_results = await asyncio.gather(
                 session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=12)),
-                _fetch_goldapi(session),
+                asyncio.gather(
+                    _fetch_goldapi(session),
+                    _fetch_swissquote(session),
+                    return_exceptions=True,
+                ),
             )
+            spot_price = _first_valid_spot(spot_results)
 
             async with ohlcv_resp as resp:
                 if resp.status != 200:
@@ -197,13 +263,9 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
             return None
         result = results[0]
         quote  = result["indicators"]["quote"][0]
-
-        opens   = _clean(quote.get("open",   []))
-        highs   = _clean(quote.get("high",   []))
-        lows    = _clean(quote.get("low",    []))
-        closes  = _clean(quote.get("close",  []))
-        volumes = _clean(quote.get("volume", []))
-        raw_ts  = result.get("timestamp", [])
+        opens, highs, lows, closes, volumes, timestamps = _aligned_ohlcv_rows(
+            quote, result.get("timestamp", [])
+        )
 
         min_len = min(len(opens), len(highs), len(lows), len(closes))
         if min_len < MIN_CANDLES:
@@ -215,7 +277,7 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         lows    = lows[:min_len]
         closes  = closes[:min_len]
         volumes = volumes[:min_len] if volumes else [0] * min_len
-        timestamps = [float(ts) for ts in raw_ts[:min_len]] if raw_ts else []
+        timestamps = timestamps[:min_len]
 
         # Normalize futures OHLCV to spot prices by subtracting the basis.
         # Futures trade at a premium (cost of carry). Without this, all
@@ -256,12 +318,23 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
 
 async def fetch_ohlcv(timeframe: str) -> Optional["OHLCVData"]:
     """Fetch with 5-minute TTL cache per timeframe. Falls back to simulation if YF fails."""
+    cached_data = None
     async with _cache_lock:
         if timeframe in _ohlcv_cache:
             cached_data, cached_ts = _ohlcv_cache[timeframe]
             if (time.time() - cached_ts) < OHLCV_TTL:
                 logger.debug(f"OHLCV cache hit [{timeframe}]")
-                return cached_data
+            else:
+                cached_data = None
+
+    if cached_data is not None:
+        # Candle history can remain cached, but the live spot snapshot must not
+        # become the entry price for several minutes. Fetch outside the cache
+        # lock because get_gold_price uses the same lock internally.
+        spot = await get_gold_price()
+        if spot > 0:
+            cached_data.price = spot
+        return cached_data
 
     data = await _fetch_ohlcv_raw(timeframe)
 

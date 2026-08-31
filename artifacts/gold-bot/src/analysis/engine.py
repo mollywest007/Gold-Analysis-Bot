@@ -749,8 +749,10 @@ def find_sr_levels(highs: List[float], lows: List[float], closes: List[float],
 
     tol          = atr * 0.6
     res_levels   = cluster([(r, w) for r, w in resistances if r > price], tol)
-    sup_levels   = cluster(sorted([(s, w) for s, w in supports if s < price],
-                                   key=lambda x: x[0], reverse=True), tol)
+    sup_levels   = cluster([(s, w) for s, w in supports if s < price], tol)
+    # cluster() returns numeric levels in ascending order. For support,
+    # S1 must be the nearest level below price, not the deepest one.
+    sup_levels   = sorted(sup_levels, reverse=True)
 
     r1 = res_levels[0] if res_levels else round(price + atr * 3, 2)
     r2 = res_levels[1] if len(res_levels) > 1 else round(price + atr * 6, 2)
@@ -998,12 +1000,16 @@ def candle_signal(pattern: str) -> str:
     bullish = {
         "Bullish Engulfing", "Hammer", "Inverted Hammer", "Morning Star",
         "Three White Soldiers", "Tweezer Bottom", "Piercing Line", "Bullish Harami",
-        "Bullish Marubozu", "Bullish Candle",
+        "Bullish Marubozu", "Bullish Candle", "Three Inside Up",
+        "Bullish Kicker", "Bullish Abandoned Baby", "Bullish Belt Hold",
+        "Bullish Counterattack",
     }
     bearish = {
         "Bearish Engulfing", "Shooting Star", "Evening Star",
         "Three Black Crows", "Tweezer Top", "Dark Cloud Cover", "Bearish Harami",
-        "Bearish Marubozu", "Bearish Candle",
+        "Bearish Marubozu", "Bearish Candle", "Three Inside Down",
+        "Bearish Kicker", "Bearish Abandoned Baby", "Bearish Belt Hold",
+        "Bearish Counterattack",
     }
     if pattern in bullish:
         return "BUY"
@@ -1110,8 +1116,12 @@ async def _get_htf_bias(htf: str) -> str:
         # ── Recent candle body direction (1pt) — catches intra-candle reversals
         # Uses last 3 closes: if majority falling, bearish pressure is building.
         if len(closes) >= 3:
-            recent_dir = sum(1 if closes[i] < closes[i-1] else -1
-                             for i in range(-3, 0))
+            recent_dir = sum(
+                1 if closes[i] < closes[i - 1]
+                else -1 if closes[i] > closes[i - 1]
+                else 0
+                for i in range(-3, 0)
+            )
             if recent_dir >= 2:   score_bear += 1   # 2 or 3 of last 3 falling
             elif recent_dir <= -2: score_bull += 1  # 2 or 3 of last 3 rising
 
@@ -1430,6 +1440,37 @@ async def _get_daily_bias(price: float, highs: List[float],
     return "RANGING"
 
 
+def _select_direction(
+    buy_score: float,
+    sell_score: float,
+    buy_votes: int,
+    sell_votes: int,
+    min_votes: int,
+    margin_threshold: float = 0.02,
+) -> str:
+    """Choose a direction only when score and vote count agree.
+
+    A weighted score can otherwise turn an exact vote tie into a high
+    confidence signal, even though the evidence is split evenly.
+    """
+    margin = abs(buy_score - sell_score)
+    if (
+        buy_score > sell_score
+        and margin > margin_threshold
+        and buy_votes >= min_votes
+        and buy_votes > sell_votes
+    ):
+        return "BUY"
+    if (
+        sell_score > buy_score
+        and margin > margin_threshold
+        and sell_votes >= min_votes
+        and sell_votes > buy_votes
+    ):
+        return "SELL"
+    return "NEUTRAL"
+
+
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 async def analyze(timeframe: str = "H1") -> MarketAnalysis:
@@ -1713,7 +1754,6 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     base_conf   = max(50, min(97, int(50 + raw_conf * 48)))
     confidence  = max(50, min(97, base_conf))
 
-    margin    = abs(buy_score - sell_score)
     # Kill zone: institutions move fast at London/NY open — catch the signal one
     # indicator earlier so the alert fires at the start of the move, not the middle.
     MIN_VOTES = (
@@ -1724,15 +1764,15 @@ async def analyze(timeframe: str = "H1") -> MarketAnalysis:
     di_conf_buy  = plus_di  > minus_di and adx >= 20
     di_conf_sell = minus_di > plus_di  and adx >= 20
 
-    # margin > 0.02: low enough to capture signals when 4 indicators agree but
-    # scores are close due to weighting — previously valid setups dropped to NEUTRAL
-    if buy_score > sell_score and margin > 0.02 and buy_votes >= MIN_VOTES:
+    direction = _select_direction(
+        buy_score, sell_score, buy_votes, sell_votes, MIN_VOTES
+    )
+    if direction == "BUY":
         direction = "BUY"
         bias      = "Bullish"
         if di_conf_buy:
             confidence = min(97, confidence + 5)
-    elif sell_score > buy_score and margin > 0.02 and sell_votes >= MIN_VOTES:
-        direction = "SELL"
+    elif direction == "SELL":
         bias      = "Bearish"
         if di_conf_sell:
             confidence = min(97, confidence + 5)
