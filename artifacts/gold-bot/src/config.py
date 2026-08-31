@@ -15,14 +15,22 @@ GOLD_SYMBOL = "XAU/USD"
 
 # Access control — only the owner may use this bot.
 #
-# ALLOWED_USER_ID (preferred, immutable): set this to your numeric Telegram
+# BOT_OWNER_TELEGRAM_ID (preferred, non-secret): set this to the owner's
+# numeric Telegram user ID. This is intentionally a normal environment value:
+# a Telegram user ID is an identifier, not a credential, and keeping the
+# owner setting out of the secret-only path makes workflow reloads reliable.
+#
+# ALLOWED_USER_ID (legacy secret): set this to your numeric Telegram
 #   user ID. Find it in the bot logs after your first /start — look for
 #   "Authorized: @username (id=XXXXXXX)". Set ALLOWED_USER_ID=XXXXXXX as a
-#   Replit secret to enable ID-based auth (more secure than username).
+#   Replit secret if the non-secret setting is not available.
 #
 # ALLOWED_USERNAME (fallback): used only when ALLOWED_USER_ID is not set.
 #   Telegram usernames are mutable and can be reclaimed — set the numeric ID
 #   as soon as possible.
-_raw_user_id = os.environ.get("ALLOWED_USER_ID", "").strip()
+_raw_user_id = (
+    os.environ.get("BOT_OWNER_TELEGRAM_ID", "").strip()
+    or os.environ.get("ALLOWED_USER_ID", "").strip()
+)
 ALLOWED_USER_ID: int = int(_raw_user_id) if _raw_user_id.isdigit() else 0
-ALLOWED_USERNAME = os.environ.get("ALLOWED_USERNAME", "nailythachad")
+ALLOWED_USERNAME = os.environ.get("ALLOWED_USERNAME", "senpaipl9")
