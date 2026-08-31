@@ -3,3 +3,4 @@
 - [Gold Bot Trade Detection Bugs](gold-bot-trade-detection.md) — false immediate SL (pre-entry candle), TP candle-extreme detection, break-even SL after TP1, reminder message suppression on retrace
 - [Gold Bot News Sources](gold-bot-news-sources.md) — only clearly relevant, recent gold headlines from filtered financial publishers should be labeled gold news
 - [Gold Bot Notification Delivery](gold-bot-notification-delivery.md) — only consume alert deduplication state after Telegram delivery succeeds; failed sends remain retryable
+- [Gemini Vision Compatibility](gemini-vision-compatibility.md) — Google may retire Gemini model aliases; verify the live vision endpoint instead of trusting an old model name

@@ -24,7 +24,10 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-_GEMINI_MODEL = "gemini-2.0-flash"
+# Keep the vision model configurable because Google retires model aliases.
+# The current default is the model Google returned from the live API migration
+# error for the previously configured gemini-2.0-flash endpoint.
+_GEMINI_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-3.6-flash")
 _GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{_GEMINI_MODEL}:generateContent"
@@ -279,7 +282,7 @@ OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Return ONLY a single valid JSON object — no markdown fences, no explanation, no extra text:
 
-{
+{{
   "bias":                 "BULLISH" | "BEARISH" | "NEUTRAL" | "RANGING",
   "htf_trend":            "BULLISH" | "BEARISH" | "NEUTRAL",
   "ltf_trend":            "BULLISH" | "BEARISH" | "NEUTRAL",
@@ -322,7 +325,7 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "summary":              "<3-4 sentence professional assessment — end with the risk warning>",
   "open_trade_valid":     true | false | null,
   "open_trade_notes":     "<trade validity analysis, or '' if no trade was provided>"
-}
+}}
 
 Critical rules:
 - Gold (XAU/USD) currently trades around 3200–3500. Read EXACT prices from the Y-axis.
