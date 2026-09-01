@@ -1973,7 +1973,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             pnl = (live_price - entry) if direction == "BUY" else (entry - live_price)
             pnl_sign = "+" if pnl >= 0 else ""
             pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
-            pnl_line = f"Price Move  : {pnl_sign}{pnl:,.2f}  ({pnl_label})"
+            pnl_line = f"Price Move  : {pnl_sign}{pnl:,.2f} USD/oz  ({pnl_label})"
             now_line = f"Now         : {live_price:,.2f}"
             limit_move_line = ""
             if limit_entry and not math.isclose(limit_entry, entry, abs_tol=0.005):
@@ -1984,7 +1984,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
                 )
                 limit_sign = "+" if limit_move >= 0 else ""
                 limit_move_line = (
-                    f"Limit Move  : {limit_sign}{limit_move:,.2f}  "
+                    f"Limit Move  : {limit_sign}{limit_move:,.2f} USD/oz  "
                     "(from limit level; fill not confirmed)"
                 )
         else:

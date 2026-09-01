@@ -78,7 +78,7 @@ class ActivePanelTests(unittest.TestCase):
         self.assertIn("M15  BUY  |  TP1 HIT — next TP2", card)
         self.assertIn("Mode        : Scalp  |  Confidence: 95%", card)
         self.assertIn("Now         : 4,590.00", card)
-        self.assertIn("Price Move  : +9.10  (IN PROFIT)", card)
+        self.assertIn("Price Move  : +9.10 USD/oz  (IN PROFIT)", card)
         self.assertIn("TP1         : 4,621.55", card)
         self.assertIn("✓ recorded", card)
 
@@ -98,7 +98,7 @@ class ActivePanelTests(unittest.TestCase):
         )
 
         self.assertIn("Market Entry: 4,441.53  (tracked basis)", card)
-        self.assertIn("Price Move  : +9.00  (IN PROFIT)", card)
+        self.assertIn("Price Move  : +9.00 USD/oz  (IN PROFIT)", card)
         self.assertIn("SL          : 4,428.30  (distance 13.23)", card)
         self.assertIn("TP1         : 4,454.76  (distance 13.23", card)
         self.assertIn("TP2         : 4,468.00  (distance 26.47", card)
@@ -109,7 +109,7 @@ class ActivePanelTests(unittest.TestCase):
             card = active_trades_card([_trade()], 4456.40)
 
         self.assertIn("TP3 REACHED — tracker update pending", card)
-        self.assertIn("Price Move  : +124.50  (IN PROFIT)", card)
+        self.assertIn("Price Move  : +124.50 USD/oz  (IN PROFIT)", card)
         self.assertIn("Unit        : XAU/USD price difference (not broker pips)", card)
         self.assertIn("TP1         : 4,540.25  (distance 40.65", card)
         self.assertIn("⚠ crossed", card)
@@ -132,8 +132,8 @@ class ActivePanelTests(unittest.TestCase):
 
         self.assertIn("Market Entry: 4,431.20  (tracked basis)", card)
         self.assertIn("Limit Entry : 4,444.46  (optional pullback level)", card)
-        self.assertIn("Price Move  : +4.40  (IN PROFIT)", card)
-        self.assertIn("Limit Move  : +17.66  (from limit level; fill not confirmed)", card)
+        self.assertIn("Price Move  : +4.40 USD/oz  (IN PROFIT)", card)
+        self.assertIn("Limit Move  : +17.66 USD/oz  (from limit level; fill not confirmed)", card)
         self.assertIn("Unit        : XAU/USD price difference (not broker pips)", card)
 
     def test_malformed_record_does_not_break_panel(self):
