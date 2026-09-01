@@ -356,6 +356,9 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from src import trade_tracker
     from src.analysis.market_data import get_gold_price
     from src.utils.formatting import active_trades_card
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    timeframe = get_user_timeframe(chat_id)
     msg   = await update.message.reply_text("Fetching active trades...")
     try:
         price = await get_gold_price()
@@ -364,7 +367,9 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Read the authoritative persisted position state after the network wait.
     # The alert scanner can close/open a trade while get_gold_price() is in
     # flight; taking the snapshot before that await can render a stale entry.
-    open_trades = trade_tracker.get_active_trades()
+    open_trades = trade_tracker.get_active_trades_for_account(
+        chat_id, mode=mode_name, timeframe=timeframe
+    )
     text = active_trades_card(open_trades, price)
     await msg.edit_text(text, parse_mode="HTML",
                         reply_markup=refresh_keyboard("active", "none"))

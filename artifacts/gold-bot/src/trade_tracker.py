@@ -499,6 +499,38 @@ def get_active_trades() -> List[Dict[str, Any]]:
     return [t for t in get_all_trades() if is_active_trade(t)]
 
 
+def get_active_trades_for_account(
+    account_id: int,
+    mode: str = None,
+    timeframe: str = None,
+) -> List[Dict[str, Any]]:
+    """Return active plans for one Telegram account.
+
+    Records created before account isolation have no owner, so those legacy
+    records are included only when their frozen mode and timeframe match the
+    requesting account's profile.
+    """
+    account_key = str(account_id)
+    active = get_active_trades()
+    owned = [
+        trade for trade in active
+        if str(trade.get("account_id") or "") == account_key
+    ]
+    legacy = [
+        trade for trade in active
+        if not trade.get("account_id")
+        and mode
+        and timeframe
+        and trade.get("mode") == mode
+        and trade.get("timeframe") == timeframe
+    ]
+    return sorted(
+        owned + legacy,
+        key=lambda trade: trade.get("opened_at", 0),
+        reverse=True,
+    )
+
+
 def get_stats() -> Dict[str, Any]:
     """Return win/loss/open counts and win rate across all closed trades."""
     trades = _load()

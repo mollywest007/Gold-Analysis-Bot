@@ -186,7 +186,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     price = 0.0
                 # Refresh the persisted position snapshot after the network
                 # wait so this panel cannot render a pre-update entry record.
-                open_trades = trade_tracker.get_active_trades()
+                open_trades = trade_tracker.get_active_trades_for_account(
+                    chat_id,
+                    mode=get_user_mode(chat_id),
+                    timeframe=_get_tf(context, chat_id),
+                )
                 await query.edit_message_text(
                     active_trades_card(open_trades, price), parse_mode="HTML", reply_markup=kb
                 )
