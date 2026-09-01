@@ -275,6 +275,15 @@ def _save(subs: Set[int], disabled: Optional[Set[int]] = None) -> None:
         )
 
 
+def _remove_dead_subscribers(dead: Set[int]) -> None:
+    """Remove failed chats without replacing the other accounts' list."""
+    if not dead:
+        return
+    current = _load()
+    current.difference_update(dead)
+    _save(current)
+
+
 def register_user(chat_id: int) -> None:
     """Register a user for alert broadcasts."""
     users = _load()
@@ -619,7 +628,7 @@ async def _send_setup_forming_alert(
     )
     if dead:
         subs -= dead
-        _save(subs)
+        _remove_dead_subscribers(dead)
     if delivered:
         forming_alert_sent[tf] = forming_dir
         logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
@@ -668,7 +677,7 @@ async def _send_momentum_shift_warning(
     )
     if dead:
         subs -= dead
-        _save(subs)
+        _remove_dead_subscribers(dead)
     if delivered:
         momentum_shift_warned[tf] = new_direction
         logger.info(
@@ -810,7 +819,7 @@ async def _send_result_image(
 
     if dead:
         subs -= dead
-        _save(subs)
+        _remove_dead_subscribers(dead)
     logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)} sub(s)")
     return delivered > 0
 
@@ -965,7 +974,7 @@ async def _send_sl_cooldown_notification(
     )
     if dead:
         subs -= dead
-        _save(subs)
+        _remove_dead_subscribers(dead)
     if delivered:
         if account_id is None:
             trade_tracker.mark_cooldown_notification_sent(trade_id)
@@ -1478,8 +1487,6 @@ async def _check_and_alert_once(
 
     # Pass 1 — log all results, collect newly-triggered signals
     new_signals: list = []   # (tf, MarketAnalysis) pairs that should fire this cycle
-    state_changed = False
-
     for tf, a in zip(scan_timeframes, analyses):
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
@@ -1672,10 +1679,8 @@ async def _check_and_alert_once(
             pending_signal[tf] = a.action
             new_signals.append((tf, a))
 
-    if state_changed:
-        _save_signal_state(account_id, state)
-
     if not new_signals:
+        _save_signal_state(account_id, state)
         return
 
     # ── Pass 2 — fire each timeframe independently, no HTF gate ──────────────
@@ -2034,7 +2039,7 @@ async def _send_trade_reminder_once(
             )
             if dead:
                 subs -= dead
-                _save(subs)
+                _remove_dead_subscribers(dead)
 
             if delivered:
                 sent_milestones.add(label)
@@ -2084,5 +2089,7 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_trade_reminder_once(context)
 
 
-# Load persisted signal state on module import
-_load_signal_state()
+# Do not load the legacy global signal-state namespace on startup. Production
+# scans use _load_account_state(chat_id), so loading this file would reintroduce
+# one user's locks into every account. The legacy helpers remain available only
+# to explicit maintenance/test callers.
