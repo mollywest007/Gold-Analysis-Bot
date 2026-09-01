@@ -395,6 +395,10 @@ def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
         if not indices:
             # No verified post-entry candle exists yet.  Use spot only.
             return (current_price, current_price)
+        # Only recent post-entry candles are valid live exit evidence. Older
+        # normalized futures candles can move when the spot/futures basis is
+        # recalculated, which can replay a stale wick as a new SL hit.
+        indices = indices[-3:]
         return (
             max(highs[i] for i in indices),
             min(lows[i] for i in indices),
@@ -566,7 +570,7 @@ async def _broadcast_photo(bot, subs: Set[int], img_bytes: bytes, caption: str) 
 
 async def _send_result_image(
     bot, subs: Set[int], trade: dict, event: str, exit_price: float,
-) -> None:
+) -> bool:
     direction  = trade["direction"]
     entry      = trade["entry"]
     sl         = trade["sl"]
@@ -619,6 +623,7 @@ async def _send_result_image(
         img_bytes = None
 
     dead: Set[int] = set()
+    delivered = 0
     for chat_id in list(subs):
         try:
             if img_bytes:
@@ -630,6 +635,7 @@ async def _send_result_image(
             else:
                 await bot.send_message(chat_id=chat_id,
                                        text=f"<pre>{caption}</pre>", parse_mode="HTML")
+            delivered += 1
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
@@ -641,6 +647,70 @@ async def _send_result_image(
         subs -= dead
         _save(subs)
     logger.info(f"Result image sent: {result} @ {exit_price:.2f} to {len(subs)} sub(s)")
+    return delivered > 0
+
+
+_RESULT_EVENT_STATUS = {
+    "SL": "sl_hit",
+    "TP1_SL": "tp1_sl_hit",
+    "TP3": "tp3_hit",
+}
+
+
+async def _send_verified_result_event(
+    bot, subs: Set[int], trade: dict, event: str, exit_price: float,
+) -> bool:
+    """Send a result only for the current persisted, terminal trade record.
+
+    ``check_trades`` is the sole source of exit events, but this second
+    persisted-state check protects the notification layer from stale event
+    objects, duplicate dispatch, and any future caller that passes an event
+    for a still-active trade.
+    """
+    trade_id = str(trade.get("id") or "")
+    persisted = trade_tracker.get_trade_by_id(trade_id)
+    if not persisted:
+        logger.warning(f"Result notification skipped — trade {trade_id or '<missing>'} not found.")
+        return False
+
+    expected_status = _RESULT_EVENT_STATUS.get(event)
+    if expected_status:
+        if (
+            trade_tracker.is_active_trade(persisted)
+            or persisted.get("status") != expected_status
+        ):
+            logger.warning(
+                f"[{persisted.get('timeframe', '?')}] {event} notification skipped — "
+                f"trade {trade_id} is not terminal "
+                f"(status={persisted.get('status')!r})."
+            )
+            return False
+
+    if (
+        persisted.get("result_notification_sent_at")
+        or persisted.get("result_notification_pending") is False
+    ):
+        logger.info(
+            f"[{persisted.get('timeframe', '?')}] Result notification already sent "
+            f"for trade {trade_id}; skipping duplicate."
+        )
+        return False
+
+    delivered = await _send_result_image(
+        bot, subs, persisted, event, exit_price
+    )
+    if delivered:
+        trade_tracker.mark_result_notification_sent(trade_id)
+    return delivered
+
+
+def _pending_result_event(trade: dict) -> Optional[str]:
+    """Map a persisted terminal result to its notification event."""
+    status = trade.get("status")
+    return next(
+        (event for event, expected in _RESULT_EVENT_STATUS.items() if expected == status),
+        None,
+    )
 
 
 async def send_market_conditions_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -967,7 +1037,11 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                         tf_extremes[tf] = extremes
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
+            event_trade_ids: set[str] = set()
             for ev in events:
+                event_trade_id = str(ev["trade"].get("id") or "")
+                if event_trade_id:
+                    event_trade_ids.add(event_trade_id)
                 closed_tf = ev["trade"].get("timeframe")
                 if ev["event"] == "EXPIRED":
                     # Silently release the lock — no message sent for expired trades.
@@ -978,7 +1052,9 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                         clear_signal_lock(closed_tf)
                         tfs_closed_this_cycle.add(closed_tf)
                     continue
-                await _send_result_image(bot, subs, ev["trade"], ev["event"], ev["exit_price"])
+                await _send_verified_result_event(
+                    bot, subs, ev["trade"], ev["event"], ev["exit_price"]
+                )
                 # TP1 is a partial milestone, not a closed trade. Keep the
                 # timeframe locked while TP2/TP3 is still being tracked.
                 # Only terminal events release the entry lock.
@@ -990,6 +1066,27 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     logger.info(
                         f"[{closed_tf}] {ev['event']} recorded — trade remains active; "
                         "entry lock retained."
+                    )
+
+            # A terminal trade remains pending when Telegram delivery failed.
+            # Retry it on a later scan, but never re-send an event already
+            # handled during this cycle.
+            for pending_trade in trade_tracker.get_pending_result_notifications():
+                pending_id = str(pending_trade.get("id") or "")
+                if not pending_id or pending_id in event_trade_ids:
+                    continue
+                pending_event = _pending_result_event(pending_trade)
+                if pending_event:
+                    await _send_verified_result_event(
+                        bot,
+                        subs,
+                        pending_trade,
+                        pending_event,
+                        float(
+                            pending_trade.get("sl")
+                            or pending_trade.get("entry")
+                            or 0.0
+                        ),
                     )
     except Exception as e:
         logger.error(f"Trade check failed: {e}")

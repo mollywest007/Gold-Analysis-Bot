@@ -113,6 +113,50 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["SL"])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "sl_hit")
 
+    def test_stop_event_closes_once_and_marks_notification_pending(self):
+        self.assertTrue(self._open_buy(timeframe="M15"))
+
+        events = trade_tracker.check_trades(
+            100.0,
+            tf_extremes={"M15": (101.0, 89.0)},
+        )
+        self.assertEqual([event["event"] for event in events], ["SL"])
+
+        trade = trade_tracker.get_trade_by_id(events[0]["trade"]["id"])
+        self.assertFalse(trade_tracker.is_active_trade(trade))
+        self.assertEqual(trade["status"], "sl_hit")
+        self.assertTrue(trade["result_notification_pending"])
+
+        # A terminal record cannot emit the same SL event again.
+        self.assertEqual(
+            trade_tracker.check_trades(
+                100.0,
+                tf_extremes={"M15": (101.0, 89.0)},
+            ),
+            [],
+        )
+        self.assertTrue(
+            trade_tracker.mark_result_notification_sent(trade["id"])
+        )
+        self.assertFalse(
+            trade_tracker.mark_result_notification_sent(trade["id"])
+        )
+        self.assertEqual(trade_tracker.get_pending_result_notifications(), [])
+
+    def test_invalid_sl_geometry_cannot_close_a_trade(self):
+        self.assertTrue(self._open_buy(timeframe="M15"))
+        trades = trade_tracker.get_all_trades()
+        trades[0]["sl"] = 110.0
+        with open(self.tmp.name, "w") as f:
+            json.dump({"trades": trades}, f)
+
+        events = trade_tracker.check_trades(
+            100.0,
+            tf_extremes={"M15": (120.0, 80.0)},
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
     def test_reentry_is_allowed_after_genuine_terminal_tp2(self):
         self.assertTrue(self._open_buy(tp3=None))
         events = trade_tracker.check_trades(

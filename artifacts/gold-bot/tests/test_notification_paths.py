@@ -48,6 +48,102 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_exit_extremes_ignore_old_post_entry_wicks(self):
+        data = SimpleNamespace(
+            highs=[500.0, 111.0, 112.0, 113.0, 114.0],
+            lows=[1.0, 99.0, 98.0, 97.0, 96.0],
+            timestamps=[100.0, 200.0, 300.0, 400.0, 500.0],
+            is_simulated=False,
+        )
+
+        self.assertEqual(
+            alerts._post_entry_tf_extremes(
+                data,
+                current_price=110.0,
+                opened_at=150.0,
+            ),
+            (114.0, 96.0),
+        )
+
+    async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
+        bot = AsyncMock()
+        active_trade = {
+            "id": "active-sl",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "open",
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_trade_by_id",
+            return_value=active_trade,
+        ), patch.object(
+            alerts,
+            "_send_result_image",
+            new=AsyncMock(),
+        ) as send_result:
+            delivered = await alerts._send_verified_result_event(
+                bot,
+                {123},
+                active_trade,
+                "SL",
+                90.0,
+            )
+
+        self.assertFalse(delivered)
+        send_result.assert_not_awaited()
+        bot.send_photo.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    async def test_terminal_sl_result_is_sent_once_only(self):
+        bot = AsyncMock()
+        closed_trade = {
+            "id": "closed-sl",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "sl_hit",
+            "result_notification_pending": True,
+        }
+        already_sent = {
+            **closed_trade,
+            "result_notification_pending": False,
+            "result_notification_sent_at": 123.0,
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_trade_by_id",
+            side_effect=[closed_trade, already_sent],
+        ), patch.object(
+            alerts,
+            "_send_result_image",
+            new=AsyncMock(return_value=True),
+        ) as send_result, patch.object(
+            alerts.trade_tracker,
+            "mark_result_notification_sent",
+            return_value=True,
+        ) as mark_sent:
+            first = await alerts._send_verified_result_event(
+                bot, {123}, closed_trade, "SL", 90.0
+            )
+            second = await alerts._send_verified_result_event(
+                bot, {123}, closed_trade, "SL", 90.0
+            )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        send_result.assert_awaited_once()
+        mark_sent.assert_called_once_with("closed-sl")
+
     def _analysis(self):
         return SimpleNamespace(
             kill_zone="",

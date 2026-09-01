@@ -28,6 +28,7 @@ _TF_MAX_AGE = {
     "MN1": 540 * 24 * 3600, # 18 months
 }
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
+_TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp3_hit"}
 
 
 def is_active_trade(trade: Dict[str, Any]) -> bool:
@@ -44,6 +45,19 @@ def is_active_trade(trade: Dict[str, Any]) -> bool:
         and bool(trade.get("tp3"))
         and not trade.get("tp3_hit")
     )
+
+
+def _mark_terminal(
+    trade: Dict[str, Any],
+    status: str,
+    close_reason: str,
+) -> None:
+    """Record an irreversible terminal transition and its result notification."""
+    trade["status"] = status
+    trade["closed_at"] = time.time()
+    trade["close_reason"] = close_reason
+    # The alert layer consumes this only after Telegram delivery succeeds.
+    trade["result_notification_pending"] = True
 
 
 def _load() -> List[Dict[str, Any]]:
@@ -163,6 +177,15 @@ def check_trades(current_price: float, recent_high: float = None,
     Returns a list of event dicts:
       {trade, event: 'TP1'|'TP2'|'SL', exit_price}
     """
+    try:
+        current_price = float(current_price)
+    except (TypeError, ValueError):
+        logger.warning("Trade check skipped — current price is invalid.")
+        return []
+    if current_price <= 0:
+        logger.warning("Trade check skipped — current price is unavailable.")
+        return []
+
     trades  = _load()
     events  = []
     changed = False
@@ -189,12 +212,43 @@ def check_trades(current_price: float, recent_high: float = None,
             continue
 
         d     = t["direction"]
-        entry = t["entry"]
-        sl    = t["sl"]
-        tp1   = t["tp1"]
-        tp2   = t["tp2"]
+        try:
+            entry = float(t["entry"])
+            sl = float(t["sl"])
+            tp1 = float(t["tp1"])
+            tp2 = float(t["tp2"])
+        except (TypeError, ValueError):
+            logger.warning(f"Trade {t.get('id')} skipped — invalid numeric levels.")
+            continue
+        if (
+            d == "BUY" and not sl < entry
+        ) or (
+            d == "SELL" and not sl > entry
+        ) or d not in ("BUY", "SELL"):
+            logger.warning(
+                f"Trade {t.get('id')} skipped — invalid {d} SL geometry "
+                f"(entry={entry} sl={sl})."
+            )
+            continue
 
         tf_hi, tf_lo = tf_extremes.get(t.get("timeframe"), (None, None))
+        try:
+            if tf_hi is not None:
+                tf_hi = float(tf_hi)
+            if tf_lo is not None:
+                tf_lo = float(tf_lo)
+        except (TypeError, ValueError):
+            tf_hi = tf_lo = None
+        if (
+            tf_hi is not None
+            and tf_lo is not None
+            and (tf_hi <= 0 or tf_lo <= 0 or tf_lo > tf_hi)
+        ):
+            logger.warning(
+                f"Trade {t.get('id')} skipped candle extremes — "
+                f"invalid range hi={tf_hi} lo={tf_lo}."
+            )
+            tf_hi = tf_lo = None
 
         # SL detection uses candle extremes (catches brief wicks through the
         # stop that already retraced before the next spot-price poll).
@@ -254,7 +308,7 @@ def check_trades(current_price: float, recent_high: float = None,
             else:
                 be_hit = sl_hi >= entry
             if be_hit:
-                t["status"] = "tp1_sl_hit"
+                _mark_terminal(t, "tp1_sl_hit", "break_even_stop")
                 changed = True
                 events.append({"trade": t, "event": "TP1_SL", "exit_price": entry})
                 logger.info(f"Trade {t['id']} break-even SL triggered after TP1 @ {entry:.2f}")
@@ -263,12 +317,12 @@ def check_trades(current_price: float, recent_high: float = None,
         if sl_hit:
             # If TP1 was already captured, mark distinctly so history shows TP1→SL
             if t.get("tp1_hit"):
-                t["status"] = "tp1_sl_hit"
+                _mark_terminal(t, "tp1_sl_hit", "stop_loss")
                 changed = True
                 events.append({"trade": t, "event": "TP1_SL", "exit_price": sl_exit})
                 logger.info(f"Trade {t['id']} SL hit after TP1 partial @ {sl_exit:.2f}")
             else:
-                t["status"] = "sl_hit"
+                _mark_terminal(t, "sl_hit", "stop_loss")
                 changed = True
                 events.append({"trade": t, "event": "SL", "exit_price": sl_exit})
                 logger.info(f"Trade {t['id']} SL hit @ {sl_exit:.2f}")
@@ -277,7 +331,7 @@ def check_trades(current_price: float, recent_high: float = None,
             t["tp3_hit"] = True
             t["tp2_hit"] = True
             t["tp1_hit"] = True
-            t["status"]  = "tp3_hit"
+            _mark_terminal(t, "tp3_hit", "take_profit")
             changed = True
             events.append({"trade": t, "event": "TP3", "exit_price": tp3_exit})
             logger.info(f"Trade {t['id']} TP3 hit @ {tp3_exit:.2f}")
@@ -317,6 +371,45 @@ def get_all_trades() -> List[Dict[str, Any]]:
     """Return all trades, newest first."""
     trades = _load()
     return sorted(trades, key=lambda t: t.get("opened_at", 0), reverse=True)
+
+
+def get_trade_by_id(trade_id: str) -> Dict[str, Any] | None:
+    """Return the current persisted record for one trade."""
+    trade_id = str(trade_id or "")
+    if not trade_id:
+        return None
+    return next(
+        (trade for trade in _load() if str(trade.get("id") or "") == trade_id),
+        None,
+    )
+
+
+def mark_result_notification_sent(trade_id: str) -> bool:
+    """Consume a terminal result notification only after delivery succeeds."""
+    trades = _load()
+    trade_id = str(trade_id or "")
+    for trade in trades:
+        if str(trade.get("id") or "") != trade_id:
+            continue
+        if is_active_trade(trade) or trade.get("status") not in _TERMINAL_STATUSES:
+            return False
+        if not trade.get("result_notification_pending"):
+            return False
+        trade["result_notification_pending"] = False
+        trade["result_notification_sent_at"] = time.time()
+        _save(trades)
+        return True
+    return False
+
+
+def get_pending_result_notifications() -> List[Dict[str, Any]]:
+    """Return newly closed trades whose result card still needs delivery."""
+    return [
+        trade for trade in get_all_trades()
+        if trade.get("result_notification_pending")
+        and trade.get("status") in _TERMINAL_STATUSES
+        and not is_active_trade(trade)
+    ]
 
 
 def get_active_trades() -> List[Dict[str, Any]]:
