@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src import trade_tracker
 from src.utils.formatting import TG_MSG_LIMIT, active_trades_card
 
 
@@ -31,6 +32,23 @@ def _trade(**overrides):
 
 
 class ActivePanelTests(unittest.TestCase):
+    def test_account_panel_excludes_another_profiles_legacy_trade(self):
+        trades = [
+            _trade(mode="scalp", timeframe="M15", opened_at=2000),
+            _trade(mode="intraday", timeframe="H1", opened_at=1000),
+        ]
+
+        with patch.object(trade_tracker, "get_all_trades", return_value=trades):
+            account_trades = trade_tracker.get_active_trades_for_account(
+                8039158711,
+                mode="intraday",
+                timeframe="H1",
+            )
+
+        self.assertEqual(len(account_trades), 1)
+        self.assertEqual(account_trades[0]["mode"], "intraday")
+        self.assertEqual(account_trades[0]["timeframe"], "H1")
+
     def test_unavailable_price_never_becomes_zero_pnl(self):
         with patch("src.utils.formatting.time.time", return_value=1100):
             card = active_trades_card([_trade()], 0.0)
