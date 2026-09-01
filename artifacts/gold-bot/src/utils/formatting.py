@@ -339,8 +339,9 @@ def signal_card(a: MarketAnalysis) -> str:
 
     # ── Alert cooldown status ──────────────────────────────────────────────────
     try:
-        from src.alerts import get_signal_lock_info
-        lock_info = get_signal_lock_info(a.timeframe)
+        from src.alerts import get_signal_lock_info, _load_account_state
+        state = _load_account_state(account_id) if account_id is not None else None
+        lock_info = get_signal_lock_info(a.timeframe, state=state)
         if lock_info:
             lines += ["──────────────────────────────────", f"  {lock_info}"]
     except Exception:
@@ -355,7 +356,7 @@ def signal_card(a: MarketAnalysis) -> str:
 
 # ─── ANALYSIS CARD ────────────────────────────────────────────────────────────
 
-def analysis_card(a: MarketAnalysis) -> str:
+def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     ms = market_status()
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
@@ -1253,7 +1254,7 @@ def outlook_card(a: MarketAnalysis) -> str:
     # breach or a confirmed structural invalidation does.
     try:
         from src import trade_tracker
-        open_trades = trade_tracker.get_active_trades()
+        open_trades = trade_tracker.get_active_trades(account_id)
     except Exception:
         open_trades = []
     matching_trade = next((t for t in open_trades if t.get("timeframe") == a.timeframe), None)

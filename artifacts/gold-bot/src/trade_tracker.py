@@ -6,8 +6,10 @@ Fires WIN or LOSS result images via Telegram when a level is hit.
 import json
 import logging
 import os
+import threading
 import time
 from typing import List, Dict, Any, Set
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,25 @@ _TF_MAX_AGE = {
 }
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
 _TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp3_hit"}
+_STORE_LOCK = threading.RLock()
+
+
+def _account_key(account_id: int | str | None) -> str | None:
+    """Normalize Telegram chat IDs for exact owner comparisons."""
+    if account_id is None:
+        return None
+    return str(int(account_id))
+
+
+def _belongs_to_account(trade: Dict[str, Any], account_id: int | str | None) -> bool:
+    """Return whether a record belongs to the requested account.
+
+    Unowned records are intentionally not treated as belonging to any account.
+    The old data format cannot prove which user created a trade, so exposing
+    those records would reintroduce cross-account leakage.
+    """
+    key = _account_key(account_id)
+    return key is None or str(trade.get("account_id") or "") == key
 
 
 def is_active_trade(trade: Dict[str, Any]) -> bool:
@@ -61,17 +82,21 @@ def _mark_terminal(
 
 
 def _load() -> List[Dict[str, Any]]:
-    try:
-        with open(TRADES_PATH, "r") as f:
-            return json.load(f).get("trades", [])
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+    with _STORE_LOCK:
+        try:
+            with open(TRADES_PATH, "r") as f:
+                data = json.load(f)
+            trades = data.get("trades", []) if isinstance(data, dict) else []
+            return trades if isinstance(trades, list) else []
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
 
 
 def _save(trades: List[Dict[str, Any]]) -> None:
-    os.makedirs(os.path.dirname(TRADES_PATH), exist_ok=True)
-    with open(TRADES_PATH, "w") as f:
-        json.dump({"trades": trades}, f, indent=2)
+    with _STORE_LOCK:
+        os.makedirs(os.path.dirname(TRADES_PATH), exist_ok=True)
+        with open(TRADES_PATH, "w") as f:
+            json.dump({"trades": trades}, f, indent=2)
 
 
 def open_trade(
@@ -87,6 +112,7 @@ def open_trade(
     atr: float = 0.0,
     mode: str = "",
     limit_entry: float = None,
+    account_id: int | str | None = None,
 ) -> bool:
     trades = _load()
 
@@ -121,23 +147,28 @@ def open_trade(
         )
         return False
 
-    # One timeframe represents one trade plan.  Never replace or stack an
-    # active trade just because a later analysis moved the entry by an ATR:
-    # that creates duplicate BUY/SELL entries and changes the TP/SL plan the
-    # user was already following.  The alert layer owns direction changes and
-    # waits for this trade to close before opening another.
+    # One timeframe represents one trade plan per account. Never replace or
+    # stack an active trade just because a later analysis moved the entry.
+    # Direct callers from older maintenance/test code may omit an owner. Such
+    # records are stored as unassigned and are never returned by any
+    # account-scoped query. All Telegram entry paths pass a real account_id.
+    account_key = _account_key(account_id)
+
     for t in trades:
         if (
             is_active_trade(t)
             and t.get("timeframe") == timeframe
+            and _belongs_to_account(t, account_key)
         ):
             logger.info(
                 f"[{timeframe}] Trade open skipped — active {t.get('direction')} "
-                f"trade {t.get('id')} already owns this timeframe."
+                f"trade {t.get('id')} already owns this timeframe for account {account_key}."
             )
             return False
+
     trade = {
-        "id":          str(int(time.time() * 1000)),  # millisecond precision avoids duplicate IDs
+        "id":          uuid4().hex,
+        "account_id":  account_key,
         "direction":   direction,
         "entry":       entry,
         # Optional pullback/limit level shown in the alert. ``entry`` remains
@@ -167,7 +198,8 @@ def open_trade(
 
 def check_trades(current_price: float, recent_high: float = None,
                   recent_low: float = None,
-                  tf_extremes: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+                  tf_extremes: Dict[str, Any] = None,
+                  account_id: int | str | None = None) -> List[Dict[str, Any]]:
     """
     Evaluate all open trades against current_price.
 
@@ -198,11 +230,14 @@ def check_trades(current_price: float, recent_high: float = None,
         return []
 
     trades  = _load()
+    account_key = _account_key(account_id)
     events  = []
     changed = False
     tf_extremes = tf_extremes or {}
 
     for t in trades:
+        if account_key is not None and not _belongs_to_account(t, account_key):
+            continue
         status = t.get("status", "")
         # Track: open, TP1 waiting for TP2, TP2 waiting for TP3 (when tp3 exists)
         if status == "tp2_hit" and not t.get("tp3"):
@@ -374,39 +409,54 @@ def check_trades(current_price: float, recent_high: float = None,
     return events
 
 
-def open_trade_count() -> int:
+def open_trade_count(account_id: int | str | None = None) -> int:
     trades = _load()
     count = 0
     for t in trades:
-        s = t.get("status")
-        if is_active_trade(t):
+        if _belongs_to_account(t, account_id) and is_active_trade(t):
             count += 1
     return count
 
 
-def get_all_trades() -> List[Dict[str, Any]]:
-    """Return all trades, newest first."""
-    trades = _load()
+def get_all_trades(account_id: int | str | None = None) -> List[Dict[str, Any]]:
+    """Return account-owned trades, newest first.
+
+    Omitting account_id is reserved for process-level maintenance and migration
+    code. Telegram-facing code must always pass the current chat ID.
+    """
+    trades = [t for t in _load() if _belongs_to_account(t, account_id)]
     return sorted(trades, key=lambda t: t.get("opened_at", 0), reverse=True)
 
 
-def get_trade_by_id(trade_id: str) -> Dict[str, Any] | None:
+def get_trade_by_id(
+    trade_id: str, account_id: int | str | None = None
+) -> Dict[str, Any] | None:
     """Return the current persisted record for one trade."""
     trade_id = str(trade_id or "")
     if not trade_id:
         return None
     return next(
-        (trade for trade in _load() if str(trade.get("id") or "") == trade_id),
+        (
+            trade for trade in _load()
+            if str(trade.get("id") or "") == trade_id
+            and _belongs_to_account(trade, account_id)
+        ),
         None,
     )
 
 
-def mark_result_notification_sent(trade_id: str) -> bool:
+def mark_result_notification_sent(
+    trade_id: str, account_id: int | str | None = None
+) -> bool:
     """Consume a terminal result notification only after delivery succeeds."""
     trades = _load()
     trade_id = str(trade_id or "")
+    account_key = _account_key(account_id)
     for trade in trades:
-        if str(trade.get("id") or "") != trade_id:
+        if (
+            str(trade.get("id") or "") != trade_id
+            or (account_key is not None and not _belongs_to_account(trade, account_key))
+        ):
             continue
         if is_active_trade(trade) or trade.get("status") not in _TERMINAL_STATUSES:
             return False
@@ -423,17 +473,22 @@ def mark_cooldown_notification_pending(
     trade_id: str,
     cooldown_until: float,
     cooldown_duration: float,
+    account_id: int | str | None = None,
 ) -> bool:
     """Record that a confirmed SL now needs a cooldown notification."""
     trades = _load()
     trade_id = str(trade_id or "")
+    account_key = _account_key(account_id)
     try:
         cooldown_until = float(cooldown_until)
         cooldown_duration = float(cooldown_duration)
     except (TypeError, ValueError):
         return False
     for trade in trades:
-        if str(trade.get("id") or "") != trade_id:
+        if (
+            str(trade.get("id") or "") != trade_id
+            or (account_key is not None and not _belongs_to_account(trade, account_key))
+        ):
             continue
         if (
             is_active_trade(trade)
@@ -449,12 +504,18 @@ def mark_cooldown_notification_pending(
     return False
 
 
-def mark_cooldown_notification_sent(trade_id: str) -> bool:
+def mark_cooldown_notification_sent(
+    trade_id: str, account_id: int | str | None = None
+) -> bool:
     """Consume a cooldown notification only after Telegram delivery succeeds."""
     trades = _load()
     trade_id = str(trade_id or "")
+    account_key = _account_key(account_id)
     for trade in trades:
-        if str(trade.get("id") or "") != trade_id:
+        if (
+            str(trade.get("id") or "") != trade_id
+            or (account_key is not None and not _belongs_to_account(trade, account_key))
+        ):
             continue
         if (
             is_active_trade(trade)
@@ -469,34 +530,38 @@ def mark_cooldown_notification_sent(trade_id: str) -> bool:
     return False
 
 
-def get_pending_cooldown_notifications() -> List[Dict[str, Any]]:
+def get_pending_cooldown_notifications(
+    account_id: int | str | None = None,
+) -> List[Dict[str, Any]]:
     """Return confirmed SL closures whose cooldown notice needs delivery."""
     return [
-        trade for trade in get_all_trades()
+        trade for trade in get_all_trades(account_id)
         if trade.get("cooldown_notification_pending")
         and trade.get("status") in {"sl_hit", "tp1_sl_hit"}
         and not is_active_trade(trade)
     ]
 
 
-def get_pending_result_notifications() -> List[Dict[str, Any]]:
+def get_pending_result_notifications(
+    account_id: int | str | None = None,
+) -> List[Dict[str, Any]]:
     """Return newly closed trades whose result card still needs delivery."""
     return [
-        trade for trade in get_all_trades()
+        trade for trade in get_all_trades(account_id)
         if trade.get("result_notification_pending")
         and trade.get("status") in _TERMINAL_STATUSES
         and not is_active_trade(trade)
     ]
 
 
-def get_active_trades() -> List[Dict[str, Any]]:
+def get_active_trades(account_id: int | str | None = None) -> List[Dict[str, Any]]:
     """Return every trade that still owns its timeframe.
 
     Keep this query next to ``is_active_trade`` so the scanner, /active panel,
     reminders, and chart context cannot disagree about whether TP2 is terminal
     or still being managed toward TP3.
     """
-    return [t for t in get_all_trades() if is_active_trade(t)]
+    return [t for t in get_all_trades(account_id) if is_active_trade(t)]
 
 
 def get_active_trades_for_account(
@@ -510,30 +575,14 @@ def get_active_trades_for_account(
     records are included only when their frozen mode and timeframe match the
     requesting account's profile.
     """
-    account_key = str(account_id)
-    active = get_active_trades()
-    owned = [
-        trade for trade in active
-        if str(trade.get("account_id") or "") == account_key
-    ]
-    legacy = [
-        trade for trade in active
-        if not trade.get("account_id")
-        and mode
-        and timeframe
-        and trade.get("mode") == mode
-        and trade.get("timeframe") == timeframe
-    ]
-    return sorted(
-        owned + legacy,
-        key=lambda trade: trade.get("opened_at", 0),
-        reverse=True,
-    )
+    # Legacy records without an owner are deliberately excluded. Matching
+    # mode/timeframe is not evidence of ownership and would leak positions.
+    return get_active_trades(account_id)
 
 
-def get_stats() -> Dict[str, Any]:
-    """Return win/loss/open counts and win rate across all closed trades."""
-    trades = _load()
+def get_stats(account_id: int | str | None = None) -> Dict[str, Any]:
+    """Return win/loss/open counts and win rate for one account."""
+    trades = get_all_trades(account_id)
     wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
     open_  = sum(1 for t in trades if is_active_trade(t))

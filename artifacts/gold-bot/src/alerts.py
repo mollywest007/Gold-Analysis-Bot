@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from typing import Set, Dict, Optional
 
 from telegram import InputFile
@@ -11,7 +12,12 @@ from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
-from src.mode_manager import get_mode, get_mode_config, get_timeframe
+from src.mode_manager import get_mode_config
+from src.user_preferences import (
+    get_mode as get_user_mode,
+    get_mode_config as get_user_mode_config,
+    get_timeframe as get_user_timeframe,
+)
 from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
@@ -92,14 +98,16 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
-def get_scan_timeframes() -> list[str]:
+def get_scan_timeframes(account_id: int | None = None) -> list[str]:
     """Return the user's selected timeframe for automatic alert scanning.
 
     Reports can still request every timeframe in a mode, but background alerts
     must honor the timeframe selected in Settings instead of silently scanning
     M5 whenever Scalp mode is active.
     """
-    return [get_timeframe()]
+    if account_id is None:
+        return [get_mode_config().preferred_timeframe]
+    return [get_user_timeframe(account_id)]
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -139,6 +147,96 @@ _close_notif_sent_at: float = 0.0
 NOTIF_COOLDOWN = 30 * 60
 _signal_state_mode: str = ""
 _signal_state_timeframe: str = ""
+
+
+@dataclass
+class AccountAlertState:
+    """All alert locks and reminder state for one Telegram account."""
+
+    active_signal: Dict[str, str] = field(default_factory=dict)
+    tf_last_fired: Dict[str, float] = field(default_factory=dict)
+    pending_signal: Dict[str, str] = field(default_factory=dict)
+    sl_cooldown_until: Dict[str, float] = field(default_factory=dict)
+    forming_alert_sent: Dict[str, str] = field(default_factory=dict)
+    momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
+    reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
+    mode: str = ""
+    timeframe: str = ""
+
+
+def _state_from_record(record: dict) -> AccountAlertState:
+    """Deserialize one account's state without sharing mutable containers."""
+    if not isinstance(record, dict):
+        return AccountAlertState()
+    reminded = record.get("reminded_trade_ids", {})
+    return AccountAlertState(
+        active_signal=dict(record.get("active_signal") or {}),
+        tf_last_fired=dict(record.get("last_fired") or {}),
+        pending_signal=dict(record.get("pending_signal") or {}),
+        sl_cooldown_until=dict(record.get("sl_cooldown_until") or {}),
+        forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
+        momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
+        reminded_trade_ids={
+            str(trade_id): set(milestones or [])
+            for trade_id, milestones in reminded.items()
+        } if isinstance(reminded, dict) else {},
+        mode=str(record.get("mode") or ""),
+        timeframe=str(record.get("timeframe") or ""),
+    )
+
+
+def _state_record(state: AccountAlertState) -> dict:
+    return {
+        "mode": state.mode,
+        "timeframe": state.timeframe,
+        "active_signal": state.active_signal,
+        "last_fired": state.tf_last_fired,
+        "pending_signal": state.pending_signal,
+        "sl_cooldown_until": state.sl_cooldown_until,
+        "forming_alert_sent": state.forming_alert_sent,
+        "momentum_shift_warned": state.momentum_shift_warned,
+        "reminded_trade_ids": {
+            trade_id: sorted(milestones)
+            for trade_id, milestones in state.reminded_trade_ids.items()
+        },
+    }
+
+
+def _load_account_state(account_id: int) -> AccountAlertState:
+    """Load only the state namespace owned by one Telegram account."""
+    try:
+        with open(SIGNAL_STATE_PATH) as f:
+            payload = json.load(f)
+        accounts = payload.get("accounts", {}) if isinstance(payload, dict) else {}
+        return _state_from_record(accounts.get(str(int(account_id)), {}))
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        return AccountAlertState()
+
+
+def _save_account_state(account_id: int, state: AccountAlertState) -> None:
+    """Persist one account namespace while preserving other accounts."""
+    os.makedirs(os.path.dirname(SIGNAL_STATE_PATH), exist_ok=True)
+    try:
+        try:
+            with open(SIGNAL_STATE_PATH) as f:
+                payload = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        accounts = payload.get("accounts")
+        if not isinstance(accounts, dict):
+            accounts = {}
+        accounts[str(int(account_id))] = _state_record(state)
+        payload["accounts"] = accounts
+        # Remove the old global namespace so it can never be consumed as a
+        # user's state after an upgrade.
+        for key in ("mode", "timeframe", "active_signal", "last_fired"):
+            payload.pop(key, None)
+        with open(SIGNAL_STATE_PATH, "w") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not save alert state for account %s: %s", account_id, e)
 
 
 def _is_authorized(chat_id: int) -> bool:
@@ -232,55 +330,84 @@ def _load_signal_state() -> None:
         logger.warning(f"Signal state file corrupted ({e}) — starting fresh.")
 
 
-def _save_signal_state() -> None:
-    """Write signal state to disk so restarts don't re-fire stale signals."""
-    os.makedirs(os.path.dirname(SIGNAL_STATE_PATH), exist_ok=True)
-    with open(SIGNAL_STATE_PATH, "w") as f:
-        json.dump({
-            "mode": get_mode(),
-            "timeframe": get_timeframe(),
-            "active_signal": _active_signal,
-            "last_fired": _tf_last_fired,
-        }, f)
+def _save_signal_state(
+    account_id: int | None = None, state: AccountAlertState | None = None
+) -> None:
+    """Write one account's signal state to disk."""
+    if account_id is None or state is None:
+        return
+    _save_account_state(account_id, state)
 
 
-def _sync_mode_state() -> None:
+def _sync_mode_state(
+    account_id: int | None = None, state: AccountAlertState | None = None
+) -> None:
     """Clear signal locks when the strategy mode or timeframe changes.
 
     Open trades remain in the tracker and continue to receive TP/SL checks;
     only entry locks and forming alerts are mode/timeframe-specific.
     """
     global _signal_state_mode, _signal_state_timeframe
-    active_mode = get_mode()
-    active_timeframe = get_timeframe()
+    if account_id is None or state is None:
+        # Compatibility path for older unit tests; production scans always
+        # provide an explicit account state.
+        active_mode = get_mode_config().name
+        active_timeframe = get_mode_config().preferred_timeframe
+        previous_mode = _signal_state_mode
+        previous_timeframe = _signal_state_timeframe
+        active_signal = _active_signal
+        tf_last_fired = _tf_last_fired
+        forming_alert_sent = _forming_alert_sent
+        momentum_shift_warned = _momentum_shift_warned
+        sl_cooldown_until = _sl_cooldown_until
+    else:
+        active_mode = get_user_mode(account_id)
+        active_timeframe = get_user_timeframe(account_id)
+        previous_mode = state.mode
+        previous_timeframe = state.timeframe
+        active_signal = state.active_signal
+        tf_last_fired = state.tf_last_fired
+        forming_alert_sent = state.forming_alert_sent
+        momentum_shift_warned = state.momentum_shift_warned
+        sl_cooldown_until = state.sl_cooldown_until
     settings_changed = (
-        _signal_state_mode
+        previous_mode
         and (
-            _signal_state_mode != active_mode
-            or _signal_state_timeframe != active_timeframe
+            previous_mode != active_mode
+            or previous_timeframe != active_timeframe
         )
     )
     if settings_changed:
         logger.info(
             f"Analysis settings changed "
-            f"{_signal_state_mode}/{_signal_state_timeframe} → "
+            f"{previous_mode}/{previous_timeframe} → "
             f"{active_mode}/{active_timeframe}; clearing stale entry locks."
         )
-        _active_signal.clear()
-        _tf_last_fired.clear()
-        _forming_alert_sent.clear()
-        _momentum_shift_warned.clear()
-        _sl_cooldown_until.clear()
+        active_signal.clear()
+        tf_last_fired.clear()
+        forming_alert_sent.clear()
+        momentum_shift_warned.clear()
+        sl_cooldown_until.clear()
     if (
-        _signal_state_mode != active_mode
-        or _signal_state_timeframe != active_timeframe
+        previous_mode != active_mode
+        or previous_timeframe != active_timeframe
     ):
-        _signal_state_mode = active_mode
-        _signal_state_timeframe = active_timeframe
-        _save_signal_state()
+        if state is not None:
+            state.mode = active_mode
+            state.timeframe = active_timeframe
+            _save_signal_state(account_id, state)
+        else:
+            _signal_state_mode = active_mode
+            _signal_state_timeframe = active_timeframe
+            _save_signal_state()
 
 
-def _should_send(tf: str, action: str) -> bool:
+def _should_send(
+    tf: str,
+    action: str,
+    state: AccountAlertState | None = None,
+    account_id: int | None = None,
+) -> bool:
     """
     Fire alert whenever the direction is new for this TF.
     Same direction = same trade still open, no re-alert until it resets.
@@ -290,16 +417,19 @@ def _should_send(tf: str, action: str) -> bool:
     Post-SL cooldown: after a loss, block re-entry for 2 candle periods.
     """
     # ── Post-SL cooldown check ─────────────────────────────────────────────────
-    cooldown_until = _sl_cooldown_until.get(tf, 0.0)
+    sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
+    pending_signal = state.pending_signal if state else _pending_signal
+    active_signal = state.active_signal if state else _active_signal
+    cooldown_until = sl_cooldown_until.get(tf, 0.0)
     if time.time() < cooldown_until:
         remaining = int((cooldown_until - time.time()) // 60)
         logger.info(f"[{tf}] Post-SL cooldown active — {remaining}m remaining. Skipping {action}.")
         return False
 
-    if tf in _pending_signal:
+    if tf in pending_signal:
         logger.info(
             f"[{tf}] Suppressed — {action} is already being delivered "
-            f"({_pending_signal[tf]} claim in progress)."
+            f"({pending_signal[tf]} claim in progress)."
         )
         return False
 
@@ -310,7 +440,7 @@ def _should_send(tf: str, action: str) -> bool:
     # dropping the change in bias.  It must not open a second trade.
     active_trade = next(
         (
-            t for t in trade_tracker.get_all_trades()
+            t for t in trade_tracker.get_all_trades(account_id)
             if trade_tracker.is_active_trade(t) and t.get("timeframe") == tf
         ),
         None,
@@ -328,24 +458,31 @@ def _should_send(tf: str, action: str) -> bool:
         )
         return True
 
-    prev = _active_signal.get(tf)
+    prev = active_signal.get(tf)
     if prev == action:
-        last_fired = _tf_last_fired.get(tf, 0.0)
+        last_fired = (state.tf_last_fired if state else _tf_last_fired).get(
+            tf, 0.0
+        )
         age = time.time() - last_fired
         if age > SIGNAL_LOCK_MAX_AGE:
             logger.warning(
                 f"[{tf}] Signal lock expired after {age / 3600:.1f}h — "
                 f"auto-clearing stale {prev} lock so next entry fires freely."
             )
-            _active_signal.pop(tf, None)
-            _tf_last_fired.pop(tf, None)
+            active_signal.pop(tf, None)
+            (state.tf_last_fired if state else _tf_last_fired).pop(tf, None)
             return True
         logger.info(f"[{tf}] Suppressed — {action} already active on this TF (same trade).")
         return False
     return True
 
 
-def clear_signal_lock(tf: str, after_sl: bool = False) -> Optional[float]:
+def clear_signal_lock(
+    tf: str,
+    after_sl: bool = False,
+    state: AccountAlertState | None = None,
+    account_id: int | None = None,
+) -> Optional[float]:
     """Call after a trade closes so the next signal on this timeframe fires freely.
 
     after_sl=True: apply a 2-candle cooldown before allowing re-entry.
@@ -354,24 +491,29 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> Optional[float]:
 
     Returns the cooldown deadline when a cooldown was started.
     """
-    _active_signal.pop(tf, None)
-    _pending_signal.pop(tf, None)
-    _tf_last_fired.pop(tf, None)
+    active_signal = state.active_signal if state else _active_signal
+    pending_signal = state.pending_signal if state else _pending_signal
+    tf_last_fired = state.tf_last_fired if state else _tf_last_fired
+    momentum_shift_warned = state.momentum_shift_warned if state else _momentum_shift_warned
+    sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
+    active_signal.pop(tf, None)
+    pending_signal.pop(tf, None)
+    tf_last_fired.pop(tf, None)
     # Clear momentum-shift warning state so the next shift warns fresh
-    _momentum_shift_warned.pop(tf, None)
+    momentum_shift_warned.pop(tf, None)
     if after_sl:
         period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
         cooldown = _SL_COOLDOWN_CANDLES * period
         cooldown_until = time.time() + cooldown
-        _sl_cooldown_until[tf] = cooldown_until
+        sl_cooldown_until[tf] = cooldown_until
         logger.info(
             f"[{tf}] Signal lock cleared after SL — "
             f"post-SL cooldown {cooldown // 60:.0f}m before next entry."
         )
     else:
-        _sl_cooldown_until.pop(tf, None)
+        sl_cooldown_until.pop(tf, None)
         logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
-    _save_signal_state()
+    _save_signal_state(account_id, state)
     return cooldown_until if after_sl else None
 
 
@@ -414,18 +556,23 @@ def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
     return (current_price, current_price)
 
 
-def get_signal_lock_info(tf: str) -> str:
+def get_signal_lock_info(
+    tf: str, state: AccountAlertState | None = None
+) -> str:
     """Return a human-readable lock status for a timeframe, or '' if no lock."""
-    direction = _active_signal.get(tf)
+    active_signal = state.active_signal if state else _active_signal
+    tf_last_fired = state.tf_last_fired if state else _tf_last_fired
+    direction = active_signal.get(tf)
     if not direction:
         return ""
-    last_fired = _tf_last_fired.get(tf, 0.0)
+    last_fired = tf_last_fired.get(tf, 0.0)
     elapsed    = int((time.time() - last_fired) // 60)
     return f"Alert sent {elapsed}m ago ({direction}) — waiting for signal to reset"
 
 
 async def _send_setup_forming_alert(
-    bot, subs: Set[int], a, tf: str, forming_dir: str
+    bot, subs: Set[int], a, tf: str, forming_dir: str,
+    state: AccountAlertState | None = None,
 ) -> None:
     """
     Lightweight pre-signal notice — fires when 3 indicators agree but the full
@@ -433,8 +580,8 @@ async def _send_setup_forming_alert(
     and prepare a limit order, without committing to an entry.
     Only fires once per direction per TF; resets when direction changes.
     """
-    global _forming_alert_sent
-    if _forming_alert_sent.get(tf) == forming_dir:
+    forming_alert_sent = state.forming_alert_sent if state else _forming_alert_sent
+    if forming_alert_sent.get(tf) == forming_dir:
         return  # already warned this direction on this TF
 
     arrow = "📈" if forming_dir == "BUY" else "📉"
@@ -474,7 +621,7 @@ async def _send_setup_forming_alert(
         subs -= dead
         _save(subs)
     if delivered:
-        _forming_alert_sent[tf] = forming_dir
+        forming_alert_sent[tf] = forming_dir
         logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
     else:
         logger.warning(
@@ -486,14 +633,17 @@ async def _send_setup_forming_alert(
 async def _send_momentum_shift_warning(
     bot, subs: Set[int], trade: dict, tf: str, new_direction: str,
     *, confirmed: bool = False,
+    state: AccountAlertState | None = None,
 ) -> None:
     """Notify once when a new direction conflicts with an active trade.
 
     ``confirmed`` distinguishes a full reversal signal from a three-vote
     setup-forming warning so the Telegram card does not understate the signal.
     """
-    global _momentum_shift_warned
-    if _momentum_shift_warned.get(tf) == new_direction:
+    momentum_shift_warned = (
+        state.momentum_shift_warned if state else _momentum_shift_warned
+    )
+    if momentum_shift_warned.get(tf) == new_direction:
         return
 
     old_direction = trade.get("direction", "UNKNOWN")
@@ -520,7 +670,7 @@ async def _send_momentum_shift_warning(
         subs -= dead
         _save(subs)
     if delivered:
-        _momentum_shift_warned[tf] = new_direction
+        momentum_shift_warned[tf] = new_direction
         logger.info(
             f"[{tf}] Momentum shift warning sent — open {old_direction} "
             f"vs new {new_direction} bias."
@@ -702,6 +852,7 @@ def _is_verified_terminal_result(trade: dict, event: str) -> bool:
 
 async def _send_verified_result_event(
     bot, subs: Set[int], trade: dict, event: str, exit_price: float,
+    account_id: int | None = None,
 ) -> bool:
     """Send a result only for the current persisted, terminal trade record.
 
@@ -711,7 +862,11 @@ async def _send_verified_result_event(
     for a still-active trade.
     """
     trade_id = str(trade.get("id") or "")
-    persisted = trade_tracker.get_trade_by_id(trade_id)
+    persisted = (
+        trade_tracker.get_trade_by_id(trade_id, account_id)
+        if account_id is not None
+        else trade_tracker.get_trade_by_id(trade_id)
+    )
     if not persisted:
         logger.warning(f"Result notification skipped — trade {trade_id or '<missing>'} not found.")
         return False
@@ -739,16 +894,24 @@ async def _send_verified_result_event(
         bot, subs, persisted, event, exit_price
     )
     if delivered:
-        trade_tracker.mark_result_notification_sent(trade_id)
+        if account_id is None:
+            trade_tracker.mark_result_notification_sent(trade_id)
+        else:
+            trade_tracker.mark_result_notification_sent(trade_id, account_id)
     return delivered
 
 
 async def _send_sl_cooldown_notification(
     bot, subs: Set[int], trade: dict, event: str,
+    account_id: int | None = None,
 ) -> bool:
     """Notify after a confirmed SL that this timeframe is on cooldown."""
     trade_id = str(trade.get("id") or "")
-    persisted = trade_tracker.get_trade_by_id(trade_id)
+    persisted = (
+        trade_tracker.get_trade_by_id(trade_id, account_id)
+        if account_id is not None
+        else trade_tracker.get_trade_by_id(trade_id)
+    )
     if not persisted or not _is_verified_terminal_result(persisted, event):
         logger.warning(
             f"[{trade.get('timeframe', '?')}] cooldown notification skipped — "
@@ -804,7 +967,10 @@ async def _send_sl_cooldown_notification(
         subs -= dead
         _save(subs)
     if delivered:
-        trade_tracker.mark_cooldown_notification_sent(trade_id)
+        if account_id is None:
+            trade_tracker.mark_cooldown_notification_sent(trade_id)
+        else:
+            trade_tracker.mark_cooldown_notification_sent(trade_id, account_id)
         logger.info(
             f"[{timeframe}] SL cooldown notification sent — "
             f"{remaining_text}."
@@ -1053,32 +1219,82 @@ async def send_startup_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        all_trades   = trade_tracker.get_all_trades()
-        open_trades  = trade_tracker.get_active_trades()
-        recent       = [t for t in all_trades if not trade_tracker.is_active_trade(t)][:5]
-        stats        = trade_tracker.get_stats()
-        text         = restart_summary_card(open_trades, recent, stats)
-        dead         = await _broadcast_text(bot, subs, text)
+        delivered = 0
+        dead: Set[int] = set()
+        for account_id in sorted(subs):
+            account_trades = trade_tracker.get_all_trades(account_id)
+            open_trades = trade_tracker.get_active_trades(account_id)
+            recent = [
+                t for t in account_trades
+                if not trade_tracker.is_active_trade(t)
+            ][:5]
+            stats = trade_tracker.get_stats(account_id)
+            text = restart_summary_card(open_trades, recent, stats)
+            account_dead, account_delivered = await _broadcast_text(
+                bot, {account_id}, text, return_result=True
+            )
+            dead.update(account_dead)
+            delivered += int(account_delivered)
         if dead:
             subs -= dead
             _save(subs)
-        _mark_startup_sent()
-        logger.info(f"Startup summary sent to {len(subs)} subscriber(s).")
+        if delivered:
+            _mark_startup_sent()
+        logger.info("Startup summary sent to %s subscriber(s).", delivered)
     except Exception as e:
         logger.error(f"Startup summary failed: {e}")
 
 
-async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _check_and_alert_once(
+    context: ContextTypes.DEFAULT_TYPE,
+    account_id: int | None = None,
+    state: AccountAlertState | None = None,
+) -> None:
+    """Run one isolated scan for one Telegram account.
+
+    The optional no-account path exists only for legacy unit-test callers.
+    The scheduled production wrapper always supplies an account ID and a
+    separately persisted AccountAlertState.
+    """
     global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
-    _sync_mode_state()
-    mode_cfg = get_mode_config()
-    scan_timeframes = get_scan_timeframes()
+    account_scan = account_id is not None
+    if account_scan:
+        state = state or _load_account_state(account_id)
+        _sync_mode_state(account_id, state)
+        mode_name = get_user_mode(account_id)
+        mode_cfg = get_user_mode_config(account_id)
+        scan_timeframes = get_scan_timeframes(account_id)
+        subs = {account_id}
+        active_signal = state.active_signal
+        tf_last_fired = state.tf_last_fired
+        pending_signal = state.pending_signal
+        sl_cooldown_until = state.sl_cooldown_until
+        forming_alert_sent = state.forming_alert_sent
+        momentum_shift_warned = state.momentum_shift_warned
+    else:
+        _sync_mode_state()
+        mode_name = getattr(get_mode_config(), "name", "intraday")
+        mode_cfg = get_mode_config()
+        scan_timeframes = get_scan_timeframes()
+        subs = _load()
+        active_signal = _active_signal
+        tf_last_fired = _tf_last_fired
+        pending_signal = _pending_signal
+        sl_cooldown_until = _sl_cooldown_until
+        forming_alert_sent = _forming_alert_sent
+        momentum_shift_warned = _momentum_shift_warned
+
+    def _get_active_trades():
+        return (
+            trade_tracker.get_active_trades(account_id)
+            if account_scan
+            else trade_tracker.get_active_trades()
+        )
 
     from src.market_hours import market_status
     ms       = market_status()
     now_open = ms["is_open"]
     bot      = context.application.bot
-    subs     = _load()
     now_ts   = time.time()
 
     # ── Market open/close transitions ─────────────────────────────────────────
@@ -1121,7 +1337,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_price > 0:
             # Include tp2_hit trades that are still watching for TP3
             active_trades = [
-                t for t in trade_tracker.get_active_trades()
+                t for t in _get_active_trades()
                 if t.get("timeframe")
             ]
             open_tfs = {t.get("timeframe") for t in active_trades}
@@ -1158,7 +1374,9 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     if extremes is not None:
                         tf_extremes[tf] = extremes
 
-            events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
+            events = trade_tracker.check_trades(
+                current_price, tf_extremes=tf_extremes, account_id=account_id
+            )
             event_trade_ids: set[str] = set()
             cooldown_event_trade_ids: set[str] = set()
             for ev in events:
@@ -1172,18 +1390,22 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     # next genuine entry signal is permanently suppressed.
                     logger.info(f"[{closed_tf}] Trade expired — signal lock released.")
                     if closed_tf:
-                        clear_signal_lock(closed_tf)
+                        clear_signal_lock(
+                            closed_tf, state=state, account_id=account_id
+                        )
                         tfs_closed_this_cycle.add(closed_tf)
                     continue
                 await _send_verified_result_event(
-                    bot, subs, ev["trade"], ev["event"], ev["exit_price"]
+                    bot, subs, ev["trade"], ev["event"], ev["exit_price"], account_id
                 )
                 # TP1 is a partial milestone, not a closed trade. Keep the
                 # timeframe locked while TP2/TP3 is still being tracked.
                 # Only terminal events release the entry lock.
                 if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
-                    cooldown_until = clear_signal_lock(closed_tf, after_sl=is_loss)
+                    cooldown_until = clear_signal_lock(
+                        closed_tf, after_sl=is_loss, state=state, account_id=account_id
+                    )
                     tfs_closed_this_cycle.add(closed_tf)
                     if is_loss and cooldown_until and event_trade_id:
                         cooldown_event_trade_ids.add(event_trade_id)
@@ -1194,11 +1416,12 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                             event_trade_id,
                             cooldown_until,
                             _SL_COOLDOWN_CANDLES * period,
+                            account_id,
                         ):
                             # This follows the verified terminal transition and
                             # the cooldown being applied, never an active trade.
                             await _send_sl_cooldown_notification(
-                                bot, subs, ev["trade"], ev["event"]
+                                bot, subs, ev["trade"], ev["event"], account_id
                             )
                 elif closed_tf:
                     logger.info(
@@ -1209,7 +1432,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # A terminal trade remains pending when Telegram delivery failed.
             # Retry it on a later scan, but never re-send an event already
             # handled during this cycle.
-            for pending_trade in trade_tracker.get_pending_result_notifications():
+            for pending_trade in trade_tracker.get_pending_result_notifications(account_id):
                 pending_id = str(pending_trade.get("id") or "")
                 if not pending_id or pending_id in event_trade_ids:
                     continue
@@ -1225,11 +1448,12 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                             or pending_trade.get("entry")
                             or 0.0
                         ),
+                        account_id,
                     )
 
             # A confirmed SL cooldown notice remains pending when Telegram
             # delivery fails. Retry it without re-running exit detection.
-            for pending_trade in trade_tracker.get_pending_cooldown_notifications():
+            for pending_trade in trade_tracker.get_pending_cooldown_notifications(account_id):
                 pending_id = str(pending_trade.get("id") or "")
                 if not pending_id or pending_id in cooldown_event_trade_ids:
                     continue
@@ -1239,7 +1463,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     else "SL"
                 )
                 await _send_sl_cooldown_notification(
-                    bot, subs, pending_trade, pending_event
+                    bot, subs, pending_trade, pending_event, account_id
                 )
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
@@ -1248,7 +1472,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Each timeframe alerts independently. One card per timeframe per direction
     # change — lock releases only when the signal flips or the trade closes.
     analyses = await asyncio.gather(
-        *[_safe_analyze(tf) for tf in scan_timeframes],
+        *[_safe_analyze(tf, mode_name) for tf in scan_timeframes],
         return_exceptions=True,
     )
 
@@ -1296,7 +1520,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # Warn the trader to watch the chart and prepare — early enough to
             # place a limit order in the OTE zone before the move starts.
             # Only fires when there is no active lock on this TF.
-            if not _active_signal.get(tf):
+            if not active_signal.get(tf):
                 forming_dir = None
                 if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
                     forming_dir = "BUY"
@@ -1305,7 +1529,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 if forming_dir:
                     active_trade = next(
                         (
-                            t for t in trade_tracker.get_active_trades()
+                            t for t in _get_active_trades()
                             if t.get("timeframe") == tf
                             and t.get("direction") != forming_dir
                         ),
@@ -1318,16 +1542,19 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                         await _send_momentum_shift_warning(
                             bot, subs, active_trade, tf, forming_dir,
                             confirmed=False,
+                            state=state,
                         )
-                    elif not _active_signal.get(tf):
-                        await _send_setup_forming_alert(bot, subs, a, tf, forming_dir)
+                    elif not active_signal.get(tf):
+                        await _send_setup_forming_alert(
+                            bot, subs, a, tf, forming_dir, state=state
+                        )
                 else:
                     # Direction collapsed — reset forming state so next build-up fires fresh
-                    _forming_alert_sent.pop(tf, None)
+                    forming_alert_sent.pop(tf, None)
             continue
 
         # Full signal fired — reset the forming-alert state for this TF
-        _forming_alert_sent.pop(tf, None)
+        forming_alert_sent.pop(tf, None)
 
         # Block simulated data before any entry or momentum-shift notification.
         if getattr(a, "is_simulated", False):
@@ -1337,13 +1564,13 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             continue
 
-        if _should_send(tf, a.action):
+        if _should_send(tf, a.action, state=state, account_id=account_id):
             # Warn before the higher-timeframe gate below. A valid reversal
             # must not disappear silently just because it cannot become a new
             # entry while the current trade still owns this timeframe.
             active_trade = next(
                 (
-                    t for t in trade_tracker.get_active_trades()
+                    t for t in _get_active_trades()
                     if t.get("timeframe") == tf
                     and t.get("direction") != a.action
                 ),
@@ -1353,6 +1580,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await _send_momentum_shift_warning(
                     bot, subs, active_trade, tf, a.action,
                     confirmed=True,
+                    state=state,
                 )
 
             # ── Cross-TF coherence block ──────────────────────────────────────
@@ -1369,7 +1597,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             if tf_rank > 0:
                 lower_tfs = TF_ORDER[:tf_rank]
                 for ltf in lower_tfs:
-                    ltf_lock = _active_signal.get(ltf)
+                    ltf_lock = active_signal.get(ltf)
                     if ltf_lock and ltf_lock != a.action:
                         lower_conflict = True
                         logger.info(
@@ -1401,7 +1629,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # multi-TF confluence — not a counter-trend trade. The HTF block was
             # designed to stop isolated signals, not to suppress aligned TF stacks.
             lower_same_dir = any(
-                _active_signal.get(ltf) == a.action
+                active_signal.get(ltf) == a.action
                 for ltf in TF_ORDER[:tf_rank]
             ) if tf_rank > 0 else False
 
@@ -1441,11 +1669,11 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             # Claim synchronously before the first await in pass 2.  A chart
             # upload can take longer than the scheduler interval; without this
             # claim, the next overlapping scan can pass _should_send too.
-            _pending_signal[tf] = a.action
+            pending_signal[tf] = a.action
             new_signals.append((tf, a))
 
     if state_changed:
-        _save_signal_state()
+        _save_signal_state(account_id, state)
 
     if not new_signals:
         return
@@ -1463,7 +1691,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         # opposing trades simultaneously. The new signal is suppressed until
         # the existing trade resolves (TP or SL hit).
         all_open = {
-            t["timeframe"]: t for t in trade_tracker.get_active_trades()
+            t["timeframe"]: t for t in _get_active_trades()
             if t.get("timeframe")
         }
         clean_signals = []
@@ -1473,7 +1701,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # An active trade owns its timeframe regardless of direction.
                 # Do not send a second entry while the first plan is still
                 # being tracked; a direction change gets a single warning.
-                _pending_signal.pop(tf, None)
+                pending_signal.pop(tf, None)
                 if existing.get("direction") == direction:
                     logger.info(
                         f"[{tf}] Entry suppressed — active {direction} trade "
@@ -1483,10 +1711,11 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # Only send the warning once per TF per shift direction —
                 # the scanner runs every 15s so without this it spams the
                 # same message continuously while the trade is open.
-                if _momentum_shift_warned.get(tf) != direction:
+                if momentum_shift_warned.get(tf) != direction:
                     await _send_momentum_shift_warning(
                         bot, subs, existing, tf, direction,
                         confirmed=True,
+                        state=state,
                     )
                 else:
                     logger.info(
@@ -1517,7 +1746,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
             len(sig_list) >= mode_cfg.confluence_min_tfs and not delivered
         ):
             for tf in claimed_tfs:
-                _pending_signal.pop(tf, None)
+                pending_signal.pop(tf, None)
             logger.warning(
                 f"[{direction}] Alert not delivered; leaving signal state unlocked "
                 "for retry."
@@ -1530,10 +1759,10 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
         # failed timeframes so a later scan can retry them, while preserving
         # the lock for the timeframes whose alert was accepted.
         for tf in claimed_tfs - delivered_tfs:
-            _pending_signal.pop(tf, None)
+            pending_signal.pop(tf, None)
         for tf, a in sig_list:
-            _active_signal[tf] = direction
-            _tf_last_fired[tf] = now_ts
+            active_signal[tf] = direction
+            tf_last_fired[tf] = now_ts
             try:
                 invalidate_cache(tf)
                 opened = trade_tracker.open_trade(
@@ -1542,24 +1771,25 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                     confidence=a.confidence, rr_ratio=a.rr_ratio,
                     tp3=getattr(a, "tp3", None),
                     atr=getattr(a, "atr", 0.0),
-                    mode=get_mode(),
+                    mode=mode_name,
                     limit_entry=(
                         getattr(a, "early_entry", 0.0)
                         or getattr(a, "limit_entry", 0.0)
                     ),
+                    account_id=account_id,
                 )
                 if not opened:
                     logger.warning(
                         f"[{tf}] Alert delivered but trade plan was not opened; "
                         "keeping a local signal lock to prevent re-entry spam."
                     )
-                    _active_signal[tf] = direction
-                    _tf_last_fired[tf] = now_ts
-                _pending_signal.pop(tf, None)
+                    active_signal[tf] = direction
+                    tf_last_fired[tf] = now_ts
+                pending_signal.pop(tf, None)
             except Exception as e:
-                _pending_signal.pop(tf, None)
+                pending_signal.pop(tf, None)
                 logger.error(f"Trade open failed ({tf}): {e}")
-        _save_signal_state()
+        _save_signal_state(account_id, state)
 
     # Group by direction so confluence alerts bundle same-direction TFs together
     buys  = [(tf, a) for tf, a in new_signals if a.action == "BUY"]
@@ -1582,7 +1812,24 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("Alert scan skipped — previous scan is still running.")
         return
     async with _scan_lock:
-        await _check_and_alert_once(context)
+        subscribers = _load()
+        if not subscribers:
+            logger.info("Alert scan: no subscribers.")
+            return
+        # Sequential account scans avoid read/modify/write races in the JSON
+        # trade store while each account still gets its own independent scan,
+        # locks, trades, mode, and targeted notifications.
+        for account_id in sorted(subscribers):
+            try:
+                await _check_and_alert_once(
+                    context,
+                    account_id=account_id,
+                    state=_load_account_state(account_id),
+                )
+            except Exception:
+                logger.error(
+                    "Alert scan failed for account %s", account_id, exc_info=True
+                )
 
 
 def _determine_htf_bias(analyses: list, timeframes: list) -> str:
@@ -1605,15 +1852,19 @@ def _determine_htf_bias(analyses: list, timeframes: list) -> str:
     return h4_action if h4_action in ("BUY", "SELL") else "WAIT"
 
 
-async def _safe_analyze(tf: str):
+async def _safe_analyze(tf: str, mode: str | None = None):
     try:
-        return await analyze(tf)
+        return await analyze(tf, mode=mode)
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")
         return None
 
 
-async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _send_trade_reminder_once(
+    context: ContextTypes.DEFAULT_TYPE,
+    account_id: int | None = None,
+    state: AccountAlertState | None = None,
+) -> None:
     """
     Runs every 10 minutes. Sends timeframe-scaled milestone reminders:
       • ~1 candle — missed-alert nudge (only if price still near entry)
@@ -1621,14 +1872,19 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
       • ~6 candles — long-running trade update with live P&L
     Each milestone fires at most once per trade.
     """
-    global _reminded_trade_ids
+    if account_id is not None:
+        state = state or _load_account_state(account_id)
+        open_trades = trade_tracker.get_active_trades(account_id)
+        subs = {account_id}
+        reminded_trade_ids = state.reminded_trade_ids
+    else:
+        open_trades = trade_tracker.get_active_trades()
+        subs = _load()
+        reminded_trade_ids = _reminded_trade_ids
 
-    all_trades = trade_tracker.get_all_trades()
-    open_trades = trade_tracker.get_active_trades()
     if not open_trades:
         return
 
-    subs = _load()
     if not subs:
         return
 
@@ -1667,9 +1923,9 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             continue
 
-        if trade_id not in _reminded_trade_ids:
-            _reminded_trade_ids[trade_id] = set()
-        sent_milestones = _reminded_trade_ids[trade_id]
+        if trade_id not in reminded_trade_ids:
+            reminded_trade_ids[trade_id] = set()
+        sent_milestones = reminded_trade_ids[trade_id]
         reminder_sent_this_run = False
 
         sl_dist = abs(entry - sl)
@@ -1782,6 +2038,8 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             if delivered:
                 sent_milestones.add(label)
+                if account_id is not None:
+                    _save_signal_state(account_id, state)
                 reminder_sent_this_run = True
                 logger.info(
                     f"[REMINDER:{label}] {direction} {tf} @ {entry:.2f} — "
@@ -1796,6 +2054,34 @@ async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # current send failed; that would turn one Telegram outage
                 # into a burst of duplicate reminder attempts.
                 break
+
+
+async def send_trade_reminder_for_accounts(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Deliver reminders only to the account that owns each open trade."""
+    subscribers = _load()
+    for account_id in sorted(subscribers):
+        try:
+            await _send_trade_reminder_once(
+                context,
+                account_id=account_id,
+                state=_load_account_state(account_id),
+            )
+        except Exception:
+            logger.error(
+                "Reminder scan failed for account %s", account_id, exc_info=True
+            )
+
+
+async def send_trade_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Backward-compatible helper for callers that explicitly use legacy state.
+
+    The production job uses send_trade_reminder_for_accounts; this wrapper is
+    retained for older maintenance scripts and tests that populate unassigned
+    records directly.
+    """
+    await _send_trade_reminder_once(context)
 
 
 # Load persisted signal state on module import

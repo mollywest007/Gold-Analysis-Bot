@@ -113,10 +113,14 @@
       "confidence": 91,
       "rr_ratio": 1.5,
       "opened_at": 1788247625.188755,
-      "status": "open",
-      "tp1_hit": false,
-      "tp2_hit": false,
-      "tp3_hit": false
+      "status": "tp3_hit",
+      "tp1_hit": true,
+      "tp2_hit": true,
+      "tp3_hit": true,
+      "closed_at": 1788251343.391594,
+      "close_reason": "take_profit",
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1788251343.489311
     }
   ]
 }

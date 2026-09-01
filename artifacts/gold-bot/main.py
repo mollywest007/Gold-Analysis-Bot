@@ -25,7 +25,7 @@ from src.alerts import (
     check_and_alert,
     send_market_conditions_summary,
     send_startup_summary,
-    send_trade_reminder,
+    send_trade_reminder_for_accounts,
     register_user,
     is_alerts_disabled,
 )
@@ -97,38 +97,58 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Pre-fetch the active mode's analysis set after startup."""
+    """Pre-fetch every subscribed account's configured analysis set."""
     from src.market_hours import market_status
     from src.analysis.cache import warm
-    from src.mode_manager import get_mode_config
+    from src.alerts import _load
+    from src.user_preferences import get_mode_config as get_user_mode_config
     if not market_status()["is_open"]:
         logger.info("Cache warm skipped — market closed.")
         return
-    cfg = get_mode_config()
-    logger.info(f"Warming {cfg.label} Mode cache: {cfg.scan_timeframes}")
-    await warm(cfg.scan_timeframes)
+    requested = {
+        (cfg.name, tf)
+        for account_id in _load()
+        for cfg in [get_user_mode_config(account_id)]
+        for tf in cfg.scan_timeframes
+    }
+    if not requested:
+        requested = {("intraday", "H1")}
+    logger.info("Warming account-configured analysis cache: %s", sorted(requested))
+    for mode, tf in sorted(requested):
+        await warm([tf]) if mode == "intraday" else await warm([tf])
 
 
 async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Refresh the active mode's analysis set every minute while open."""
+    """Refresh the union of subscribed accounts' analysis sets."""
     from src.market_hours import market_status
     from src.analysis.cache import get_analysis
-    from src.mode_manager import get_mode_config
+    from src.alerts import _load
+    from src.user_preferences import get_mode_config as get_user_mode_config
     import asyncio
     if not market_status()["is_open"]:
         return
     try:
-        cfg = get_mode_config()
+        requested = {
+            (cfg.name, tf)
+            for account_id in _load()
+            for cfg in [get_user_mode_config(account_id)]
+            for tf in cfg.scan_timeframes
+        }
+        if not requested:
+            return
         results = await asyncio.gather(
-            *[get_analysis(tf, max_age=0) for tf in cfg.scan_timeframes],
+            *[
+                get_analysis(tf, max_age=0, mode=mode)
+                for mode, tf in sorted(requested)
+            ],
             return_exceptions=True,
         )
         summary = ", ".join(
-            f"{tf}:{result.action}/{result.confidence}%"
-            for tf, result in zip(cfg.scan_timeframes, results)
+            f"{mode}/{tf}:{result.action}/{result.confidence}%"
+            for (mode, tf), result in zip(sorted(requested), results)
             if not isinstance(result, Exception)
         )
-        logger.info(f"{cfg.label} Mode cache refreshed — {summary}")
+        logger.info(f"Account-configured cache refreshed — {summary}")
     except Exception as e:
         logger.warning(f"Cache refresh failed: {e}")
 
@@ -223,7 +243,7 @@ def main() -> None:
 
     # Missed-alert reminder — check every 10 minutes for open trades still near entry
     app.job_queue.run_repeating(
-        send_trade_reminder,
+        send_trade_reminder_for_accounts,
         interval=10 * 60,
         first=10 * 60,
         name="trade_reminder",

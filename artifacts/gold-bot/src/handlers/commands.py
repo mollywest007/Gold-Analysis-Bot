@@ -31,7 +31,7 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
     return selected if selected in cfg.scan_timeframes else saved
 
 
-def _open_trade_banner(tf: str) -> str:
+def _open_trade_banner(tf: str, account_id: int) -> str:
     """
     If there's already a LOCKED open trade on this timeframe, return a clear
     HTML banner showing its real entry/SL/TP — the exact numbers from the
@@ -46,7 +46,7 @@ def _open_trade_banner(tf: str) -> str:
     """
     from src import trade_tracker
     open_trades = [
-        t for t in trade_tracker.get_active_trades()
+        t for t in trade_tracker.get_active_trades(account_id)
         if t.get("timeframe") == tf
     ]
     if not open_trades:
@@ -157,7 +157,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("recommend", tf))
 
-        banner = _open_trade_banner(tf)
+        banner = _open_trade_banner(tf, chat_id)
         if banner:
             await update.message.reply_text(banner, parse_mode="HTML")
 
@@ -268,7 +268,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await msg.edit_text(signal_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("signal", tf))
 
-        banner = _open_trade_banner(tf)
+        banner = _open_trade_banner(tf, chat_id)
         if banner:
             await update.message.reply_text(banner, parse_mode="HTML")
 
@@ -427,8 +427,9 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src import trade_tracker
     from src.utils.formatting import history_card
-    trades = trade_tracker.get_all_trades()
-    stats  = trade_tracker.get_stats()
+    chat_id = update.effective_chat.id
+    trades = trade_tracker.get_all_trades(chat_id)
+    stats  = trade_tracker.get_stats(chat_id)
     await update.message.reply_text(history_card(trades, stats), parse_mode="HTML",
                                     reply_markup=refresh_keyboard("history", "none"))
 

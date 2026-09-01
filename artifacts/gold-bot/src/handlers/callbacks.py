@@ -206,8 +206,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             elif command == "history":
                 from src import trade_tracker
                 from src.utils.formatting import history_card
-                trades = trade_tracker.get_all_trades()
-                stats  = trade_tracker.get_stats()
+                trades = trade_tracker.get_all_trades(chat_id)
+                stats  = trade_tracker.get_stats(chat_id)
                 await query.edit_message_text(
                     history_card(trades, stats), parse_mode="HTML", reply_markup=kb
                 )

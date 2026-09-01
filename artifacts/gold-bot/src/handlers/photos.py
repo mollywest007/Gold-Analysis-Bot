@@ -255,7 +255,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         open_trade_ctx = None
         try:
             from src import trade_tracker
-            open_trades = trade_tracker.get_active_trades()
+            open_trades = trade_tracker.get_active_trades(update.effective_chat.id)
             if open_trades:
                 # Pick the most recent open trade
                 open_trade_ctx = max(open_trades, key=lambda t: t.get("opened_at", 0))
