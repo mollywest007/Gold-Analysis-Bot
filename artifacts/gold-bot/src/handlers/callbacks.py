@@ -172,11 +172,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 from src import trade_tracker
                 from src.analysis.market_data import get_gold_price
                 from src.utils.formatting import active_trades_card
-                open_trades = trade_tracker.get_active_trades()
                 try:
                     price = await get_gold_price()
                 except Exception:
                     price = 0.0
+                # Refresh the persisted position snapshot after the network
+                # wait so this panel cannot render a pre-update entry record.
+                open_trades = trade_tracker.get_active_trades()
                 await query.edit_message_text(
                     active_trades_card(open_trades, price), parse_mode="HTML", reply_markup=kb
                 )

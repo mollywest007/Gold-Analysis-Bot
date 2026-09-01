@@ -64,6 +64,28 @@ class ActivePanelTests(unittest.TestCase):
         self.assertIn("TP1         : 4,621.55", card)
         self.assertIn("✓ recorded", card)
 
+    def test_exact_saved_entry_drives_move_and_all_target_distances(self):
+        card = active_trades_card(
+            [
+                _trade(
+                    direction="BUY",
+                    entry=4441.53,
+                    sl=4428.30,
+                    tp1=4454.76,
+                    tp2=4468.00,
+                    tp3=4481.23,
+                )
+            ],
+            4450.53,
+        )
+
+        self.assertIn("Entry       : 4,441.53", card)
+        self.assertIn("Price Move  : +9.00  (IN PROFIT)", card)
+        self.assertIn("SL          : 4,428.30  (distance 13.23)", card)
+        self.assertIn("TP1         : 4,454.76  (distance 13.23", card)
+        self.assertIn("TP2         : 4,468.00  (distance 26.47", card)
+        self.assertIn("TP3         : 4,481.23  (distance 39.70", card)
+
     def test_crossed_target_is_not_presented_as_a_pip_conversion(self):
         with patch("src.utils.formatting.time.time", return_value=1100):
             card = active_trades_card([_trade()], 4456.40)

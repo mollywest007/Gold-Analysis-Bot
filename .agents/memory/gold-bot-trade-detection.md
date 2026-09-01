@@ -86,5 +86,6 @@ and leave wick-based exit detection for a later scan.
 stop, especially during market-data outages or weekend sessions.
 
 **How to apply:** Reject simulated candle extremes before passing timeframe
-high/low data to the trade tracker; a missing or failed candle fetch must not
-be treated as evidence of an exit.
+high/low data to the trade tracker; use only the newest verified post-entry
+candle, and treat a missing or failed candle fetch as spot-only rather than
+exit evidence.

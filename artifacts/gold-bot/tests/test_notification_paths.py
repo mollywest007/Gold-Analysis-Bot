@@ -65,6 +65,23 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             (114.0, 96.0),
         )
 
+    def test_old_post_entry_wick_is_not_reused_for_exit(self):
+        data = SimpleNamespace(
+            highs=[120.0, 111.0],
+            lows=[80.0, 99.0],
+            timestamps=[200.0, 300.0],
+            is_simulated=False,
+        )
+
+        self.assertEqual(
+            alerts._post_entry_tf_extremes(
+                data,
+                current_price=100.0,
+                opened_at=150.0,
+            ),
+            (111.0, 99.0),
+        )
+
     async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
         bot = AsyncMock()
         active_trade = {
@@ -100,6 +117,87 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         bot.send_photo.assert_not_awaited()
         bot.send_message.assert_not_awaited()
 
+    async def test_confirmed_sl_sends_cooldown_status_with_remaining_time(self):
+        bot = AsyncMock()
+        closed_trade = {
+            "id": "closed-sl-cooldown",
+            "direction": "SELL",
+            "entry": 4441.53,
+            "sl": 4458.10,
+            "tp1": 4416.68,
+            "tp2": 4400.11,
+            "timeframe": "M15",
+            "status": "sl_hit",
+            "closed_at": 900.0,
+            "close_reason": "stop_loss",
+            "cooldown_notification_pending": True,
+            "cooldown_until": 2800.0,
+            "cooldown_duration_seconds": 1800.0,
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_trade_by_id",
+            return_value=closed_trade,
+        ), patch.object(
+            alerts,
+            "_broadcast_text",
+            new=AsyncMock(return_value=(set(), True)),
+        ) as broadcast, patch.object(
+            alerts.trade_tracker,
+            "mark_cooldown_notification_sent",
+            return_value=True,
+        ) as mark_sent, patch.object(
+            alerts.time,
+            "time",
+            return_value=1000.0,
+        ):
+            delivered = await alerts._send_sl_cooldown_notification(
+                bot, {123}, closed_trade, "SL"
+            )
+
+        self.assertTrue(delivered)
+        text = broadcast.await_args.args[2]
+        self.assertIn("STOP LOSS TRIGGERED", text)
+        self.assertIn("Cooldown    : ACTIVE for 30 min (2 M15 candles)", text)
+        self.assertIn("Remaining   : about 30 min remaining", text)
+        self.assertIn("No new M15 entries will open during cooldown.", text)
+        mark_sent.assert_called_once_with("closed-sl-cooldown")
+
+    async def test_cooldown_status_is_blocked_while_trade_is_active(self):
+        bot = AsyncMock()
+        active_trade = {
+            "id": "active-cooldown",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "open",
+            "cooldown_notification_pending": True,
+            "cooldown_until": 2800.0,
+            "cooldown_duration_seconds": 1800.0,
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_trade_by_id",
+            return_value=active_trade,
+        ), patch.object(
+            alerts,
+            "_broadcast_text",
+            new=AsyncMock(),
+        ) as broadcast:
+            delivered = await alerts._send_sl_cooldown_notification(
+                bot, {123}, active_trade, "SL"
+            )
+
+        self.assertFalse(delivered)
+        broadcast.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+        bot.send_photo.assert_not_awaited()
+
     async def test_terminal_sl_result_is_sent_once_only(self):
         bot = AsyncMock()
         closed_trade = {
@@ -112,6 +210,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             "timeframe": "M15",
             "status": "sl_hit",
             "result_notification_pending": True,
+            "closed_at": 200.0,
+            "close_reason": "stop_loss",
         }
         already_sent = {
             **closed_trade,
@@ -143,6 +243,59 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second)
         send_result.assert_awaited_once()
         mark_sent.assert_called_once_with("closed-sl")
+
+    async def test_status_only_sl_record_is_not_notified(self):
+        bot = AsyncMock()
+        stale_trade = {
+            "id": "stale-sl",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "sl_hit",
+            "result_notification_pending": True,
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_trade_by_id",
+            return_value=stale_trade,
+        ), patch.object(
+            alerts,
+            "_send_result_image",
+            new=AsyncMock(),
+        ) as send_result:
+            delivered = await alerts._send_verified_result_event(
+                bot, {123}, stale_trade, "SL", 90.0
+            )
+
+        self.assertFalse(delivered)
+        send_result.assert_not_awaited()
+        bot.send_photo.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    async def test_low_level_sl_sender_also_rejects_active_trade(self):
+        bot = AsyncMock()
+        active_trade = {
+            "id": "active-low-level-sl",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "open",
+        }
+
+        delivered = await alerts._send_result_image(
+            bot, {123}, active_trade, "SL", 90.0
+        )
+
+        self.assertFalse(delivered)
+        bot.send_photo.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
 
     def _analysis(self):
         return SimpleNamespace(

@@ -345,12 +345,14 @@ def _should_send(tf: str, action: str) -> bool:
     return True
 
 
-def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
+def clear_signal_lock(tf: str, after_sl: bool = False) -> Optional[float]:
     """Call after a trade closes so the next signal on this timeframe fires freely.
 
     after_sl=True: apply a 2-candle cooldown before allowing re-entry.
     This prevents the bot spamming re-entries every 15s after a quick SL hit
     in volatile/choppy conditions.
+
+    Returns the cooldown deadline when a cooldown was started.
     """
     _active_signal.pop(tf, None)
     _pending_signal.pop(tf, None)
@@ -360,7 +362,8 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
     if after_sl:
         period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
         cooldown = _SL_COOLDOWN_CANDLES * period
-        _sl_cooldown_until[tf] = time.time() + cooldown
+        cooldown_until = time.time() + cooldown
+        _sl_cooldown_until[tf] = cooldown_until
         logger.info(
             f"[{tf}] Signal lock cleared after SL — "
             f"post-SL cooldown {cooldown // 60:.0f}m before next entry."
@@ -369,6 +372,7 @@ def clear_signal_lock(tf: str, after_sl: bool = False) -> None:
         _sl_cooldown_until.pop(tf, None)
         logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
     _save_signal_state()
+    return cooldown_until if after_sl else None
 
 
 def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
@@ -377,7 +381,9 @@ def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
     Simulated OHLCV is suitable for keeping charts and analysis alive, but it
     must never close a real tracked trade.  A generated wick can otherwise
     fabricate an SL/TP touch while the spot feed shows the trade is still
-    live.
+    live.  Only the newest verified post-entry candle is used: older
+    normalized futures candles can shift when the futures/spot basis changes
+    and replay a wick that did not close the live trade.
     """
     if data is None or not getattr(data, "highs", None) or not getattr(data, "lows", None):
         return None
@@ -395,10 +401,10 @@ def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
         if not indices:
             # No verified post-entry candle exists yet.  Use spot only.
             return (current_price, current_price)
-        # Only recent post-entry candles are valid live exit evidence. Older
-        # normalized futures candles can move when the spot/futures basis is
-        # recalculated, which can replay a stale wick as a new SL hit.
-        indices = indices[-3:]
+        # Only the newest post-entry candle is valid live exit evidence.
+        # Reusing older normalized futures candles can replay a stale wick
+        # after the futures/spot basis changes.
+        indices = indices[-1:]
         return (
             max(highs[i] for i in indices),
             min(lows[i] for i in indices),
@@ -571,6 +577,15 @@ async def _broadcast_photo(bot, subs: Set[int], img_bytes: bytes, caption: str) 
 async def _send_result_image(
     bot, subs: Set[int], trade: dict, event: str, exit_price: float,
 ) -> bool:
+    # Keep the low-level sender safe even if a future caller bypasses the
+    # normal _send_verified_result_event wrapper.
+    if not _is_verified_terminal_result(trade, event):
+        logger.warning(
+            f"[{trade.get('timeframe', '?')}] {event} result send skipped — "
+            f"trade {trade.get('id') or '<missing>'} is not a verified terminal close."
+        )
+        return False
+
     direction  = trade["direction"]
     entry      = trade["entry"]
     sl         = trade["sl"]
@@ -657,6 +672,34 @@ _RESULT_EVENT_STATUS = {
 }
 
 
+def _is_verified_terminal_result(trade: dict, event: str) -> bool:
+    """Require persisted closure evidence before sending a result card."""
+    expected_status = _RESULT_EVENT_STATUS.get(event)
+    if not expected_status:
+        return True
+    if (
+        trade_tracker.is_active_trade(trade)
+        or trade.get("status") != expected_status
+    ):
+        return False
+
+    # A status by itself is not proof that this scan closed the trade.  The
+    # tracker writes both fields atomically with terminal SL transitions, so
+    # requiring them prevents stale/status-only records from generating an SL
+    # notification.
+    if event == "SL":
+        return (
+            _safe_float(trade.get("closed_at")) > 0
+            and trade.get("close_reason") == "stop_loss"
+        )
+    if event == "TP1_SL":
+        return (
+            _safe_float(trade.get("closed_at")) > 0
+            and trade.get("close_reason") in {"stop_loss", "break_even_stop"}
+        )
+    return True
+
+
 async def _send_verified_result_event(
     bot, subs: Set[int], trade: dict, event: str, exit_price: float,
 ) -> bool:
@@ -673,18 +716,14 @@ async def _send_verified_result_event(
         logger.warning(f"Result notification skipped — trade {trade_id or '<missing>'} not found.")
         return False
 
-    expected_status = _RESULT_EVENT_STATUS.get(event)
-    if expected_status:
-        if (
-            trade_tracker.is_active_trade(persisted)
-            or persisted.get("status") != expected_status
-        ):
-            logger.warning(
-                f"[{persisted.get('timeframe', '?')}] {event} notification skipped — "
-                f"trade {trade_id} is not terminal "
-                f"(status={persisted.get('status')!r})."
-            )
-            return False
+    if not _is_verified_terminal_result(persisted, event):
+        logger.warning(
+            f"[{persisted.get('timeframe', '?')}] {event} notification skipped — "
+            f"trade {trade_id} lacks verified terminal close evidence "
+            f"(status={persisted.get('status')!r}, "
+            f"reason={persisted.get('close_reason')!r})."
+        )
+        return False
 
     if (
         persisted.get("result_notification_sent_at")
@@ -701,6 +740,80 @@ async def _send_verified_result_event(
     )
     if delivered:
         trade_tracker.mark_result_notification_sent(trade_id)
+    return delivered
+
+
+async def _send_sl_cooldown_notification(
+    bot, subs: Set[int], trade: dict, event: str,
+) -> bool:
+    """Notify after a confirmed SL that this timeframe is on cooldown."""
+    trade_id = str(trade.get("id") or "")
+    persisted = trade_tracker.get_trade_by_id(trade_id)
+    if not persisted or not _is_verified_terminal_result(persisted, event):
+        logger.warning(
+            f"[{trade.get('timeframe', '?')}] cooldown notification skipped — "
+            f"trade {trade_id or '<missing>'} is not a verified SL closure."
+        )
+        return False
+    if not persisted.get("cooldown_notification_pending"):
+        return False
+
+    timeframe = persisted.get("timeframe", "?")
+    direction = persisted.get("direction", "?")
+    entry = _safe_float(persisted.get("entry"))
+    sl = _safe_float(persisted.get("sl"))
+    duration = _safe_float(persisted.get("cooldown_duration_seconds"))
+    cooldown_until = _safe_float(persisted.get("cooldown_until"))
+    remaining_seconds = cooldown_until - time.time()
+    duration_minutes = max(1, int(round(duration / 60))) if duration > 0 else 0
+    remaining_minutes = (
+        max(0, int((remaining_seconds + 59) // 60))
+        if cooldown_until > 0
+        else 0
+    )
+    remaining_text = (
+        "cooldown has ended"
+        if remaining_minutes == 0
+        else f"about {remaining_minutes} min remaining"
+    )
+
+    if event == "TP1_SL":
+        title = "BREAK-EVEN SL TRIGGERED"
+        reason = "TP1 had already been reached; protection closed the trade at entry."
+    else:
+        title = "STOP LOSS TRIGGERED"
+        reason = "The trade is confirmed closed by its stop-loss."
+    text = (
+        f"<pre>🛑  {title}  —  XAU/USD  {timeframe}\n"
+        f"{'─' * 38}\n"
+        f"  Trade       : {direction}\n"
+        f"  Entry       : {entry:,.2f}\n"
+        f"  Stop loss   : {sl:,.2f}\n"
+        f"  {reason}\n"
+        f"{'─' * 38}\n"
+        f"  Cooldown    : ACTIVE for {duration_minutes} min "
+        f"({ _SL_COOLDOWN_CANDLES} {timeframe} candles)\n"
+        f"  Remaining   : {remaining_text}\n"
+        f"  No new {timeframe} entries will open during cooldown.\n"
+        f"</pre>"
+    )
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
+    if dead:
+        subs -= dead
+        _save(subs)
+    if delivered:
+        trade_tracker.mark_cooldown_notification_sent(trade_id)
+        logger.info(
+            f"[{timeframe}] SL cooldown notification sent — "
+            f"{remaining_text}."
+        )
+    else:
+        logger.warning(
+            f"[{timeframe}] SL cooldown notification not delivered — "
+            "leaving notification state available for retry."
+        )
     return delivered
 
 
@@ -1038,6 +1151,7 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             events = trade_tracker.check_trades(current_price, tf_extremes=tf_extremes)
             event_trade_ids: set[str] = set()
+            cooldown_event_trade_ids: set[str] = set()
             for ev in events:
                 event_trade_id = str(ev["trade"].get("id") or "")
                 if event_trade_id:
@@ -1060,8 +1174,23 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # Only terminal events release the entry lock.
                 if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
-                    clear_signal_lock(closed_tf, after_sl=is_loss)
+                    cooldown_until = clear_signal_lock(closed_tf, after_sl=is_loss)
                     tfs_closed_this_cycle.add(closed_tf)
+                    if is_loss and cooldown_until and event_trade_id:
+                        cooldown_event_trade_ids.add(event_trade_id)
+                        period = _TF_PERIOD_SECONDS.get(
+                            closed_tf, _DEFAULT_TF_PERIOD_SECONDS
+                        )
+                        if trade_tracker.mark_cooldown_notification_pending(
+                            event_trade_id,
+                            cooldown_until,
+                            _SL_COOLDOWN_CANDLES * period,
+                        ):
+                            # This follows the verified terminal transition and
+                            # the cooldown being applied, never an active trade.
+                            await _send_sl_cooldown_notification(
+                                bot, subs, ev["trade"], ev["event"]
+                            )
                 elif closed_tf:
                     logger.info(
                         f"[{closed_tf}] {ev['event']} recorded — trade remains active; "
@@ -1088,6 +1217,21 @@ async def _check_and_alert_once(context: ContextTypes.DEFAULT_TYPE) -> None:
                             or 0.0
                         ),
                     )
+
+            # A confirmed SL cooldown notice remains pending when Telegram
+            # delivery fails. Retry it without re-running exit detection.
+            for pending_trade in trade_tracker.get_pending_cooldown_notifications():
+                pending_id = str(pending_trade.get("id") or "")
+                if not pending_id or pending_id in cooldown_event_trade_ids:
+                    continue
+                pending_event = (
+                    "TP1_SL"
+                    if pending_trade.get("status") == "tp1_sl_hit"
+                    else "SL"
+                )
+                await _send_sl_cooldown_notification(
+                    bot, subs, pending_trade, pending_event
+                )
     except Exception as e:
         logger.error(f"Trade check failed: {e}")
 

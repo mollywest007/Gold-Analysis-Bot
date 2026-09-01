@@ -161,8 +161,9 @@ def check_trades(current_price: float, recent_high: float = None,
     """
     Evaluate all open trades against current_price.
 
-    recent_high/recent_low (optional): fallback high/low to use for any
-    trade whose own timeframe isn't present in tf_extremes.
+    recent_high/recent_low (deprecated): retained for call compatibility, but
+    never used as exit evidence.  A caller must provide verified candle
+    extremes in tf_extremes; otherwise only the live spot price is checked.
 
     tf_extremes (optional): { "M15": (high, low), "H1": (high, low), ... } —
     the high/low of each timeframe's current forming candle since the last
@@ -250,12 +251,18 @@ def check_trades(current_price: float, recent_high: float = None,
             )
             tf_hi = tf_lo = None
 
-        # SL detection uses candle extremes (catches brief wicks through the
-        # stop that already retraced before the next spot-price poll).
-        sl_hi = tf_hi if tf_hi is not None else (recent_high if recent_high is not None else current_price)
-        sl_lo = tf_lo if tf_lo is not None else (recent_low  if recent_low  is not None else current_price)
-        sl_hi = max(sl_hi, current_price)
-        sl_lo = min(sl_lo, current_price)
+        # SL detection uses verified candle extremes when supplied (catching
+        # brief wicks through the stop that retraced before the next spot
+        # poll).  Do not fall back to caller-provided historical highs/lows:
+        # those values have no freshness or post-entry guarantee and can
+        # falsely close a still-live trade.  With no verified candle, use the
+        # current spot snapshot only.
+        if tf_hi is not None and tf_lo is not None:
+            sl_hi = max(tf_hi, current_price)
+            sl_lo = min(tf_lo, current_price)
+        else:
+            sl_hi = current_price
+            sl_lo = current_price
 
         # TP detection uses post-entry candle extremes (same tf_extremes dict
         # that SL uses). tf_extremes is pre-filtered in alerts.py to include
@@ -400,6 +407,66 @@ def mark_result_notification_sent(trade_id: str) -> bool:
         _save(trades)
         return True
     return False
+
+
+def mark_cooldown_notification_pending(
+    trade_id: str,
+    cooldown_until: float,
+    cooldown_duration: float,
+) -> bool:
+    """Record that a confirmed SL now needs a cooldown notification."""
+    trades = _load()
+    trade_id = str(trade_id or "")
+    try:
+        cooldown_until = float(cooldown_until)
+        cooldown_duration = float(cooldown_duration)
+    except (TypeError, ValueError):
+        return False
+    for trade in trades:
+        if str(trade.get("id") or "") != trade_id:
+            continue
+        if (
+            is_active_trade(trade)
+            or trade.get("status") not in {"sl_hit", "tp1_sl_hit"}
+            or trade.get("cooldown_notification_sent_at")
+        ):
+            return False
+        trade["cooldown_notification_pending"] = True
+        trade["cooldown_until"] = cooldown_until
+        trade["cooldown_duration_seconds"] = cooldown_duration
+        _save(trades)
+        return True
+    return False
+
+
+def mark_cooldown_notification_sent(trade_id: str) -> bool:
+    """Consume a cooldown notification only after Telegram delivery succeeds."""
+    trades = _load()
+    trade_id = str(trade_id or "")
+    for trade in trades:
+        if str(trade.get("id") or "") != trade_id:
+            continue
+        if (
+            is_active_trade(trade)
+            or trade.get("status") not in {"sl_hit", "tp1_sl_hit"}
+            or not trade.get("cooldown_notification_pending")
+        ):
+            return False
+        trade["cooldown_notification_pending"] = False
+        trade["cooldown_notification_sent_at"] = time.time()
+        _save(trades)
+        return True
+    return False
+
+
+def get_pending_cooldown_notifications() -> List[Dict[str, Any]]:
+    """Return confirmed SL closures whose cooldown notice needs delivery."""
+    return [
+        trade for trade in get_all_trades()
+        if trade.get("cooldown_notification_pending")
+        and trade.get("status") in {"sl_hit", "tp1_sl_hit"}
+        and not is_active_trade(trade)
+    ]
 
 
 def get_pending_result_notifications() -> List[Dict[str, Any]]:

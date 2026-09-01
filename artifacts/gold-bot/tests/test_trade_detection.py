@@ -83,6 +83,17 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
 
+    def test_unverified_fallback_extremes_do_not_close_trade(self):
+        self.assertTrue(self._open_buy())
+        events = trade_tracker.check_trades(
+            100.0,
+            recent_high=101.0,
+            recent_low=89.0,
+            tf_extremes={},
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
     def test_post_entry_wick_triggers_target(self):
         self.assertTrue(self._open_buy())
         events = trade_tracker.check_trades(
