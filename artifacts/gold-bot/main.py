@@ -8,7 +8,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from telegram import BotCommand, Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 from telegram.ext import ApplicationHandlerStop
-from src.config import TELEGRAM_BOT_TOKEN, GOOGLE_AI_KEY, ALLOWED_USER_ID, ALLOWED_USERNAME
+from src.config import (
+    TELEGRAM_BOT_TOKEN,
+    GOOGLE_AI_KEY,
+    ALLOWED_USER_ID,
+    ALLOWED_USERNAMES,
+)
 from src.key_health import validate_keys_on_startup, periodic_key_health_check
 from src.handlers import (
     register_command_handlers,
@@ -48,13 +53,15 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     logger.info(f"User: @{user.username} (id={user.id})")
 
-    # Determine authorization
-    if ALLOWED_USER_ID:
-        authorized = (user.id == ALLOWED_USER_ID)
-    elif ALLOWED_USERNAME:
-        authorized = (user.username == ALLOWED_USERNAME)
-    else:
-        authorized = True  # No restriction configured — open access
+    # Determine authorization. A numeric owner ID and the explicit username
+    # allowlist are additive so adding an approved account never disables the
+    # owner's access.
+    username = (user.username or "").strip().lstrip("@").lower()
+    authorized = (
+        (ALLOWED_USER_ID and user.id == ALLOWED_USER_ID)
+        or username in ALLOWED_USERNAMES
+        or (not ALLOWED_USER_ID and not ALLOWED_USERNAMES)
+    )
 
     if authorized:
         # Any successful interaction proves this chat can receive messages.
