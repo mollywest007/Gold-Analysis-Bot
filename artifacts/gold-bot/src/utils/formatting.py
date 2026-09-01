@@ -1930,6 +1930,11 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
 
         try:
             entry = float(t["entry"])
+            limit_entry = (
+                float(t["limit_entry"])
+                if t.get("limit_entry") is not None
+                else None
+            )
             sl = float(t["sl"])
             tp1 = float(t["tp1"])
             tp2 = float(t["tp2"]) if t.get("tp2") is not None else None
@@ -1941,7 +1946,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             )
             valid_levels = valid_levels and all(
                 value is None or math.isfinite(value)
-                for value in (tp2, tp3)
+                for value in (limit_entry, tp2, tp3)
             )
         except (KeyError, TypeError, ValueError):
             valid_levels = False
@@ -1955,18 +1960,31 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
                 lines.append(WIDE)
             continue
 
-        # This is the quoted XAU/USD price move, not account currency or
-        # broker pips. Pip size varies by broker, while the trade levels in
-        # this bot are stored directly as XAU/USD prices.
+        # This is the quoted XAU/USD price move from the tracked market entry,
+        # not account currency or broker pips. Pip size varies by broker, while
+        # the trade levels in this bot are stored directly as XAU/USD prices.
         if price_available:
             pnl = (live_price - entry) if direction == "BUY" else (entry - live_price)
             pnl_sign = "+" if pnl >= 0 else ""
             pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
             pnl_line = f"Price Move  : {pnl_sign}{pnl:,.2f}  ({pnl_label})"
             now_line = f"Now         : {live_price:,.2f}"
+            limit_move_line = ""
+            if limit_entry and not math.isclose(limit_entry, entry, abs_tol=0.005):
+                limit_move = (
+                    (live_price - limit_entry)
+                    if direction == "BUY"
+                    else (limit_entry - live_price)
+                )
+                limit_sign = "+" if limit_move >= 0 else ""
+                limit_move_line = (
+                    f"Limit Move  : {limit_sign}{limit_move:,.2f}  "
+                    "(from limit level; fill not confirmed)"
+                )
         else:
             pnl_line = "Price Move  : unavailable (no live price)"
             now_line = "Now         : unavailable"
+            limit_move_line = ""
 
         # Distances
         # The trade plan is frozen at entry.  Distances in this panel must
@@ -2020,9 +2038,15 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             f"{tf}  {direction}  |  {status_note}",
             f"Mode        : {mode}  |  Confidence: {conf}%",
             f"Opened      : {age_str}",
-            f"Entry       : {entry:,.2f}",
+            f"Market Entry: {entry:,.2f}  (tracked basis)",
+            *(
+                [f"Limit Entry : {limit_entry:,.2f}  (optional pullback level)"]
+                if limit_entry and not math.isclose(limit_entry, entry, abs_tol=0.005)
+                else []
+            ),
             now_line,
             pnl_line,
+            limit_move_line,
             "Unit        : XAU/USD price difference (not broker pips)",
             SEP,
             f"SL          : {sl:,.2f}  (distance {risk_dist:,.2f})",

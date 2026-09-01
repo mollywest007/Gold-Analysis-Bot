@@ -79,7 +79,7 @@ class ActivePanelTests(unittest.TestCase):
             4450.53,
         )
 
-        self.assertIn("Entry       : 4,441.53", card)
+        self.assertIn("Market Entry: 4,441.53  (tracked basis)", card)
         self.assertIn("Price Move  : +9.00  (IN PROFIT)", card)
         self.assertIn("SL          : 4,428.30  (distance 13.23)", card)
         self.assertIn("TP1         : 4,454.76  (distance 13.23", card)
@@ -96,6 +96,27 @@ class ActivePanelTests(unittest.TestCase):
         self.assertIn("TP1         : 4,540.25  (distance 40.65", card)
         self.assertIn("⚠ crossed", card)
         self.assertNotIn("124.50 pips", card)
+
+    def test_limit_and_market_entries_are_shown_separately(self):
+        card = active_trades_card(
+            [
+                _trade(
+                    entry=4431.20,
+                    limit_entry=4444.46,
+                    sl=4450.00,
+                    tp1=4418.00,
+                    tp2=4405.00,
+                    tp3=4392.00,
+                )
+            ],
+            4426.80,
+        )
+
+        self.assertIn("Market Entry: 4,431.20  (tracked basis)", card)
+        self.assertIn("Limit Entry : 4,444.46  (optional pullback level)", card)
+        self.assertIn("Price Move  : +4.40  (IN PROFIT)", card)
+        self.assertIn("Limit Move  : +17.66  (from limit level; fill not confirmed)", card)
+        self.assertIn("Unit        : XAU/USD price difference (not broker pips)", card)
 
     def test_malformed_record_does_not_break_panel(self):
         card = active_trades_card([{"direction": "BUY"}], 4500.0)

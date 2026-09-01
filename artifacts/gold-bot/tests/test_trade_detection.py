@@ -234,6 +234,25 @@ class TradeDetectionTests(unittest.TestCase):
             )
         )
 
+    def test_limit_entry_is_preserved_separately_from_tracked_market_entry(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="SELL",
+                entry=4431.20,
+                limit_entry=4444.46,
+                sl=4450.00,
+                tp1=4418.00,
+                tp2=4405.00,
+                tp3=4392.00,
+                timeframe="M15",
+                confidence=85,
+                rr_ratio=1.0,
+            )
+        )
+        trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(trade["entry"], 4431.20)
+        self.assertEqual(trade["limit_entry"], 4444.46)
+
 
 if __name__ == "__main__":
     unittest.main()

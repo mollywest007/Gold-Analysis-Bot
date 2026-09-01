@@ -86,6 +86,7 @@ def open_trade(
     tp3: float = None,
     atr: float = 0.0,
     mode: str = "",
+    limit_entry: float = None,
 ) -> bool:
     trades = _load()
 
@@ -98,6 +99,11 @@ def open_trade(
         tp1 = float(tp1)
         tp2 = float(tp2)
         tp3 = float(tp3) if tp3 is not None else None
+        limit_entry = (
+            float(limit_entry)
+            if limit_entry is not None and float(limit_entry) > 0
+            else None
+        )
     except (TypeError, ValueError):
         logger.error(f"[{timeframe}] Trade open rejected — non-numeric plan.")
         return False
@@ -134,6 +140,10 @@ def open_trade(
         "id":          str(int(time.time() * 1000)),  # millisecond precision avoids duplicate IDs
         "direction":   direction,
         "entry":       entry,
+        # Optional pullback/limit level shown in the alert. ``entry`` remains
+        # the canonical market-entry basis for tracking until a broker fill
+        # price is available.
+        "limit_entry": limit_entry,
         "sl":          sl,
         "tp1":         tp1,
         "tp2":         tp2,
