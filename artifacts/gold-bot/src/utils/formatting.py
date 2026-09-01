@@ -3,6 +3,7 @@ import math
 import time
 import textwrap
 from src.analysis.engine import MarketAnalysis, Indicator
+from src.analysis.modes import MODES
 from src.market_hours import market_status
 from src.mode_manager import get_mode_config
 
@@ -86,14 +87,19 @@ def timeframe_rank(timeframe: str) -> int:
     return _TF_RANK.get(timeframe, 0)
 
 
-def _mode_line() -> str:
-    cfg = get_mode_config()
+def _mode_config_for_analysis(a: MarketAnalysis = None):
+    mode_name = getattr(a, "analysis_mode", None) if a is not None else None
+    return MODES.get(mode_name, get_mode_config())
+
+
+def _mode_line(a: MarketAnalysis = None) -> str:
+    cfg = _mode_config_for_analysis(a)
     return f"  Mode      : {cfg.emoji} {cfg.label}"
 
 
-def _mode_risk_line() -> str:
+def _mode_risk_line(a: MarketAnalysis = None) -> str:
     """Expose the active profile's risk/holding guidance on trade plans."""
-    note = get_mode_config().risk_note
+    note = _mode_config_for_analysis(a).risk_note
     return f"  Risk Plan : {note}" if note else ""
 
 
@@ -218,7 +224,7 @@ def signal_card(a: MarketAnalysis) -> str:
             "",
             f"  Win Rate  : {_win_bar(a.win_probability)}",
             f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
-            _mode_line(),
+            _mode_line(a),
             "",
             f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
@@ -226,7 +232,7 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  HTF Align : {a.htf_bias}",
             f"  Session   : {a.session or 'N/A'}",
         ]
-        risk_line = _mode_risk_line()
+        risk_line = _mode_risk_line(a)
         if risk_line:
             lines.append(risk_line)
         lines.append(_kill_zone_line(a))
@@ -1313,7 +1319,7 @@ def alert_card(a: MarketAnalysis) -> str:
         f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
         f"  HTF Align : {a.htf_bias}",
-        _mode_risk_line(),
+        _mode_risk_line(a),
         "",
         "──────────────────────────────────",
         f"  Entry     : {fmt_price(a.entry)}",

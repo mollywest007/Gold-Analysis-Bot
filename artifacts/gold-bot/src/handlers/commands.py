@@ -14,15 +14,21 @@ from src.utils.formatting import (
 from src.utils.keyboards import (
     alerts_keyboard, main_menu_keyboard, settings_keyboard, refresh_keyboard,
 )
-from src.mode_manager import get_mode, get_mode_config, get_timeframe, list_modes, set_mode
+from src.mode_manager import list_modes
+from src.user_preferences import (
+    get_mode as get_user_mode,
+    get_mode_config as get_user_mode_config,
+    get_timeframe as get_user_timeframe,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
-    cfg = get_mode_config()
+def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
+    cfg = get_user_mode_config(chat_id)
     selected = context.user_data.get("timeframe")
-    return selected if selected in cfg.scan_timeframes else get_timeframe()
+    saved = get_user_timeframe(chat_id)
+    return selected if selected in cfg.scan_timeframes else saved
 
 
 def _open_trade_banner(tf: str) -> str:
@@ -126,13 +132,15 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(
         f"Running full market analysis on {tf}...{' (' + note + ')' if note else ''}"
     )
     try:
-        a = await get_analysis(tf)
+        a = await get_analysis(tf, mode=mode_name)
 
         # ── Simulated data guard — block before any card is shown ─────────────
         if getattr(a, "is_simulated", False):
@@ -214,13 +222,16 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     from src.analysis import analyze as _analyze
     from src.utils.formatting import multi_timeframe_card
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    mode_cfg = get_user_mode_config(chat_id)
     msg = await update.message.reply_text("Analyzing all timeframes...")
     try:
         # Sequential — see messages.py for explanation
         _analyses = []
-        for _tf in get_mode_config().scan_timeframes:
+        for _tf in mode_cfg.scan_timeframes:
             try:
-                _analyses.append(await _analyze(_tf))
+                _analyses.append(await _analyze(_tf, mode=mode_name))
             except Exception as _e:
                 logger.warning(f"analyze({_tf}) skipped: {_e}")
         await msg.edit_text(
@@ -236,11 +247,13 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf)
+        a = await get_analysis(tf, mode=mode_name)
         # Send signal card first (always fast)
         # Simulated data guard — block before showing any signal
         if getattr(a, "is_simulated", False):
@@ -288,11 +301,13 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf)
+        a = await get_analysis(tf, mode=mode_name)
         await msg.edit_text(trend_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("trend", tf))
     except Exception as e:
@@ -304,11 +319,13 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf)
+        a = await get_analysis(tf, mode=mode_name)
         await msg.edit_text(levels_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("levels", tf))
     except Exception as e:
@@ -320,11 +337,13 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    tf   = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf)
+        a = await get_analysis(tf, mode=mode_name)
         await msg.edit_text(outlook_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("outlook", tf))
     except Exception as e:
@@ -352,8 +371,9 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    tf   = _get_tf(context)
-    mode = get_mode_config()
+    chat_id = update.effective_chat.id
+    tf   = _get_tf(context, chat_id)
+    mode = get_user_mode_config(chat_id)
     text = (
         "<b>Settings</b>\n\n"
         f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
@@ -370,7 +390,8 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show and switch the active analysis persona."""
-    cfg = get_mode_config()
+    chat_id = update.effective_chat.id
+    cfg = get_user_mode_config(chat_id)
     lines = [
         f"<b>Analysis Mode</b>\nActive: {cfg.emoji} <b>{cfg.label}</b>",
         f"<i>{cfg.description}</i>\n",
@@ -382,7 +403,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"{mode.emoji} <b>{mode.label}</b>{marker} — {mode.description}")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML",
                                     reply_markup=settings_keyboard(
-                                        _get_tf(context), cfg.name
+                                        _get_tf(context, chat_id), cfg.name
                                     ))
 
 
@@ -419,7 +440,9 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from telegram.error import NetworkError, TimedOut
     import io
 
-    tf  = _get_tf(context)
+    chat_id = update.effective_chat.id
+    mode_name = get_user_mode(chat_id)
+    tf  = _get_tf(context, chat_id)
     ms  = market_status()
     msg = await update.message.reply_text(
         f"Generating XAU/USD {tf} chart...",
@@ -499,7 +522,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             from src.analysis import analyze
             from src.utils.formatting import pro_analysis_card, early_entry_card
-            a = await analyze(tf)
+            a = await analyze(tf, mode=mode_name)
             await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
                                             reply_markup=refresh_keyboard("chart", tf))
             await update.message.reply_text(early_entry_card(a), parse_mode="HTML")

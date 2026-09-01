@@ -1,8 +1,9 @@
 """
-Mode Manager — persists and serves the active Analysis Mode.
+Mode Manager — persists and serves the legacy/default Analysis Mode.
 
-The selected mode is stored in data/mode.json and survives restarts.
-All callers use get_mode_config() to retrieve the active ModeConfig.
+The selected mode is stored in data/mode.json and survives restarts. Account
+handlers use src.user_preferences instead; this module remains the fallback
+for background jobs and backwards compatibility.
 """
 import json
 import logging
@@ -47,9 +48,10 @@ def get_mode() -> str:
     return _load()
 
 
-def get_mode_config() -> ModeConfig:
-    """Return the active ModeConfig object."""
-    return MODES.get(_load(), MODES[DEFAULT_MODE])
+def get_mode_config(mode: Optional[str] = None) -> ModeConfig:
+    """Return a mode config, using global persisted mode when omitted."""
+    mode_name = mode if mode in MODES else _load()
+    return MODES.get(mode_name, MODES[DEFAULT_MODE])
 
 
 def get_timeframe() -> str:

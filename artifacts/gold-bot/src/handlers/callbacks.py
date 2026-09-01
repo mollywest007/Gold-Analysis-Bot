@@ -13,19 +13,25 @@ from src.utils.keyboards import (
     alerts_keyboard, settings_keyboard, main_menu_keyboard, refresh_keyboard,
 )
 from src.alerts import is_registered, register_user, unregister_user
-from src.mode_manager import get_mode_config, get_timeframe, set_mode, set_timeframe
+from src.user_preferences import (
+    get_mode as get_user_mode,
+    get_mode_config as get_user_mode_config,
+    get_timeframe as get_user_timeframe,
+    set_mode as set_user_mode,
+    set_timeframe as set_user_timeframe,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _get_tf(context: ContextTypes.DEFAULT_TYPE) -> str:
-    cfg = get_mode_config()
+def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
+    cfg = get_user_mode_config(chat_id)
     selected = context.user_data.get("timeframe")
-    return selected if selected in cfg.scan_timeframes else get_timeframe()
+    return selected if selected in cfg.scan_timeframes else get_user_timeframe(chat_id)
 
 
-def _scan_timeframes() -> list[str]:
-    return list(get_mode_config().scan_timeframes)
+def _scan_timeframes(chat_id: int) -> list[str]:
+    return list(get_user_mode_config(chat_id).scan_timeframes)
 
 
 def _closed_text() -> str:
@@ -53,6 +59,7 @@ def _is_open() -> bool:
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     data = query.data or ""
+    chat_id = update.effective_chat.id
 
     # ── Explicit automatic-alert controls ──────────────────────────────────────
     if data in ("alerts:on", "alerts:off", "alerts:status"):
@@ -81,14 +88,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("set_tf:"):
         await query.answer()
         tf = data.split(":")[1]
-        cfg = get_mode_config()
+        cfg = get_user_mode_config(chat_id)
         if tf not in cfg.scan_timeframes:
             await query.answer(
                 f"{tf} is not available in {cfg.label} Mode.",
                 show_alert=True,
             )
             return
-        set_timeframe(tf)
+        set_user_timeframe(chat_id, tf)
         context.user_data["timeframe"] = tf
         text = (
             "<b>Settings</b>\n\n"
@@ -106,13 +113,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer()
         mode_name = data.split(":", 1)[1]
         try:
-            cfg = set_mode(mode_name)
+            cfg = set_user_mode(chat_id, mode_name)
         except ValueError:
             await query.answer("Unknown analysis mode.", show_alert=True)
             return
         # set_mode persists the previous timeframe when it is valid in the new
         # mode, otherwise it selects that mode's preferred timeframe.
-        selected_tf = get_timeframe()
+        selected_tf = get_user_timeframe(chat_id)
         context.user_data["timeframe"] = selected_tf
         text = (
             "<b>Settings</b>\n\n"
@@ -132,12 +139,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data in ("back:main", "settings:back"):
         await query.answer()
         from telegram import InlineKeyboardMarkup
-        tf  = _get_tf(context)
+        tf  = _get_tf(context, chat_id)
         ms  = market_status()
         mkt_status = "OPEN" if ms["is_open"] else "CLOSED"
         text = (
             f"Market: <b>{mkt_status}</b> — {ms['note']}\n\n"
-            f"Mode: <b>{get_mode_config().label}</b>\n"
+            f"Mode: <b>{get_user_mode_config(chat_id).label}</b>\n"
             f"Timeframe: <b>{tf}</b>\n\n"
             "Use the menu below to continue."
         )
@@ -158,9 +165,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("refresh:"):
         parts = data.split(":")          # ["refresh", command, tf]
         command = parts[1] if len(parts) > 1 else ""
-        tf_arg  = parts[2] if len(parts) > 2 else _get_tf(context)
-        tf      = tf_arg if tf_arg != "all" else _get_tf(context)
+        tf_arg  = parts[2] if len(parts) > 2 else _get_tf(context, chat_id)
+        tf      = tf_arg if tf_arg != "all" else _get_tf(context, chat_id)
         kb = refresh_keyboard(command, tf_arg)
+        mode_name = get_user_mode(chat_id)
 
         # Always answer the query first so Telegram never shows a frozen button
         await query.answer()
@@ -204,7 +212,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Re-run engine analysis for the chart TF
                 from src.utils.formatting import pro_analysis_card
                 await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
-                a = await analyze(tf)
+                a = await analyze(tf, mode=mode_name)
                 await query.edit_message_text(
                     pro_analysis_card(a), parse_mode="HTML", reply_markup=kb
                 )
@@ -218,9 +226,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
                     # Sequential — see messages.py for explanation
                     _analyses = []
-                    for _tf in _scan_timeframes():
+                    for _tf in _scan_timeframes(chat_id):
                         try:
-                            _analyses.append(await analyze(_tf))
+                            _analyses.append(await analyze(_tf, mode=mode_name))
                         except Exception as _e:
                             logger.warning(f"analyze({_tf}) skipped: {_e}")
                     await query.edit_message_text(
@@ -229,28 +237,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "signal":
                     await query.edit_message_text("Scanning for setup...", reply_markup=kb)
-                    a = await analyze(tf)
+                    a = await analyze(tf, mode=mode_name)
                     await query.edit_message_text(
                         signal_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "trend":
                     await query.edit_message_text("Reading trend...", reply_markup=kb)
-                    a = await analyze(tf)
+                    a = await analyze(tf, mode=mode_name)
                     await query.edit_message_text(
                         trend_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "levels":
                     await query.edit_message_text("Calculating levels...", reply_markup=kb)
-                    a = await analyze(tf)
+                    a = await analyze(tf, mode=mode_name)
                     await query.edit_message_text(
                         levels_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "outlook":
                     await query.edit_message_text("Generating outlook...", reply_markup=kb)
-                    a = await analyze(tf)
+                    a = await analyze(tf, mode=mode_name)
                     await query.edit_message_text(
                         outlook_card(a), parse_mode="HTML", reply_markup=kb
                     )
@@ -259,7 +267,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     from src.utils.formatting import recommend_multi_card
                     await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
-                        *[analyze(tf_name) for tf_name in _scan_timeframes()],
+                        *[
+                            analyze(tf_name, mode=mode_name)
+                            for tf_name in _scan_timeframes(chat_id)
+                        ],
                         return_exceptions=True,
                     )
                     analyses = [r for r in results if not isinstance(r, Exception)]
@@ -282,7 +293,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── All analysis callbacks — blocked when market is closed ─────────────────
     await query.answer()
 
-    tf      = data.split(":")[1] if ":" in data else _get_tf(context)
+    mode_name = get_user_mode(chat_id)
+    tf      = data.split(":")[1] if ":" in data else _get_tf(context, chat_id)
     command = data.split(":")[0]          # e.g. "signal", "trend", "analyze" …
     kb      = refresh_keyboard(command, tf)
     context.user_data["timeframe"] = tf
@@ -301,7 +313,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             from src.utils.formatting import recommend_multi_card as _rmc
             import re as _re
             results = await asyncio.gather(
-                *[analyze(tf_name) for tf_name in _scan_timeframes()],
+                *[
+                    analyze(tf_name, mode=mode_name)
+                    for tf_name in _scan_timeframes(chat_id)
+                ],
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
@@ -322,7 +337,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("Analyzing all timeframes…", reply_markup=kb)
         try:
             results = await asyncio.gather(
-                *[analyze(tf_name) for tf_name in _scan_timeframes()],
+                *[
+                    analyze(tf_name, mode=mode_name)
+                    for tf_name in _scan_timeframes(chat_id)
+                ],
                 return_exceptions=True,
             )
             analyses = [r for r in results if not isinstance(r, Exception)]
@@ -336,7 +354,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("signal:"):
         await query.edit_message_text("Scanning for trade setup…", reply_markup=kb)
         try:
-            a = await analyze(tf)
+            a = await analyze(tf, mode=mode_name)
             await query.edit_message_text(signal_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -347,7 +365,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("trend:"):
         await query.edit_message_text("Reading trend…", reply_markup=kb)
         try:
-            a = await analyze(tf)
+            a = await analyze(tf, mode=mode_name)
             await query.edit_message_text(trend_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -358,7 +376,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("levels:"):
         await query.edit_message_text("Calculating levels…", reply_markup=kb)
         try:
-            a = await analyze(tf)
+            a = await analyze(tf, mode=mode_name)
             await query.edit_message_text(levels_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -369,7 +387,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("outlook:"):
         await query.edit_message_text("Generating outlook…", reply_markup=kb)
         try:
-            a = await analyze(tf)
+            a = await analyze(tf, mode=mode_name)
             await query.edit_message_text(outlook_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:

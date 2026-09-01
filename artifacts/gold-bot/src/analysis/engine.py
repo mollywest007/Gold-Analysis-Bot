@@ -1473,10 +1473,10 @@ def _select_direction(
 
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
-async def analyze(timeframe: str = "H1") -> MarketAnalysis:
+async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     from src.mode_manager import get_mode_config
 
-    mode_cfg = get_mode_config()
+    mode_cfg = get_mode_config(mode) if mode else get_mode_config()
 
     # The active mode owns the confirmation hierarchy.  The legacy map remains
     # a safe fallback for callers that introduce a timeframe before adding it
