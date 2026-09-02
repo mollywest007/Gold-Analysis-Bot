@@ -1,1 +1,54 @@
-{"mode": "scalp", "timeframe": "M15", "active_signal": {"M15": "SELL"}, "last_fired": {"M15": 1788247625.1884613}}
+{
+  "accounts": {
+    "7354092356": {
+      "mode": "scalp",
+      "timeframe": "M15",
+      "active_signal": {
+        "M15": "SELL"
+      },
+      "last_fired": {
+        "M15": 1788271490.0668244
+      },
+      "pending_signal": {},
+      "sl_cooldown_until": {
+        "M15": 1788271474.452811
+      },
+      "forming_alert_sent": {},
+      "momentum_shift_warned": {
+        "M15": "BUY"
+      },
+      "reminded_trade_ids": {
+        "5e9ceaecf45442538370058162aad61e": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "a5f5ba8ab954488c8873f3bc4bc4a733": [
+          "entry"
+        ]
+      }
+    },
+    "8039158711": {
+      "mode": "intraday",
+      "timeframe": "H1",
+      "active_signal": {
+        "H1": "SELL"
+      },
+      "last_fired": {
+        "H1": 1788338993.8669627
+      },
+      "pending_signal": {},
+      "sl_cooldown_until": {
+        "H1": 1788273471.214284
+      },
+      "forming_alert_sent": {},
+      "momentum_shift_warned": {},
+      "reminded_trade_ids": {
+        "ae609671f72d4e03ab8495c9db47320a": [
+          "entry",
+          "update_2x"
+        ]
+      }
+    }
+  }
+}
