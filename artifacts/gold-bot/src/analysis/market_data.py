@@ -46,7 +46,8 @@ _cache_lock = asyncio.Lock()
 
 class OHLCVData:
     def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0,
-                 is_simulated: bool = False, timestamps: list = None):
+                 is_simulated: bool = False, timestamps: list = None,
+                 fetched_at: float = 0.0):
         self.opens        = opens
         self.highs        = highs
         self.lows         = lows
@@ -55,6 +56,9 @@ class OHLCVData:
         self.price        = spot_price if spot_price > 0 else (closes[-1] if closes else 0.0)
         self.is_simulated = is_simulated  # True when real data fetch failed — signals unreliable
         self.timestamps   = timestamps or []  # Unix timestamps per candle (open time)
+        # Exit detection uses this to reject an old cached object after a
+        # market-data outage instead of treating its last wick as live evidence.
+        self.fetched_at   = float(fetched_at or time.time())
 
     def __len__(self):
         return len(self.closes)

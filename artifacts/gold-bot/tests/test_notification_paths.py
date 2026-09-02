@@ -82,6 +82,42 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             (111.0, 99.0),
         )
 
+    def test_stale_ohlcv_is_reduced_to_spot_only_for_exit_detection(self):
+        data = SimpleNamespace(
+            highs=[120.0],
+            lows=[80.0],
+            timestamps=[900.0],
+            fetched_at=100.0,
+            is_simulated=False,
+        )
+
+        self.assertEqual(
+            alerts._post_entry_tf_extremes(
+                data,
+                current_price=100.0,
+                opened_at=0.0,
+                timeframe="M15",
+                now=2000.0,
+            ),
+            (100.0, 100.0),
+        )
+
+    def test_signal_lock_is_removed_without_an_active_persisted_trade(self):
+        active_signal = {"M15": "BUY", "H1": "SELL"}
+        last_fired = {"M15": 100.0, "H1": 200.0}
+        pending = {"H1": "SELL"}
+
+        alerts._reconcile_signal_locks(
+            active_signal,
+            last_fired,
+            pending,
+            [{"timeframe": "H1", "status": "open"}],
+        )
+
+        self.assertEqual(active_signal, {"H1": "SELL"})
+        self.assertEqual(last_fired, {"H1": 200.0})
+        self.assertEqual(pending, {"H1": "SELL"})
+
     async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
         bot = AsyncMock()
         active_trade = {
@@ -509,6 +545,64 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             bot.send_message.await_args.kwargs["text"],
             "ENTRY ALERT",
         )
+
+    async def test_entry_alert_is_withheld_when_trade_cannot_be_persisted(self):
+        from src import market_hours
+
+        full_signal = SimpleNamespace(
+            action="BUY",
+            setup_quality="A",
+            confidence=85,
+            win_probability=75,
+            buy_votes=7,
+            sell_votes=1,
+            adx=25.0,
+            is_simulated=False,
+            htf_bias="Bullish",
+            choch="NONE",
+            entry=2350.0,
+            stop_loss=2335.0,
+            tp1=2380.0,
+            tp2=2400.0,
+            tp3=2420.0,
+            rr_ratio=2.0,
+            early_entry=0.0,
+            limit_entry=0.0,
+            atr=10.0,
+        )
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_mode_config", return_value=SimpleNamespace(
+                 name="intraday",
+                 confluence_min_tfs=3,
+                 alert_min_win_probability=60,
+                 alert_min_grades=("A+", "A"),
+             )), \
+             patch.object(alerts, "get_scan_timeframes", return_value=["M15"]), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(alerts, "_safe_analyze", new=AsyncMock(return_value=full_signal)), \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts, "fetch_ohlcv", new=AsyncMock(return_value=None)), \
+             patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "get_all_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "open_trade", return_value=False) as open_trade, \
+             patch.object(alerts, "_fire_signal", new=AsyncMock()) as fire_signal, \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ):
+            await alerts._check_and_alert_once(context)
+
+        open_trade.assert_called_once()
+        fire_signal.assert_not_awaited()
+        context.application.bot.send_message.assert_not_awaited()
 
     async def test_simulated_setup_does_not_send_any_notification(self):
         from src import market_hours

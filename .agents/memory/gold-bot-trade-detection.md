@@ -102,3 +102,16 @@ the user may open a replacement plan before the pending result is retried.
 
 **How to apply:** Keep result/cooldown delivery account-scoped and check the
 current active timeframe owner before sending `SL` or `TP1_SL`.
+
+## Entry delivery safety
+
+An entry alert is sent only after its validated trade plan has been persisted.
+If no recipient accepts the alert, roll back the untouched record; reconcile
+signal locks against persisted active trades on every scan.
+
+**Why:** Sending first allowed a malformed plan or persistence failure to show
+an entry while `/active` had no matching position, and stale locks then hid
+the next valid signal.
+
+**How to apply:** Treat the persisted trade record as the position source of
+truth; signal state is only an alert-delivery guard.

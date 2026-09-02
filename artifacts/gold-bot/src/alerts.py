@@ -526,7 +526,13 @@ def clear_signal_lock(
     return cooldown_until if after_sl else None
 
 
-def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
+def _post_entry_tf_extremes(
+    data,
+    current_price: float,
+    opened_at: float,
+    timeframe: str = "",
+    now: float | None = None,
+):
     """Return verified candle extremes for exit checks.
 
     Simulated OHLCV is suitable for keeping charts and analysis alive, but it
@@ -541,14 +547,39 @@ def _post_entry_tf_extremes(data, current_price: float, opened_at: float):
     if getattr(data, "is_simulated", False):
         return None
 
+    now = time.time() if now is None else now
+    period = _TF_PERIOD_SECONDS.get(timeframe)
+    fetched_at = _safe_float(getattr(data, "fetched_at", 0.0))
+    if period and fetched_at > 0:
+        # A cached fetch is acceptable, but an object older than one candle
+        # plus a small grace period is not reliable exit evidence.  Returning
+        # spot-only evidence here prevents a stale historical wick from
+        # closing a live trade.
+        if now - fetched_at > period + 5 * 60:
+            logger.warning(
+                "[%s] Ignoring stale OHLCV for exit detection (age %.0fs).",
+                timeframe,
+                now - fetched_at,
+            )
+            return (current_price, current_price)
+
     highs = data.highs
     lows = data.lows
     timestamps = getattr(data, "timestamps", [])
     if timestamps and opened_at > 0:
-        indices = [
-            i for i, ts in enumerate(timestamps)
-            if ts >= opened_at and i < len(highs) and i < len(lows)
-        ]
+        indices = []
+        for i, ts in enumerate(timestamps):
+            try:
+                ts = float(ts)
+            except (TypeError, ValueError):
+                continue
+            if (
+                ts >= opened_at
+                and i < len(highs)
+                and i < len(lows)
+                and (not period or 0 <= now - ts <= period + 5 * 60)
+            ):
+                indices.append(i)
         if not indices:
             # No verified post-entry candle exists yet.  Use spot only.
             return (current_price, current_price)
@@ -577,6 +608,35 @@ def get_signal_lock_info(
     last_fired = tf_last_fired.get(tf, 0.0)
     elapsed    = int((time.time() - last_fired) // 60)
     return f"Alert sent {elapsed}m ago ({direction}) — waiting for signal to reset"
+
+
+def _reconcile_signal_locks(
+    active_signal: Dict[str, str],
+    tf_last_fired: Dict[str, float],
+    pending_signal: Dict[str, str],
+    active_trades: list[dict],
+) -> None:
+    """Remove entry locks that no longer have a persisted position owner.
+
+    Signal state is a delivery guard, not a second position database. Older
+    bot versions could save the lock after sending an entry but fail to save
+    the trade, leaving /active empty while the timeframe stayed blocked.
+    """
+    owned_timeframes = {
+        trade.get("timeframe")
+        for trade in active_trades
+        if trade.get("timeframe")
+    }
+    for timeframe in list(active_signal):
+        if timeframe in owned_timeframes or timeframe in pending_signal:
+            continue
+        direction = active_signal.pop(timeframe, "")
+        tf_last_fired.pop(timeframe, None)
+        logger.warning(
+            "[%s] Removed stale %s signal lock — no active persisted trade.",
+            timeframe,
+            direction or "unknown",
+        )
 
 
 async def _send_setup_forming_alert(
@@ -1368,15 +1428,23 @@ async def _check_and_alert_once(
         logger.info("Alert scan: no subscribers.")
         return
 
+    # Make the persisted trade store authoritative over any stale signal lock
+    # left by an older alert-before-persistence cycle.
+    _reconcile_signal_locks(
+        active_signal,
+        tf_last_fired,
+        pending_signal,
+        _get_active_trades(),
+    )
+
     # ── Check open trades for TP/SL hits ──────────────────────────────────────
     # Use each open trade's own timeframe candle (high/low) rather than a
     # single spot-price snapshot — a 30s poll can miss a brief wick through
     # TP/SL and either report the wrong exit price or miss the touch outright.
     #
-    # We look at the last 3 candles (not just the newest) so a wick that fired
-    # on a candle already scrolled out of the live spot price is still caught.
-    # The worst-case downside is a slightly stale exit price shown in the card,
-    # which is always safer than silently missing the hit entirely.
+    # We use the newest verified post-entry candle only. Older normalized
+    # futures candles can retain a wick from before the current spot/futures
+    # basis settled and must not be replayed as a fresh exit.
     #
     # tfs_closed_this_cycle: tracks TFs whose trade closed in this scan so the
     # signal-scanner below skips them — prevents same-cycle re-entry before the
@@ -1420,7 +1488,13 @@ async def _check_and_alert_once(
                         )
 
                     opened_at = tf_opened_at.get(tf, 0.0)
-                    extremes = _post_entry_tf_extremes(data, current_price, opened_at)
+                    extremes = _post_entry_tf_extremes(
+                        data,
+                        current_price,
+                        opened_at,
+                        timeframe=tf,
+                        now=now_ts,
+                    )
                     if extremes is not None:
                         tf_extremes[tf] = extremes
 
@@ -1776,41 +1850,14 @@ async def _check_and_alert_once(
             return
 
         claimed_tfs = {tf for tf, _ in sig_list}
-        if len(sig_list) >= mode_cfg.confluence_min_tfs:
-            delivered = await _fire_confluence(bot, subs, sig_list, direction)
-        else:
-            delivered_signals = []
-            for tf, a in sig_list:
-                if await _fire_signal(bot, subs, a, tf):
-                    delivered_signals.append((tf, a))
-            sig_list = delivered_signals
 
-        # Do not lock or create a tracked trade when Telegram did not accept
-        # the alert. The next scan must retry a transient delivery failure.
-        delivered_tfs = {tf for tf, _ in sig_list}
-        if not sig_list or (
-            len(sig_list) >= mode_cfg.confluence_min_tfs and not delivered
-        ):
-            for tf in claimed_tfs:
-                pending_signal.pop(tf, None)
-            logger.warning(
-                f"[{direction}] Alert not delivered; leaving signal state unlocked "
-                "for retry."
-            )
-            return
-
-        now_ts = time.time()
-        delivered_tfs = {tf for tf, _ in sig_list}
-        # Individual delivery can partially succeed.  Release claims for
-        # failed timeframes so a later scan can retry them, while preserving
-        # the lock for the timeframes whose alert was accepted.
-        for tf in claimed_tfs - delivered_tfs:
-            pending_signal.pop(tf, None)
+        # Persist each plan before sending its entry alert.  Previously the
+        # alert was sent first and open_trade() ran afterward; a malformed
+        # target ladder or any persistence failure could therefore tell the
+        # user to enter a trade that /active could never show.
+        created_trades: dict[str, dict] = {}
         for tf, a in sig_list:
-            active_signal[tf] = direction
-            tf_last_fired[tf] = now_ts
             try:
-                invalidate_cache(tf)
                 opened = trade_tracker.open_trade(
                     direction=a.action, entry=a.entry, sl=a.stop_loss,
                     tp1=a.tp1, tp2=a.tp2, timeframe=tf,
@@ -1824,17 +1871,98 @@ async def _check_and_alert_once(
                     ),
                     account_id=account_id,
                 )
-                if not opened:
-                    logger.warning(
-                        f"[{tf}] Alert delivered but trade plan was not opened; "
-                        "keeping a local signal lock to prevent re-entry spam."
-                    )
-                    active_signal[tf] = direction
-                    tf_last_fired[tf] = now_ts
+            except Exception as e:
+                opened = False
+                logger.error(f"Trade open failed before alert ({tf}): {e}")
+            if not opened:
+                # Roll back any earlier plans in a grouped signal. Never send
+                # only part of a confluence bundle.
+                for created in created_trades.values():
+                    trade_tracker.cancel_trade(created["id"], account_id)
+                for claimed_tf in claimed_tfs:
+                    pending_signal.pop(claimed_tf, None)
+                logger.warning(
+                    f"[{direction}] Entry alert withheld — trade plan could not "
+                    f"be persisted for {tf}."
+                )
+                _save_signal_state(account_id, state)
+                return
+            persisted = next(
+                (
+                    trade for trade in trade_tracker.get_all_trades(account_id)
+                    if trade.get("timeframe") == tf
+                    and trade.get("status") == "open"
+                    and trade.get("direction") == direction
+                    and trade.get("opened_at", 0) > time.time() - 10
+                ),
+                None,
+            )
+            if not persisted:
+                for created in created_trades.values():
+                    trade_tracker.cancel_trade(created["id"], account_id)
+                pending_signal.clear()
+                logger.error(
+                    f"[{direction}] Entry alert withheld — persisted trade "
+                    f"could not be re-read for {tf}."
+                )
+                _save_signal_state(account_id, state)
+                return
+            created_trades[tf] = persisted
+
+        # The plans now exist before Telegram I/O.  If delivery fails for all
+        # recipients, remove only these untouched records so the next scan can
+        # retry without leaving a ghost position in /active.
+        delivered = False
+        delivered_signals = []
+        if len(sig_list) >= mode_cfg.confluence_min_tfs:
+            try:
+                delivered = await _fire_confluence(bot, subs, sig_list, direction)
+            except Exception as e:
+                logger.error(f"[{direction}] Confluence alert delivery failed: {e}")
+                delivered = False
+            if delivered:
+                delivered_signals = list(sig_list)
+        else:
+            for tf, a in sig_list:
+                try:
+                    delivered_for_tf = await _fire_signal(bot, subs, a, tf)
+                except Exception as e:
+                    logger.error(f"[{tf}] Entry alert delivery failed: {e}")
+                    delivered_for_tf = False
+                if delivered_for_tf:
+                    delivered_signals.append((tf, a))
+            delivered = bool(delivered_signals)
+
+        # Do not lock a timeframe or keep a tracked trade when Telegram did
+        # not accept that timeframe's alert.
+        delivered_tfs = {tf for tf, _ in delivered_signals}
+        for tf in claimed_tfs - delivered_tfs:
+            pending_signal.pop(tf, None)
+            created = created_trades.get(tf)
+            if created:
+                trade_tracker.cancel_trade(created["id"], account_id)
+        if not delivered_signals:
+            for tf in claimed_tfs:
+                pending_signal.pop(tf, None)
+            logger.warning(
+                f"[{direction}] Alert not delivered; rolled back persisted "
+                "trade plans and leaving signal state unlocked for retry."
+            )
+            _save_signal_state(account_id, state)
+            return
+        sig_list = delivered_signals
+
+        now_ts = time.time()
+        delivered_tfs = {tf for tf, _ in sig_list}
+        for tf, a in sig_list:
+            active_signal[tf] = direction
+            tf_last_fired[tf] = now_ts
+            try:
+                invalidate_cache(tf)
                 pending_signal.pop(tf, None)
             except Exception as e:
                 pending_signal.pop(tf, None)
-                logger.error(f"Trade open failed ({tf}): {e}")
+                logger.error(f"Post-alert state update failed ({tf}): {e}")
         _save_signal_state(account_id, state)
 
     # Group by direction so confluence alerts bundle same-direction TFs together

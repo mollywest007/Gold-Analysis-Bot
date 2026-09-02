@@ -196,6 +196,41 @@ def open_trade(
     return True
 
 
+def cancel_trade(
+    trade_id: str, account_id: int | str | None = None
+) -> bool:
+    """Roll back a just-created trade when its entry alert was not delivered.
+
+    This is intentionally limited to untouched ``open`` records.  A trade that
+    has reached a milestone or terminal state is never deleted by a delivery
+    rollback, so notification retries and history remain safe.
+    """
+    trade_id = str(trade_id or "")
+    if not trade_id:
+        return False
+    trades = _load()
+    account_key = _account_key(account_id)
+    for index, trade in enumerate(trades):
+        if (
+            str(trade.get("id") or "") != trade_id
+            or (account_key is not None and not _belongs_to_account(trade, account_key))
+            or trade.get("status") != "open"
+            or trade.get("tp1_hit")
+            or trade.get("tp2_hit")
+            or trade.get("tp3_hit")
+        ):
+            continue
+        del trades[index]
+        _save(trades)
+        logger.info(
+            "[%s] Rolled back undelivered trade %s.",
+            trade.get("timeframe", "?"),
+            trade_id,
+        )
+        return True
+    return False
+
+
 def check_trades(current_price: float, recent_high: float = None,
                   recent_low: float = None,
                   tf_extremes: Dict[str, Any] = None,

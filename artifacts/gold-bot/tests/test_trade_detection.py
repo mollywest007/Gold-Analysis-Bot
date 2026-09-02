@@ -234,6 +234,22 @@ class TradeDetectionTests(unittest.TestCase):
             )
         )
 
+    def test_cancel_trade_rolls_back_only_untouched_open_record(self):
+        self.assertTrue(self._open_buy(timeframe="M15"))
+        trade = trade_tracker.get_all_trades()[0]
+
+        self.assertTrue(trade_tracker.cancel_trade(trade["id"]))
+        self.assertEqual(trade_tracker.get_all_trades(), [])
+
+        self.assertTrue(self._open_buy(timeframe="M15"))
+        trade = trade_tracker.get_all_trades()[0]
+        trade_tracker.check_trades(
+            100.0,
+            tf_extremes={"M15": (111.0, 99.0)},
+        )
+        self.assertFalse(trade_tracker.cancel_trade(trade["id"]))
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "tp1_hit")
+
     def test_limit_entry_is_preserved_separately_from_tracked_market_entry(self):
         self.assertTrue(
             trade_tracker.open_trade(
