@@ -101,6 +101,20 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.await_count, 1)
         self.assertIn("entry", alerts._reminded_trade_ids["reminder-test"])
 
+    async def test_unavailable_price_does_not_consume_missed_alert(self):
+        self._write_trade(time.time() - 15 * 60)
+
+        first = await self._run_reminder(0)
+        self.assertEqual(first.await_count, 0)
+        self.assertNotIn(
+            "entry",
+            alerts._reminded_trade_ids.get("reminder-test", set()),
+        )
+
+        second = await self._run_reminder(100.10)
+        self.assertEqual(second.await_count, 1)
+        self.assertIn("MISSED ALERT — ENTRY STILL OPEN", second.await_args.args[2])
+
     async def test_malformed_open_trade_does_not_block_valid_reminder(self):
         self._write_trade(time.time() - 15 * 60)
         with open(self.trades_file.name, "r+") as f:

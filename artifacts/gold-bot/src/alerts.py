@@ -2088,9 +2088,15 @@ async def _send_trade_reminder_once(
         return
 
     try:
-        current_price = await get_gold_price()
+        current_price = _safe_float(await get_gold_price())
     except Exception as e:
         logger.warning(f"Reminder — could not fetch price: {e}")
+        return
+    if current_price <= 0:
+        logger.warning(
+            "Reminder — live price unavailable; leaving reminder milestones "
+            "available for the next run."
+        )
         return
 
     now = time.time()
@@ -2153,6 +2159,8 @@ async def _send_trade_reminder_once(
             # minutes.  Later milestones are status updates and still send.
             if require_near and not entry_reachable:
                 sent_milestones.add(label)
+                if account_id is not None:
+                    _save_signal_state(account_id, state)
                 logger.info(
                     f"[REMINDER:{label}] {direction} {tf} skipped — "
                     f"price moved away from entry ({entry:,.2f} → "
