@@ -4,6 +4,7 @@
       "mode": "scalp",
       "timeframe": "M15",
       "active_signal": {},
+      "closed_signal": {},
       "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
@@ -32,6 +33,7 @@
       "active_signal": {
         "H1": "SELL"
       },
+      "closed_signal": {},
       "last_fired": {
         "H1": 1788342563.7672982
       },
