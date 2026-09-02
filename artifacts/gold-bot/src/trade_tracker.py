@@ -577,7 +577,11 @@ def get_active_trades_for_account(
     """
     # Legacy records without an owner are deliberately excluded. Matching
     # mode/timeframe is not evidence of ownership and would leak positions.
-    return get_active_trades(account_id)
+    return [
+        trade
+        for trade in get_active_trades(account_id)
+        if _belongs_to_account(trade, account_id)
+    ]
 
 
 def get_stats(account_id: int | str | None = None) -> Dict[str, Any]:

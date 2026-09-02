@@ -221,10 +221,14 @@
       "confidence": 94,
       "rr_ratio": 1.5,
       "opened_at": 1788271490.0671492,
-      "status": "open",
-      "tp1_hit": false,
-      "tp2_hit": false,
-      "tp3_hit": false
+      "status": "tp3_hit",
+      "tp1_hit": true,
+      "tp2_hit": true,
+      "tp3_hit": true,
+      "closed_at": 1788339425.8825839,
+      "close_reason": "take_profit",
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1788339425.9380143
     },
     {
       "id": "f25b52f5231245aa9187afc562d8f884",
@@ -241,10 +245,14 @@
       "confidence": 97,
       "rr_ratio": 2.0,
       "opened_at": 1788338993.8672216,
-      "status": "open",
-      "tp1_hit": false,
-      "tp2_hit": false,
-      "tp3_hit": false
+      "status": "tp3_hit",
+      "tp1_hit": true,
+      "tp2_hit": true,
+      "tp3_hit": true,
+      "closed_at": 1788339425.8825934,
+      "close_reason": "take_profit",
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1788339425.985794
     }
   ]
 }

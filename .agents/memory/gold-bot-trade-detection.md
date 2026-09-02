@@ -89,3 +89,16 @@ stop, especially during market-data outages or weekend sessions.
 high/low data to the trade tracker; use only the newest verified post-entry
 candle, and treat a missing or failed candle fetch as spot-only rather than
 exit evidence.
+
+## Delayed result safety
+
+Terminal SL/BE notifications must be revalidated against the persisted,
+account-owned trade immediately before delivery. If a newer active plan now
+owns the same timeframe, suppress the delayed old result rather than making it
+look like the active plan was stopped.
+
+**Why:** Notification delivery can fail or be delayed after a trade closes and
+the user may open a replacement plan before the pending result is retried.
+
+**How to apply:** Keep result/cooldown delivery account-scoped and check the
+current active timeframe owner before sending `SL` or `TP1_SL`.

@@ -34,7 +34,12 @@ def _trade(**overrides):
 class ActivePanelTests(unittest.TestCase):
     def test_account_panel_excludes_another_profiles_legacy_trade(self):
         trades = [
-            _trade(mode="scalp", timeframe="M15", opened_at=2000),
+            _trade(
+                account_id=8039158711,
+                mode="intraday",
+                timeframe="H1",
+                opened_at=2000,
+            ),
             _trade(mode="intraday", timeframe="H1", opened_at=1000),
         ]
 
@@ -46,7 +51,7 @@ class ActivePanelTests(unittest.TestCase):
             )
 
         self.assertEqual(len(account_trades), 1)
-        self.assertEqual(account_trades[0]["mode"], "intraday")
+        self.assertEqual(account_trades[0]["account_id"], 8039158711)
         self.assertEqual(account_trades[0]["timeframe"], "H1")
 
     def test_unavailable_price_never_becomes_zero_pnl(self):

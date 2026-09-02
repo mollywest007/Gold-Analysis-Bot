@@ -859,6 +859,25 @@ def _is_verified_terminal_result(trade: dict, event: str) -> bool:
     return True
 
 
+def _has_other_active_trade_on_timeframe(
+    trade: dict, account_id: int | None = None
+) -> bool:
+    """Prevent a delayed old result from confusing a newly active plan."""
+    if account_id is None:
+        # Legacy callers intentionally operate on the unscoped maintenance
+        # view; production notification jobs always provide an account ID.
+        return False
+    trade_id = str(trade.get("id") or "")
+    timeframe = trade.get("timeframe")
+    if not timeframe:
+        return False
+    return any(
+        str(active.get("id") or "") != trade_id
+        and active.get("timeframe") == timeframe
+        for active in trade_tracker.get_active_trades(account_id)
+    )
+
+
 async def _send_verified_result_event(
     bot, subs: Set[int], trade: dict, event: str, exit_price: float,
     account_id: int | None = None,
@@ -886,6 +905,18 @@ async def _send_verified_result_event(
             f"trade {trade_id} lacks verified terminal close evidence "
             f"(status={persisted.get('status')!r}, "
             f"reason={persisted.get('close_reason')!r})."
+        )
+        return False
+
+    if event in {"SL", "TP1_SL"} and _has_other_active_trade_on_timeframe(
+        persisted, account_id
+    ):
+        logger.warning(
+            "[%s] %s result suppressed — another active trade owns this "
+            "timeframe for account %s.",
+            persisted.get("timeframe", "?"),
+            event,
+            account_id,
         )
         return False
 
@@ -925,6 +956,14 @@ async def _send_sl_cooldown_notification(
         logger.warning(
             f"[{trade.get('timeframe', '?')}] cooldown notification skipped — "
             f"trade {trade_id or '<missing>'} is not a verified SL closure."
+        )
+        return False
+    if _has_other_active_trade_on_timeframe(persisted, account_id):
+        logger.warning(
+            "[%s] cooldown notification suppressed — another active trade "
+            "owns this timeframe for account %s.",
+            persisted.get("timeframe", "?"),
+            account_id,
         )
         return False
     if not persisted.get("cooldown_notification_pending"):
@@ -1306,18 +1345,20 @@ async def _check_and_alert_once(
     bot      = context.application.bot
     now_ts   = time.time()
 
-    # ── Market open/close transitions ─────────────────────────────────────────
-    if _prev_market_open is not None and subs:
-        if not _prev_market_open and now_open:
-            if (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN:
-                _open_notif_sent_at = now_ts
-                await _send_market_open_notification(bot, subs)
-        elif _prev_market_open and not now_open:
-            if (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN:
-                _close_notif_sent_at = now_ts
-                await _send_market_close_notification(bot, subs)
-
-    _prev_market_open = now_open
+    # Market transitions are broadcast once by check_and_alert() so every
+    # subscribed account receives the same market-wide notice. The legacy
+    # direct-call path retains its historical behavior for maintenance/tests.
+    if not account_scan:
+        if _prev_market_open is not None and subs:
+            if not _prev_market_open and now_open:
+                if (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN:
+                    _open_notif_sent_at = now_ts
+                    await _send_market_open_notification(bot, subs)
+            elif _prev_market_open and not now_open:
+                if (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN:
+                    _close_notif_sent_at = now_ts
+                    await _send_market_close_notification(bot, subs)
+        _prev_market_open = now_open
 
     if not now_open:
         logger.info(f"Alert scan skipped — {ms['status_text']}")
@@ -1821,6 +1862,31 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
         if not subscribers:
             logger.info("Alert scan: no subscribers.")
             return
+        from src.market_hours import market_status
+        global _prev_market_open, _open_notif_sent_at, _close_notif_sent_at
+        status = market_status()
+        now_open = status["is_open"]
+        now_ts = time.time()
+        if _prev_market_open is not None:
+            if (
+                not _prev_market_open
+                and now_open
+                and (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN
+            ):
+                _open_notif_sent_at = now_ts
+                await _send_market_open_notification(
+                    context.application.bot, subscribers
+                )
+            elif (
+                _prev_market_open
+                and not now_open
+                and (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN
+            ):
+                _close_notif_sent_at = now_ts
+                await _send_market_close_notification(
+                    context.application.bot, subscribers
+                )
+        _prev_market_open = now_open
         # Sequential account scans avoid read/modify/write races in the JSON
         # trade store while each account still gets its own independent scan,
         # locks, trades, mode, and targeted notifications.
