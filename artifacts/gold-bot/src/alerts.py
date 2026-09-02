@@ -29,6 +29,10 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 # Tracks the last fired direction per timeframe — persisted to disk.
 # Structure: { "H1": "SELL", "M15": "BUY", ... }
 _active_signal: Dict[str, str] = {}
+# Direction that most recently closed on each timeframe.  A closed trade must
+# not immediately reopen from the same unchanged analysis; the signal must
+# first change direction before that timeframe is re-armed.
+_closed_signal: Dict[str, str] = {}
 # Timestamp of when each TF last fired an alert
 _tf_last_fired: Dict[str, float] = {}
 # A scan can take longer than the 15-second scheduler interval while charts
@@ -154,6 +158,7 @@ class AccountAlertState:
     """All alert locks and reminder state for one Telegram account."""
 
     active_signal: Dict[str, str] = field(default_factory=dict)
+    closed_signal: Dict[str, str] = field(default_factory=dict)
     tf_last_fired: Dict[str, float] = field(default_factory=dict)
     pending_signal: Dict[str, str] = field(default_factory=dict)
     sl_cooldown_until: Dict[str, float] = field(default_factory=dict)
@@ -171,6 +176,7 @@ def _state_from_record(record: dict) -> AccountAlertState:
     reminded = record.get("reminded_trade_ids", {})
     return AccountAlertState(
         active_signal=dict(record.get("active_signal") or {}),
+        closed_signal=dict(record.get("closed_signal") or {}),
         tf_last_fired=dict(record.get("last_fired") or {}),
         pending_signal=dict(record.get("pending_signal") or {}),
         sl_cooldown_until=dict(record.get("sl_cooldown_until") or {}),
@@ -190,6 +196,7 @@ def _state_record(state: AccountAlertState) -> dict:
         "mode": state.mode,
         "timeframe": state.timeframe,
         "active_signal": state.active_signal,
+        "closed_signal": state.closed_signal,
         "last_fired": state.tf_last_fired,
         "pending_signal": state.pending_signal,
         "sl_cooldown_until": state.sl_cooldown_until,
@@ -365,6 +372,7 @@ def _sync_mode_state(
         previous_mode = _signal_state_mode
         previous_timeframe = _signal_state_timeframe
         active_signal = _active_signal
+        closed_signal = _closed_signal
         tf_last_fired = _tf_last_fired
         forming_alert_sent = _forming_alert_sent
         momentum_shift_warned = _momentum_shift_warned
@@ -375,6 +383,7 @@ def _sync_mode_state(
         previous_mode = state.mode
         previous_timeframe = state.timeframe
         active_signal = state.active_signal
+        closed_signal = state.closed_signal
         tf_last_fired = state.tf_last_fired
         forming_alert_sent = state.forming_alert_sent
         momentum_shift_warned = state.momentum_shift_warned
@@ -393,6 +402,7 @@ def _sync_mode_state(
             f"{active_mode}/{active_timeframe}; clearing stale entry locks."
         )
         active_signal.clear()
+        closed_signal.clear()
         tf_last_fired.clear()
         forming_alert_sent.clear()
         momentum_shift_warned.clear()
@@ -429,6 +439,7 @@ def _should_send(
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
     pending_signal = state.pending_signal if state else _pending_signal
     active_signal = state.active_signal if state else _active_signal
+    closed_signal = state.closed_signal if state else _closed_signal
     cooldown_until = sl_cooldown_until.get(tf, 0.0)
     if time.time() < cooldown_until:
         remaining = int((cooldown_until - time.time()) // 60)
@@ -441,6 +452,18 @@ def _should_send(
             f"({pending_signal[tf]} claim in progress)."
         )
         return False
+
+    # A terminal trade should not be reopened by the same unchanged signal.
+    # Require a direction change to re-arm this timeframe.
+    closed_direction = closed_signal.get(tf)
+    if closed_direction == action:
+        logger.info(
+            f"[{tf}] Suppressed — previous {action} trade closed; "
+            "waiting for a direction change before re-entry."
+        )
+        return False
+    if closed_direction and closed_direction != action:
+        closed_signal.pop(tf, None)
 
     # A persisted signal lock is not enough to prove that the old plan closed.
     # A same-direction signal is suppressed while its plan is active.  An
@@ -501,13 +524,19 @@ def clear_signal_lock(
     Returns the cooldown deadline when a cooldown was started.
     """
     active_signal = state.active_signal if state else _active_signal
+    closed_signal = state.closed_signal if state else _closed_signal
     pending_signal = state.pending_signal if state else _pending_signal
     tf_last_fired = state.tf_last_fired if state else _tf_last_fired
     momentum_shift_warned = state.momentum_shift_warned if state else _momentum_shift_warned
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
+    last_direction = active_signal.get(tf)
     active_signal.pop(tf, None)
     pending_signal.pop(tf, None)
-    tf_last_fired.pop(tf, None)
+    if last_direction:
+        closed_signal[tf] = last_direction
+        tf_last_fired[tf] = time.time()
+    else:
+        tf_last_fired.pop(tf, None)
     # Clear momentum-shift warning state so the next shift warns fresh
     momentum_shift_warned.pop(tf, None)
     if after_sl:
@@ -521,7 +550,10 @@ def clear_signal_lock(
         )
     else:
         sl_cooldown_until.pop(tf, None)
-        logger.info(f"[{tf}] Signal lock cleared — ready for next entry.")
+        logger.info(
+            f"[{tf}] Signal lock cleared — waiting for a direction change "
+            "before re-entry."
+        )
     _save_signal_state(account_id, state)
     return cooldown_until if after_sl else None
 
