@@ -253,6 +253,26 @@
       "close_reason": "take_profit",
       "result_notification_pending": false,
       "result_notification_sent_at": 1788339425.985794
+    },
+    {
+      "id": "4ce4f85d40054541b857cd0efad89096",
+      "account_id": "8039158711",
+      "direction": "SELL",
+      "entry": 4310.0,
+      "limit_entry": 4312.42,
+      "sl": 4341.7,
+      "tp1": 4246.6,
+      "tp2": 4199.05,
+      "tp3": 4167.35,
+      "timeframe": "H1",
+      "mode": "intraday",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1788342058.6250007,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }

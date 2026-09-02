@@ -3,17 +3,15 @@
     "7354092356": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
-        "M15": "SELL"
-      },
-      "last_fired": {
-        "M15": 1788271490.0668244
-      },
+      "active_signal": {},
+      "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
         "M15": 1788271474.452811
       },
-      "forming_alert_sent": {},
+      "forming_alert_sent": {
+        "M15": "BUY"
+      },
       "momentum_shift_warned": {
         "M15": "BUY"
       },
@@ -35,7 +33,7 @@
         "H1": "SELL"
       },
       "last_fired": {
-        "H1": 1788338993.8669627
+        "H1": 1788342063.7491605
       },
       "pending_signal": {},
       "sl_cooldown_until": {
