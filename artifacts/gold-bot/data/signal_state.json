@@ -13,9 +13,7 @@
       "pending_signal": {},
       "sl_cooldown_until": {},
       "tp_cooldown_until": {},
-      "forming_alert_sent": {
-        "M15": "BUY"
-      },
+      "forming_alert_sent": {},
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "5e9ceaecf45442538370058162aad61e": [
