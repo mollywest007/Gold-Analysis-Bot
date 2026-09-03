@@ -429,6 +429,26 @@
       "close_reason": "take_profit",
       "result_notification_pending": false,
       "result_notification_sent_at": 1788356578.3984694
+    },
+    {
+      "id": "55a7424fedb745c1aa2aa05b36962160",
+      "account_id": "8039158711",
+      "direction": "BUY",
+      "entry": 4423.5,
+      "limit_entry": 4420.67,
+      "sl": 4395.72,
+      "tp1": 4479.06,
+      "tp2": 4520.73,
+      "tp3": 4548.51,
+      "timeframe": "H1",
+      "mode": "intraday",
+      "confidence": 97,
+      "rr_ratio": 2.0,
+      "opened_at": 1788417135.1672797,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }

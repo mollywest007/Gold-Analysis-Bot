@@ -12,6 +12,7 @@
       },
       "pending_signal": {},
       "sl_cooldown_until": {},
+      "tp_cooldown_until": {},
       "forming_alert_sent": {},
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
@@ -36,15 +37,18 @@
     "8039158711": {
       "mode": "intraday",
       "timeframe": "H1",
-      "active_signal": {},
+      "active_signal": {
+        "H1": "BUY"
+      },
       "closed_signal": {},
       "last_fired": {
-        "H1": 1788354509.9144337
+        "H1": 1788417137.6959364
       },
       "pending_signal": {},
       "sl_cooldown_until": {
         "H1": 1788361709.9144363
       },
+      "tp_cooldown_until": {},
       "forming_alert_sent": {},
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
