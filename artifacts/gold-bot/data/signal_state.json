@@ -4,18 +4,16 @@
       "mode": "scalp",
       "timeframe": "M15",
       "active_signal": {},
-      "closed_signal": {},
-      "last_fired": {},
+      "closed_signal": {
+        "M15": "BUY"
+      },
+      "last_fired": {
+        "M15": 1788356578.3993058
+      },
       "pending_signal": {},
-      "sl_cooldown_until": {
-        "M15": 1788271474.452811
-      },
-      "forming_alert_sent": {
-        "M15": "BUY"
-      },
-      "momentum_shift_warned": {
-        "M15": "BUY"
-      },
+      "sl_cooldown_until": {},
+      "forming_alert_sent": {},
+      "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "5e9ceaecf45442538370058162aad61e": [
           "entry",
@@ -24,27 +22,37 @@
         ],
         "a5f5ba8ab954488c8873f3bc4bc4a733": [
           "entry"
+        ],
+        "72baba585dfb4c479e043021d6429a3d": [
+          "entry",
+          "update_2x"
+        ],
+        "c5177f4d6f7d400db6093e2bf64f8b0f": [
+          "entry",
+          "update_2x"
         ]
       }
     },
     "8039158711": {
       "mode": "intraday",
       "timeframe": "H1",
-      "active_signal": {
-        "H1": "SELL"
-      },
+      "active_signal": {},
       "closed_signal": {},
       "last_fired": {
-        "H1": 1788342563.7672982
+        "H1": 1788354509.9144337
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "H1": 1788273471.214284
+        "H1": 1788361709.9144363
       },
       "forming_alert_sent": {},
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
+          "entry",
+          "update_2x"
+        ],
+        "ca15cfcb0c87460a973913eff2b98cb5": [
           "entry",
           "update_2x"
         ]
