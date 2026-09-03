@@ -38,7 +38,7 @@ ALLOWED_USERNAMES = {
     username.strip().lstrip("@").lower()
     for username in os.environ.get(
         "ALLOWED_USERNAMES",
-        f"{ALLOWED_USERNAME},Jaycccy",
+        ALLOWED_USERNAME,
     ).split(",")
     if username.strip()
 }
