@@ -180,7 +180,7 @@ class ActivePanelTests(unittest.TestCase):
 
         self.assertIn("SCALP", text)
         self.assertIn("M5", text)
-        self.assertIn("INTERVAL", text)
+        self.assertIn("INTRA-HOUR", text)
         self.assertIn("H1", text)
 
 

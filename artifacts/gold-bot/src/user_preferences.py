@@ -119,10 +119,10 @@ def get_timeframe(chat_id: int) -> str:
 
 
 def get_combined_timeframes(chat_id: int) -> Dict[str, str]:
-    """Return the independently selected Scalp and Interval timeframes."""
+    """Return the independently selected Scalp and Intra-hour timeframes."""
     preferences = get_preferences(chat_id)
     if preferences["mode"] != COMBINED_MODE:
-        raise ValueError("Combined timeframes are only available in Scalp / Interval Mode.")
+        raise ValueError("Combined timeframes are only available in Scalp / Intra-hour Mode.")
     return {
         SCALP_STREAM: preferences["scalp_timeframe"],
         INTERVAL_STREAM: preferences["interval_timeframe"],
@@ -224,7 +224,7 @@ def set_combined_timeframe(chat_id: int, stream: str, timeframe: str) -> str:
     data = _load()
     current = get_preferences(chat_id)
     if current["mode"] != COMBINED_MODE:
-        raise ValueError("Select Scalp / Interval Mode before setting stream timeframes.")
+        raise ValueError("Select Scalp / Intra-hour Mode before setting stream timeframes.")
     updated = {
         "mode": COMBINED_MODE,
         "timeframe": current["scalp_timeframe"],

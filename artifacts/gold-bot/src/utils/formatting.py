@@ -1692,7 +1692,7 @@ def history_card(trades: list, stats: dict) -> str:
     def _stream_label(t: dict) -> str:
         return {
             "scalp": "SCALP",
-            "intraday": "INTERVAL",
+            "intraday": "INTRA-HOUR",
         }.get(str(t.get("mode") or "").lower(), "")
 
     # ── Today's UTC day boundary ───────────────────────────────────────────────
@@ -1884,7 +1884,7 @@ def help_text() -> str:
         ("/history",   "View recent trade results"),
         ("/news",      "Latest gold market headlines"),
         ("/alerts",    "Open automatic alert ON/OFF controls"),
-        ("/mode",      "Switch Scalp, Interval, combined, Swing, or Position"),
+        ("/mode",      "Switch Scalp, Intra-hour, combined, Swing, or Position"),
         ("/settings",  "Change mode and timeframe"),
         ("/help",      "This message"),
     ]

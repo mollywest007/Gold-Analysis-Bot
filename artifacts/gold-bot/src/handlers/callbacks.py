@@ -60,7 +60,7 @@ def _settings_text(chat_id: int, cfg, *, change: str = "") -> str:
             f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
             f"{cfg.description}\n\n"
             f"Scalp alerts timeframe: <b>{combined['scalp']}</b>\n"
-            f"Interval alerts timeframe: <b>{combined['interval']}</b>\n\n"
+            f"Intra-hour alerts timeframe: <b>{combined['interval']}</b>\n\n"
             f"{change}"
             "Both alert streams run simultaneously. "
             "Choose each timeframe independently below."

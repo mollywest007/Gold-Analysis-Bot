@@ -680,7 +680,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                  "get_monitoring_streams",
                  return_value=[
                      ("SCALP", "M15", "scalp"),
-                     ("INTERVAL", "H1", "intraday"),
+                    ("INTRA-HOUR", "H1", "intraday"),
                  ],
              ), \
              patch.object(alerts, "_load_account_state", return_value=state), \
@@ -776,6 +776,27 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("scalp:M5", state.sl_cooldown_until)
         self.assertIn("interval:H1", state.sl_cooldown_until)
 
+    def test_combined_timeframe_change_clears_only_changed_stream_pending_state(self):
+        state = alerts.AccountAlertState(
+            mode="scalp_interval",
+            timeframe="scalp=M15|interval=H1",
+            pending_signal={
+                "scalp:M15": "BUY",
+                "interval:H1": "SELL",
+            },
+        )
+
+        with patch.object(alerts, "get_user_mode", return_value="scalp_interval"), \
+             patch.object(
+                 alerts,
+                 "get_combined_timeframes",
+                 return_value={"scalp": "M5", "interval": "H1"},
+             ), \
+             patch.object(alerts, "_save_signal_state"):
+            alerts._sync_mode_state(123, state)
+
+        self.assertEqual(state.pending_signal, {"interval:H1": "SELL"})
+
     async def test_combined_scan_delivers_both_stream_labels(self):
         from src import market_hours
         from src.analysis.modes import MODES
@@ -851,7 +872,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                  "get_monitoring_streams",
                  return_value=[
                      ("SCALP", "M15", "scalp"),
-                     ("INTERVAL", "H1", "intraday"),
+                     ("INTRA-HOUR", "H1", "intraday"),
                  ],
              ), \
              patch.object(alerts, "_load_account_state", return_value=state), \
@@ -879,7 +900,193 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
              ):
             await alerts._check_and_alert_once(context, account_id=123, state=state)
 
-        self.assertEqual(delivered_labels, ["SCALP", "INTERVAL"])
+        self.assertEqual(delivered_labels, ["SCALP", "INTRA-HOUR"])
+
+    async def test_combined_scan_keeps_setup_and_momentum_alerts_independent(self):
+        from src import market_hours
+        from src.analysis.modes import MODES
+
+        scalp_forming = SimpleNamespace(
+            action="WAIT",
+            setup_quality="FORMING",
+            confidence=78,
+            win_probability=0,
+            is_simulated=False,
+            buy_votes=4,
+            sell_votes=1,
+            adx=25.0,
+            price=2350.0,
+            htf_bias="Bullish",
+            kill_zone="",
+            is_kill_zone=False,
+            early_entry=2348.5,
+            limit_entry=0.0,
+            ote_high=2352.0,
+            ote_low=2344.0,
+        )
+        interval_reversal = SimpleNamespace(
+            action="SELL",
+            setup_quality="A",
+            confidence=85,
+            win_probability=70,
+            is_simulated=False,
+            buy_votes=1,
+            sell_votes=7,
+            adx=25.0,
+            htf_bias="Neutral",
+            choch="NONE",
+        )
+        interval_trade = {
+            "id": "interval-buy",
+            "timeframe": "H1",
+            "direction": "BUY",
+            "entry": 2350.0,
+            "sl": 2335.0,
+            "status": "open",
+            "mode": "intraday",
+        }
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+        state = alerts.AccountAlertState()
+
+        async def analyze_stream(tf, mode):
+            return scalp_forming if mode == "scalp" else interval_reversal
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_user_mode", return_value="scalp_interval"), \
+             patch.object(
+                 alerts,
+                 "get_user_mode_config",
+                 return_value=MODES["scalp_interval"],
+             ), \
+             patch.object(
+                 alerts,
+                 "get_monitoring_streams",
+                 return_value=[
+                     ("SCALP", "M15", "scalp"),
+                     ("INTRA-HOUR", "H1", "intraday"),
+                 ],
+             ), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(alerts, "_safe_analyze", new=AsyncMock(side_effect=analyze_stream)), \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts, "fetch_ohlcv", new=AsyncMock(return_value=None)), \
+             patch.object(
+                 alerts.trade_tracker,
+                 "get_active_trades",
+                 return_value=[interval_trade],
+             ), \
+             patch.object(
+                 alerts.trade_tracker,
+                 "get_all_trades",
+                 return_value=[interval_trade],
+             ), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(alerts, "_save_signal_state"):
+            await alerts._check_and_alert_once(context, account_id=123, state=state)
+
+        texts = [
+            call.kwargs["text"]
+            for call in context.application.bot.send_message.await_args_list
+        ]
+        self.assertEqual(len(texts), 2)
+        self.assertTrue(any("SETUP FORMING" in text and "SCALP  XAU/USD  M15" in text for text in texts))
+        self.assertTrue(any("MOMENTUM SHIFT" in text and "INTRA-HOUR  XAU/USD  H1" in text for text in texts))
+        self.assertEqual(state.forming_alert_sent, {"scalp:M15": "BUY"})
+        self.assertEqual(state.momentum_shift_warned, {"interval:H1": "SELL"})
+
+    async def test_combined_missed_entry_alerts_keep_trade_stream_labels(self):
+        bot = AsyncMock()
+        context = SimpleNamespace(bot=bot)
+        state = alerts.AccountAlertState()
+        now = time.time()
+        trades = [
+            {
+                "id": "scalp-missed",
+                "mode": "scalp",
+                "timeframe": "M15",
+                "direction": "BUY",
+                "entry": 100.0,
+                "sl": 90.0,
+                "tp1": 110.0,
+                "tp2": 120.0,
+                "tp3": 130.0,
+                "confidence": 80,
+                "opened_at": now - 20 * 60,
+                "status": "open",
+            },
+            {
+                "id": "interval-missed",
+                "mode": "intraday",
+                "timeframe": "H1",
+                "direction": "SELL",
+                "entry": 100.0,
+                "sl": 110.0,
+                "tp1": 90.0,
+                "tp2": 80.0,
+                "tp3": 70.0,
+                "confidence": 80,
+                "opened_at": now - 70 * 60,
+                "status": "open",
+            },
+        ]
+
+        with patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=100.0)), \
+             patch.object(
+                 alerts.trade_tracker,
+                 "get_active_trades",
+                 return_value=trades,
+             ), \
+             patch.object(alerts, "_save_signal_state"):
+            await alerts._send_trade_reminder_once(
+                context, account_id=123, state=state
+            )
+
+        self.assertEqual(bot.send_message.await_count, 2)
+        sent_texts = [
+            call.kwargs["text"]
+            for call in bot.send_message.await_args_list
+        ]
+        self.assertTrue(any("SCALP ALERT" in text and "MISSED ALERT" in text for text in sent_texts))
+        self.assertTrue(any("INTRA-HOUR ALERT" in text and "MISSED ALERT" in text for text in sent_texts))
+
+    def test_combined_entry_cards_use_exact_strategy_headings(self):
+        from src.utils.formatting import early_entry_card
+
+        analysis = SimpleNamespace(
+            timeframe="M15",
+            session="",
+            action="BUY",
+            trade_type="Scalp",
+            setup_quality="A",
+            win_probability=80,
+            htf_bias="Neutral",
+            entry=100.0,
+            stop_loss=90.0,
+            tp1=110.0,
+            tp2=120.0,
+            tp3=130.0,
+            atr=10.0,
+            early_entry=0.0,
+            fib_382=0.0,
+            fib_500=0.0,
+            fib_618=0.0,
+            confluence_list=[],
+            candle_pattern="None",
+            kill_zone="",
+            is_kill_zone=False,
+            pdh=0.0,
+            pdl=0.0,
+            premium_discount="",
+            daily_bias="",
+            near_round="",
+            wait_reason="",
+        )
+
+        scalp_card = early_entry_card(analysis, alert_label="SCALP")
+        interval_card = early_entry_card(analysis, alert_label="INTRA-HOUR")
+
+        self.assertTrue(scalp_card.startswith("<pre>\n⚡ SCALP ENTRY"))
+        self.assertTrue(interval_card.startswith("<pre>\n📊 INTRA-HOUR ENTRY"))
 
     async def test_entry_alert_can_identify_its_stream(self):
         bot = AsyncMock()

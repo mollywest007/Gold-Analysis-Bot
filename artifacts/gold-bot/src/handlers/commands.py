@@ -422,7 +422,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
             f"{mode.description}\n\n"
             f"Scalp alerts timeframe: <b>{combined['scalp']}</b>\n"
-            f"Interval alerts timeframe: <b>{combined['interval']}</b>\n\n"
+            f"Intra-hour alerts timeframe: <b>{combined['interval']}</b>\n\n"
             "Both alert streams run at the same time. Choose each timeframe "
             "independently below."
         )

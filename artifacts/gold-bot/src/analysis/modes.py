@@ -261,9 +261,9 @@ MODES: Dict[str, ModeConfig] = {
     # separately rather than passing this profile to the analysis engine.
     "scalp_interval": ModeConfig(
         name        = "scalp_interval",
-        label       = "Scalp / Interval",
+        label       = "Scalp / Intra-hour",
         emoji       = "⚡📊",
-        description = "Run Scalp and Interval alerts together with separate timeframes.",
+        description = "Run Scalp and Intra-hour alerts together with separate timeframes.",
         scan_timeframes = ["M15", "H1"],
         preferred_timeframe = "M15",
         confirmation_map = {"M15": "H1", "H1": "H4"},
@@ -283,13 +283,13 @@ MODES: Dict[str, ModeConfig] = {
         sl_mult_override = {},
         tp_mult = (2.0, 3.5, 4.5),
         htf_gate_strict  = False,
-        trade_type_label = "Scalp / Interval",
+        trade_type_label = "Scalp / Intra-hour",
         tip = (
-            "⚡📊 <b>Scalp / Interval Mode active.</b>\n"
-            "The bot monitors one Scalp timeframe and one Interval timeframe "
+            "⚡📊 <b>Scalp / Intra-hour Mode active.</b>\n"
+            "The bot monitors one Scalp timeframe and one Intra-hour timeframe "
             "at the same time."
         ),
-        risk_note = "Each alert uses the risk plan of its own Scalp or Interval stream.",
+        risk_note = "Each alert uses the risk plan of its own Scalp or Intra-hour stream.",
     ),
 }
 

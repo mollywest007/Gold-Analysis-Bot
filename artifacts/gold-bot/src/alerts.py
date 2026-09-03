@@ -502,7 +502,7 @@ def _sync_mode_state(
                 active_signal,
                 closed_signal,
                 tf_last_fired,
-                pending_signal,
+                state.pending_signal if state is not None else _pending_signal,
                 forming_alert_sent,
                 momentum_shift_warned,
                 sl_cooldown_until,
@@ -1504,12 +1504,12 @@ async def _fire_signal(
                 if limit_entry and limit_entry != market_entry
                 else ""
             )
-             entry_heading = {
-                 "SCALP": "⚡ SCALP ENTRY",
-                 "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
-             }.get(alert_label, f"{alert_label} ALERT" if alert_label else "")
-             caption = (
-                 f"{entry_heading + '  |  ' if entry_heading else ''}"
+            entry_heading = {
+                "SCALP": "⚡ SCALP ENTRY",
+                "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
+            }.get(alert_label, f"{alert_label} ALERT" if alert_label else "")
+            caption = (
+                f"{entry_heading + '  |  ' if entry_heading else ''}"
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                 f"{limit_str}Market: {market_entry:,.2f}   SL: {a.stop_loss:,.2f}\n"
                 f"TP1: {a.tp1:,.2f} (1:{rr1}){tp3_str}"

@@ -91,7 +91,7 @@ def settings_keyboard(
         tf_buttons = [
             [InlineKeyboardButton("Scalp alerts timeframe", callback_data="settings:tf_header")],
             *_stream_buttons("scalp", MODES["scalp"].scan_timeframes),
-            [InlineKeyboardButton("Interval alerts timeframe", callback_data="settings:tf_header")],
+            [InlineKeyboardButton("Intra-hour alerts timeframe", callback_data="settings:tf_header")],
             *_stream_buttons("interval", MODES["intraday"].scan_timeframes),
         ]
 

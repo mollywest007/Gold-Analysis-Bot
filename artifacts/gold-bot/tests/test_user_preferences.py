@@ -77,7 +77,7 @@ class UserPreferenceTests(unittest.TestCase):
             user_preferences.get_monitoring_streams(account),
             [
                 ("SCALP", "M15", "scalp"),
-                ("INTERVAL", "H1", "intraday"),
+                ("INTRA-HOUR", "H1", "intraday"),
             ],
         )
 
