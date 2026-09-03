@@ -128,3 +128,16 @@ unchanged setup and create low-quality repeat entries.
 
 **How to apply:** Keep this as a separate persisted cooldown from the
 post-stop-loss cooldown so it applies only to final-target completion.
+
+## Legacy terminal-lock migration
+
+**Rule:** A persisted same-direction terminal lock from before the TP3 cooldown
+format must be reconciled against trade history; an expired completed TP3 must
+re-arm the timeframe instead of requiring an unrelated direction change.
+
+**Why:** Older `closed_signal` records had no cooldown metadata and could
+silently block a valid same-direction entry forever after the 10-minute window.
+
+**How to apply:** When evaluating a closed-direction lock with no active
+cooldown, recognize a matching historical `tp3_hit` trade whose cooldown has
+expired, clear the legacy lock, and continue through normal entry filters.

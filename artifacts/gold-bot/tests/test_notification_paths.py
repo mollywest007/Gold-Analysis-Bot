@@ -145,6 +145,28 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertNotIn("H1", state.tp_cooldown_until)
 
+    def test_legacy_tp3_lock_rearms_after_cooldown(self):
+        state = alerts.AccountAlertState(
+            closed_signal={"M15": "BUY"},
+        )
+        legacy_tp3 = {
+            "direction": "BUY",
+            "timeframe": "M15",
+            "status": "tp3_hit",
+            "closed_at": 1000.0,
+        }
+
+        with patch.object(
+            alerts.trade_tracker,
+            "get_all_trades",
+            return_value=[legacy_tp3],
+        ), patch.object(alerts.time, "time", return_value=1700.0):
+            self.assertTrue(
+                alerts._should_send("M15", "BUY", state=state)
+            )
+
+        self.assertNotIn("M15", state.closed_signal)
+
     async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
         bot = AsyncMock()
         active_trade = {

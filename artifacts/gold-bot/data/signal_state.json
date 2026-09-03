@@ -3,12 +3,12 @@
     "7354092356": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {},
-      "closed_signal": {
+      "active_signal": {
         "M15": "BUY"
       },
+      "closed_signal": {},
       "last_fired": {
-        "M15": 1788356578.3993058
+        "M15": 1788418175.438763
       },
       "pending_signal": {},
       "sl_cooldown_until": {},
@@ -37,13 +37,9 @@
     "8039158711": {
       "mode": "intraday",
       "timeframe": "H1",
-      "active_signal": {
-        "H1": "BUY"
-      },
+      "active_signal": {},
       "closed_signal": {},
-      "last_fired": {
-        "H1": 1788417137.6959364
-      },
+      "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
         "H1": 1788361709.9144363

@@ -484,11 +484,29 @@ def _should_send(
     # Require a direction change to re-arm this timeframe.
     closed_direction = closed_signal.get(tf)
     if closed_direction == action:
-        logger.info(
-            f"[{tf}] Suppressed — previous {action} trade closed; "
-            "waiting for a direction change before re-entry."
+        # Migrate the lock format used before the persisted TP3 cooldown was
+        # introduced.  Those records have no tp_cooldown_until entry and would
+        # otherwise block the same direction forever after a completed TP3.
+        legacy_tp3_ready = any(
+            t.get("timeframe") == tf
+            and t.get("direction") == action
+            and t.get("status") == "tp3_hit"
+            and time.time() - _safe_float(t.get("closed_at")) >= _TP_COOLDOWN_SECONDS
+            for t in trade_tracker.get_all_trades(account_id)
         )
-        return False
+        if not tp_cooldown and legacy_tp3_ready:
+            closed_signal.pop(tf, None)
+            logger.info(
+                f"[{tf}] Cleared legacy post-TP3 lock after the "
+                f"{_TP_COOLDOWN_SECONDS // 60}m re-analysis window."
+            )
+            closed_direction = None
+        else:
+            logger.info(
+                f"[{tf}] Suppressed — previous {action} trade closed; "
+                "waiting for a direction change before re-entry."
+            )
+            return False
     if closed_direction and closed_direction != action:
         closed_signal.pop(tf, None)
 
