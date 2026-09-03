@@ -529,10 +529,18 @@
       "confidence": 94,
       "rr_ratio": 1.5,
       "opened_at": 1788418173.9205399,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "closed_at": 1788418389.4953883,
+      "close_reason": "stop_loss",
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1788418389.5523934,
+      "cooldown_notification_pending": false,
+      "cooldown_until": 1788420189.5534832,
+      "cooldown_duration_seconds": 1800.0,
+      "cooldown_notification_sent_at": 1788418389.571024
     }
   ]
 }

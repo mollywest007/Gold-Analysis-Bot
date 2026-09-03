@@ -167,6 +167,29 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("M15", state.closed_signal)
 
+    def test_persisted_sl_cooldown_is_restored_before_lock_reconciliation(self):
+        state = alerts.AccountAlertState(
+            active_signal={"H1": "BUY"},
+        )
+        stopped_trade = {
+            "direction": "BUY",
+            "timeframe": "H1",
+            "status": "sl_hit",
+            "cooldown_until": 2000.0,
+        }
+
+        with patch.object(alerts.time, "time", return_value=1500.0):
+            alerts._reconcile_terminal_cooldowns(
+                state.sl_cooldown_until,
+                [stopped_trade],
+            )
+
+        self.assertEqual(state.sl_cooldown_until["H1"], 2000.0)
+        with patch.object(alerts.time, "time", return_value=1500.0):
+            self.assertFalse(
+                alerts._should_send("H1", "BUY", state=state)
+            )
+
     async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
         bot = AsyncMock()
         active_trade = {

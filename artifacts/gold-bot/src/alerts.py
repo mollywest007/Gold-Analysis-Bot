@@ -728,6 +728,34 @@ def _reconcile_signal_locks(
         )
 
 
+def _reconcile_terminal_cooldowns(
+    sl_cooldown_until: Dict[str, float],
+    terminal_trades: list[dict],
+) -> None:
+    """Restore persisted SL cooldowns before stale signal locks are cleaned.
+
+    A restart can occur after the tracker has closed a trade but before the
+    in-memory alert state has saved its cooldown.  The trade record remains the
+    authoritative source for a still-active post-SL cooldown.
+    """
+    now = time.time()
+    for trade in terminal_trades:
+        if trade.get("status") not in {"sl_hit", "tp1_sl_hit"}:
+            continue
+        timeframe = trade.get("timeframe")
+        cooldown_until = _safe_float(trade.get("cooldown_until"))
+        if not timeframe or cooldown_until <= now:
+            continue
+        if cooldown_until > _safe_float(sl_cooldown_until.get(timeframe)):
+            sl_cooldown_until[timeframe] = cooldown_until
+            logger.info(
+                "[%s] Restored post-SL cooldown from persisted trade "
+                "(%.0fs remaining).",
+                timeframe,
+                cooldown_until - now,
+            )
+
+
 async def _send_setup_forming_alert(
     bot, subs: Set[int], a, tf: str, forming_dir: str,
     state: AccountAlertState | None = None,
@@ -1520,7 +1548,15 @@ async def _check_and_alert_once(
         return
 
     # Make the persisted trade store authoritative over any stale signal lock
-    # left by an older alert-before-persistence cycle.
+    # left by an older alert-before-persistence cycle. Restore cooldowns first:
+    # a recently stopped trade must not become eligible merely because a
+    # restart removed its now-ownerless signal lock.
+    all_account_trades = (
+        trade_tracker.get_all_trades(account_id)
+        if account_scan
+        else trade_tracker.get_all_trades()
+    )
+    _reconcile_terminal_cooldowns(sl_cooldown_until, all_account_trades)
     _reconcile_signal_locks(
         active_signal,
         tf_last_fired,

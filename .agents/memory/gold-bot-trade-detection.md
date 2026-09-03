@@ -141,3 +141,16 @@ silently block a valid same-direction entry forever after the 10-minute window.
 **How to apply:** When evaluating a closed-direction lock with no active
 cooldown, recognize a matching historical `tp3_hit` trade whose cooldown has
 expired, clear the legacy lock, and continue through normal entry filters.
+
+## Restart recovery for stop-loss cooldowns
+
+**Rule:** Restore future `cooldown_until` values from persisted stop-loss trade
+records before removing signal locks that no longer have active trade owners.
+
+**Why:** A restart can happen after a trade closes but before alert state saves
+the cooldown; deleting the stale lock first makes the just-stopped timeframe
+eligible for an immediate duplicate entry.
+
+**How to apply:** Treat terminal persisted loss records as authoritative during
+startup and every account scan, while keeping the regular two-candle cooldown
+filter responsible for blocking new entries.
