@@ -33,15 +33,13 @@
       }
     },
     "8039158711": {
-      "mode": "intraday",
-      "timeframe": "H1",
+      "mode": "scalp_interval",
+      "timeframe": "scalp=M15|interval=H1",
       "active_signal": {},
       "closed_signal": {},
       "last_fired": {},
       "pending_signal": {},
-      "sl_cooldown_until": {
-        "H1": 1788425366.8413346
-      },
+      "sl_cooldown_until": {},
       "tp_cooldown_until": {},
       "forming_alert_sent": {},
       "momentum_shift_warned": {},
