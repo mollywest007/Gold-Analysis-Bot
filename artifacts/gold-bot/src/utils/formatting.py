@@ -1685,6 +1685,12 @@ def history_card(trades: list, stats: dict) -> str:
         except Exception:
             return "-----"
 
+    def _stream_label(t: dict) -> str:
+        return {
+            "scalp": "SCALP",
+            "intraday": "INTERVAL",
+        }.get(str(t.get("mode") or "").lower(), "")
+
     # ── Today's UTC day boundary ───────────────────────────────────────────────
     now_utc   = datetime.now(timezone.utc)
     today_str = now_utc.strftime("%d %b %Y")
@@ -1744,13 +1750,14 @@ def history_card(trades: list, stats: dict) -> str:
 
     for t in today_trades:
         time_str = _fmt_time(t.get("opened_at", 0))
+        stream    = _stream_label(t)
         dir_     = t.get("direction", "???")
         tf       = t.get("timeframe", "??")
         entry    = t.get("entry", 0)
         conf     = t.get("confidence", 0)
         outcome  = _status_label(t)
         lines += [
-            f"  {time_str}  {dir_:<4} {tf:<3}  Conf: {conf}%",
+            f"  {stream + '  ' if stream else ''}{time_str}  {dir_:<4} {tf:<3}  Conf: {conf}%",
             f"  Entry: {entry:,.2f}",
             f"  Result: {outcome}",
             "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
@@ -1873,7 +1880,7 @@ def help_text() -> str:
         ("/history",   "View recent trade results"),
         ("/news",      "Latest gold market headlines"),
         ("/alerts",    "Open automatic alert ON/OFF controls"),
-        ("/mode",      "Switch Scalp, Intraday, Swing, or Position"),
+        ("/mode",      "Switch Scalp, Interval, combined, Swing, or Position"),
         ("/settings",  "Change mode and timeframe"),
         ("/help",      "This message"),
     ]

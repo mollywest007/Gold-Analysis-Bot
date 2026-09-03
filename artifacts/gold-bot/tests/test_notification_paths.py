@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -708,6 +709,177 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(safe_analyze.await_count, 2)
         safe_analyze.assert_any_await("M15", "scalp")
         safe_analyze.assert_any_await("H1", "intraday")
+
+    def test_single_mode_alert_specs_keep_legacy_state_key(self):
+        with patch.object(alerts, "get_user_mode", return_value="scalp"), \
+             patch.object(
+                 alerts,
+                 "get_monitoring_streams",
+                 return_value=[("SCALP", "M15", "scalp")],
+             ):
+            self.assertEqual(
+                alerts._alert_stream_specs(123),
+                [("SCALP", "M15", "scalp", "M15")],
+            )
+
+    def test_combined_streams_can_share_timeframe_without_cross_suppression(self):
+        state = alerts.AccountAlertState()
+        active_scalp_trade = {
+            "id": "scalp-trade",
+            "timeframe": "M15",
+            "status": "open",
+            "direction": "BUY",
+            "mode": "scalp",
+            "tp3": 2420.0,
+        }
+
+        with patch.object(alerts, "get_user_mode", return_value="scalp_interval"), \
+             patch.object(
+                 alerts.trade_tracker,
+                 "get_all_trades",
+                 return_value=[active_scalp_trade],
+             ):
+            self.assertTrue(
+                alerts._should_send(
+                    "interval:M15",
+                    "BUY",
+                    state=state,
+                    account_id=123,
+                )
+            )
+
+    def test_combined_cooldowns_use_raw_timeframes_per_stream(self):
+        state = alerts.AccountAlertState(
+            active_signal={
+                "scalp:M5": "BUY",
+                "interval:H1": "SELL",
+            }
+        )
+
+        with patch.object(alerts, "_save_signal_state"), \
+             patch.object(alerts.time, "time", return_value=1_000.0):
+            scalp_deadline = alerts.clear_signal_lock(
+                "scalp:M5",
+                after_sl=True,
+                state=state,
+                account_id=123,
+            )
+            interval_deadline = alerts.clear_signal_lock(
+                "interval:H1",
+                after_sl=True,
+                state=state,
+                account_id=123,
+            )
+
+        self.assertEqual(scalp_deadline, 1_000.0 + 2 * 5 * 60)
+        self.assertEqual(interval_deadline, 1_000.0 + 2 * 60 * 60)
+        self.assertIn("scalp:M5", state.sl_cooldown_until)
+        self.assertIn("interval:H1", state.sl_cooldown_until)
+
+    async def test_combined_scan_delivers_both_stream_labels(self):
+        from src import market_hours
+        from src.analysis.modes import MODES
+
+        def signal(tf, mode):
+            return SimpleNamespace(
+                action="BUY",
+                setup_quality="A",
+                confidence=85,
+                win_probability=80,
+                buy_votes=7,
+                sell_votes=1,
+                adx=25.0,
+                is_simulated=False,
+                htf_bias="Bullish",
+                choch="NONE",
+                entry=2350.0,
+                stop_loss=2335.0,
+                tp1=2380.0,
+                tp2=2400.0,
+                tp3=2420.0,
+                rr_ratio=2.0,
+                early_entry=0.0,
+                limit_entry=0.0,
+                atr=10.0,
+                timeframe=tf,
+                trade_type="Scalp" if mode == "scalp" else "Intraday",
+            )
+
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+        state = alerts.AccountAlertState()
+        delivered_labels = []
+        scalp_trade = {
+            "id": "scalp-trade",
+            "timeframe": "M15",
+            "status": "open",
+            "direction": "BUY",
+            "mode": "scalp",
+            "opened_at": time.time(),
+        }
+        interval_trade = {
+            "id": "interval-trade",
+            "timeframe": "H1",
+            "status": "open",
+            "direction": "BUY",
+            "mode": "intraday",
+            "opened_at": time.time(),
+        }
+        persisted_trades = []
+
+        async def fire_signal(_bot, _subs, _analysis, _tf, alert_label=""):
+            delivered_labels.append(alert_label)
+            return True
+
+        def persist_trade(**_kwargs):
+            persisted_trades.append(
+                scalp_trade if len(persisted_trades) == 0 else interval_trade
+            )
+            return True
+
+        def all_trades(_account_id):
+            return list(persisted_trades)
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_user_mode", return_value="scalp_interval"), \
+             patch.object(
+                 alerts,
+                 "get_user_mode_config",
+                 return_value=MODES["scalp_interval"],
+             ), \
+             patch.object(
+                 alerts,
+                 "get_monitoring_streams",
+                 return_value=[
+                     ("SCALP", "M15", "scalp"),
+                     ("INTERVAL", "H1", "intraday"),
+                 ],
+             ), \
+             patch.object(alerts, "_load_account_state", return_value=state), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(
+                 alerts,
+                 "_safe_analyze",
+                 new=AsyncMock(side_effect=signal),
+             ), \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "get_all_trades", side_effect=all_trades), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "open_trade", side_effect=persist_trade), \
+             patch.object(alerts, "_fire_signal", new=AsyncMock(side_effect=fire_signal)), \
+             patch.object(alerts, "_save_signal_state"), \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ):
+            await alerts._check_and_alert_once(context, account_id=123, state=state)
+
+        self.assertEqual(delivered_labels, ["SCALP", "INTERVAL"])
 
     async def test_entry_alert_can_identify_its_stream(self):
         bot = AsyncMock()

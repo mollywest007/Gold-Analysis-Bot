@@ -1,6 +1,7 @@
 """Regression tests for the Telegram /active panel renderer."""
 import sys
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -154,6 +155,33 @@ class ActivePanelTests(unittest.TestCase):
 
         self.assertLessEqual(len(card), TG_MSG_LIMIT)
         self.assertTrue(card.endswith("</pre>"))
+
+    def test_history_identifies_combined_stream_for_each_trade(self):
+        from src.utils.formatting import history_card
+
+        now = time.time()
+        trades = [
+            _trade(
+                opened_at=now,
+                mode="scalp",
+                timeframe="M5",
+                status="tp3_hit",
+            ),
+            _trade(
+                opened_at=now - 60,
+                mode="intraday",
+                direction="BUY",
+                timeframe="H1",
+                status="sl_hit",
+            ),
+        ]
+
+        text = history_card(trades, {})
+
+        self.assertIn("SCALP", text)
+        self.assertIn("M5", text)
+        self.assertIn("INTERVAL", text)
+        self.assertIn("H1", text)
 
 
 if __name__ == "__main__":

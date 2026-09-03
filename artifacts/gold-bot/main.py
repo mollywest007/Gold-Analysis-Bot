@@ -165,7 +165,7 @@ BOT_COMMANDS = [
     BotCommand("history",   "Recent closed trade results"),
     BotCommand("news",      "Latest gold market headlines"),
     BotCommand("settings",  "Change mode and analysis timeframe"),
-    BotCommand("mode",      "Switch Scalp, Intraday, Swing, or Position mode"),
+    BotCommand("mode",      "Switch Scalp, Interval, combined, Swing, or Position mode"),
     BotCommand("help",      "Show all commands"),
 ]
 

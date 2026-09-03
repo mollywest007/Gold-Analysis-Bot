@@ -129,8 +129,17 @@ def _alert_stream_specs(account_id: int | None = None) -> list[tuple[str, str, s
         mode = getattr(cfg, "name", "intraday")
         timeframe = get_scan_timeframes()[0]
         return [(mode.upper(), timeframe, mode, timeframe)]
+    combined = get_user_mode(account_id) == COMBINED_MODE
     return [
-        (label, timeframe, engine_mode, f"{label.lower()}:{timeframe}")
+        (
+            label,
+            timeframe,
+            engine_mode,
+            # Keep the existing single-mode state namespace unchanged. The
+            # combined mode is the only mode with two independent streams,
+            # so only it needs a stream-qualified key.
+            f"{label.lower()}:{timeframe}" if combined else timeframe,
+        )
         for label, timeframe, engine_mode in get_monitoring_streams(account_id)
     ]
 
@@ -143,6 +152,14 @@ def _trade_state_key(trade: dict, combined: bool = False) -> str:
     mode = str(trade.get("mode") or "")
     stream = "scalp" if mode == "scalp" else "interval"
     return f"{stream}:{timeframe}"
+
+
+def _raw_timeframe(state_key: str) -> str:
+    """Return the candle timeframe from either a legacy or combined state key."""
+    if ":" in state_key:
+        return state_key.split(":", 1)[1]
+    return state_key
+
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -484,6 +501,13 @@ def _should_send(
     pending_signal = state.pending_signal if state else _pending_signal
     active_signal = state.active_signal if state else _active_signal
     closed_signal = state.closed_signal if state else _closed_signal
+    combined_stream_mode = None
+    if account_id is not None and get_user_mode(account_id) == COMBINED_MODE:
+        stream_name = tf.split(":", 1)[0] if ":" in tf else ""
+        combined_stream_mode = {
+            "scalp": "scalp",
+            "interval": "intraday",
+        }.get(stream_name)
     cooldown_until = sl_cooldown_until.get(tf, 0.0)
     if time.time() < cooldown_until:
         remaining = int((cooldown_until - time.time()) // 60)
@@ -524,6 +548,10 @@ def _should_send(
             t.get("timeframe") == tf
             and t.get("direction") == action
             and t.get("status") == "tp3_hit"
+            and (
+                combined_stream_mode is None
+                or t.get("mode") == combined_stream_mode
+            )
             and time.time() - _safe_float(t.get("closed_at")) >= _TP_COOLDOWN_SECONDS
             for t in trade_tracker.get_all_trades(account_id)
         )
@@ -551,7 +579,12 @@ def _should_send(
     active_trade = next(
         (
             t for t in trade_tracker.get_all_trades(account_id)
-            if trade_tracker.is_active_trade(t) and t.get("timeframe") == tf
+            if trade_tracker.is_active_trade(t)
+            and t.get("timeframe") == tf
+            and (
+                combined_stream_mode is None
+                or t.get("mode") == combined_stream_mode
+            )
         ),
         None,
     )
@@ -621,7 +654,10 @@ def clear_signal_lock(
     # Clear momentum-shift warning state so the next shift warns fresh
     momentum_shift_warned.pop(tf, None)
     if after_sl:
-        period = _TF_PERIOD_SECONDS.get(tf, _DEFAULT_TF_PERIOD_SECONDS)
+        # Combined-mode locks are stream-qualified (for example, scalp:M5)
+        # but cooldown duration must use the original candle timeframe.
+        timeframe = _raw_timeframe(tf)
+        period = _TF_PERIOD_SECONDS.get(timeframe, _DEFAULT_TF_PERIOD_SECONDS)
         cooldown = _SL_COOLDOWN_CANDLES * period
         cooldown_until = time.time() + cooldown
         sl_cooldown_until[tf] = cooldown_until
@@ -1118,7 +1154,7 @@ def _is_verified_terminal_result(trade: dict, event: str) -> bool:
 
 
 def _has_other_active_trade_on_timeframe(
-    trade: dict, account_id: int | None = None
+    trade: dict, account_id: int | None = None, *, same_mode_only: bool = False
 ) -> bool:
     """Prevent a delayed old result from confusing a newly active plan."""
     if account_id is None:
@@ -1132,6 +1168,10 @@ def _has_other_active_trade_on_timeframe(
     return any(
         str(active.get("id") or "") != trade_id
         and active.get("timeframe") == timeframe
+        and (
+            not same_mode_only
+            or active.get("mode") == trade.get("mode")
+        )
         for active in trade_tracker.get_active_trades(account_id)
     )
 
@@ -1166,8 +1206,11 @@ async def _send_verified_result_event(
         )
         return False
 
+    combined_account = (
+        account_id is not None and get_user_mode(account_id) == COMBINED_MODE
+    )
     if event in {"SL", "TP1_SL"} and _has_other_active_trade_on_timeframe(
-        persisted, account_id
+        persisted, account_id, same_mode_only=combined_account
     ):
         logger.warning(
             "[%s] %s result suppressed — another active trade owns this "
@@ -1216,7 +1259,12 @@ async def _send_sl_cooldown_notification(
             f"trade {trade_id or '<missing>'} is not a verified SL closure."
         )
         return False
-    if _has_other_active_trade_on_timeframe(persisted, account_id):
+    combined_account = (
+        account_id is not None and get_user_mode(account_id) == COMBINED_MODE
+    )
+    if _has_other_active_trade_on_timeframe(
+        persisted, account_id, same_mode_only=combined_account
+    ):
         logger.warning(
             "[%s] cooldown notification suppressed — another active trade "
             "owns this timeframe for account %s.",
@@ -1978,6 +2026,8 @@ async def _check_and_alert_once(
                     bot, subs, active_trade, tf, a.action,
                     confirmed=True,
                     state=state,
+                    lock_key=state_key,
+                    stream_label=stream_label,
                 )
 
             # ── Cross-TF coherence block ──────────────────────────────────────
