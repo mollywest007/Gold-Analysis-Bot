@@ -48,6 +48,38 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_stale_buy_entry_is_rejected_after_live_price_crosses_target(self):
+        analysis = SimpleNamespace(
+            action="BUY",
+            entry=100.0,
+            stop_loss=90.0,
+            tp1=110.0,
+            tp3=130.0,
+        )
+
+        self.assertFalse(
+            alerts._entry_price_is_currently_valid(analysis, 111.0)
+        )
+        self.assertTrue(
+            alerts._entry_price_is_currently_valid(analysis, 105.0)
+        )
+
+    def test_stale_sell_entry_is_rejected_after_live_price_crosses_target(self):
+        analysis = SimpleNamespace(
+            action="SELL",
+            entry=100.0,
+            stop_loss=110.0,
+            tp1=90.0,
+            tp3=70.0,
+        )
+
+        self.assertFalse(
+            alerts._entry_price_is_currently_valid(analysis, 89.0)
+        )
+        self.assertTrue(
+            alerts._entry_price_is_currently_valid(analysis, 95.0)
+        )
+
     def test_exit_extremes_ignore_old_post_entry_wicks(self):
         data = SimpleNamespace(
             highs=[500.0, 111.0, 112.0, 113.0, 114.0],

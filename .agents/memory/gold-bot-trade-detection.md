@@ -116,6 +116,19 @@ the next valid signal.
 **How to apply:** Treat the persisted trade record as the position source of
 truth; signal state is only an alert-delivery guard.
 
+## Stale analysis versus live quote
+
+An entry signal must be rejected when the live quote has already crossed its
+stop or first target before the analysis finishes.
+
+**Why:** Analysis and spot-price requests run independently. Broadcasting a
+late plan creates a position that can close on the next scan, making a valid
+Telegram entry appear to be missing from `/active`.
+
+**How to apply:** Validate the current live price immediately before persisting
+and delivering a new plan; do not use simulated or unavailable prices for this
+validation.
+
 ## Post-TP3 re-analysis cooldown
 
 After a trade reaches its final TP3 target, entry alerts on that timeframe pause

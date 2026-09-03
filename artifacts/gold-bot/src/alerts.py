@@ -685,6 +685,39 @@ def _post_entry_tf_extremes(
     return (current_price, current_price)
 
 
+def _entry_price_is_currently_valid(
+    analysis,
+    current_price: float,
+) -> bool:
+    """Reject stale entry plans that are already beyond their trade levels.
+
+    The analysis and the live quote are fetched independently.  During a fast
+    move, an otherwise valid analysis can finish after spot has already crossed
+    its stop or final target.  Broadcasting that plan creates a position that
+    the next tracker pass closes immediately, which looks like an entry that
+    never appeared in /active.
+    """
+    try:
+        price = float(current_price)
+        entry = float(analysis.entry)
+        stop = float(analysis.stop_loss)
+        tp1 = float(analysis.tp1)
+        tp3 = float(getattr(analysis, "tp3", 0.0) or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+    if price <= 0 or entry <= 0 or stop <= 0 or tp1 <= 0:
+        return False
+
+    if analysis.action == "BUY":
+        # A BUY is no longer a new actionable plan after its stop or first
+        # target has been crossed.  TP3 is optional for legacy plans.
+        return price > stop and price < tp1 and (not tp3 or price < tp3)
+    if analysis.action == "SELL":
+        return price < stop and price > tp1 and (not tp3 or price > tp3)
+    return False
+
+
 def get_signal_lock_info(
     tf: str, state: AccountAlertState | None = None
 ) -> str:
@@ -1577,6 +1610,7 @@ async def _check_and_alert_once(
     # signal-scanner below skips them — prevents same-cycle re-entry before
     # the terminal-exit cooldown has been saved and the analysis re-fetched.
     tfs_closed_this_cycle: set = set()
+    current_price = 0.0
     try:
         current_price = await get_gold_price()
         if current_price > 0:
@@ -1613,6 +1647,12 @@ async def _check_and_alert_once(
                         logger.warning(
                             f"[{tf}] Skipping simulated OHLCV for TP/SL detection."
                         )
+                        # Do not even derive spot-only extremes from a
+                        # simulated candle.  The tracker may use spot-only
+                        # evidence safely, but keeping this branch explicit
+                        # prevents a future change from accidentally passing
+                        # generated candle wicks into exit detection.
+                        continue
 
                     opened_at = tf_opened_at.get(tf, 0.0)
                     extremes = _post_entry_tf_extremes(
@@ -1948,6 +1988,15 @@ async def _check_and_alert_once(
         }
         clean_signals = []
         for tf, a in sig_list:
+            if not _entry_price_is_currently_valid(a, current_price):
+                pending_signal.pop(tf, None)
+                logger.warning(
+                    "[%s] Entry withheld — live price %.2f is no longer "
+                    "between the entry plan's stop and first target.",
+                    tf,
+                    current_price,
+                )
+                continue
             existing = all_open.get(tf)
             if existing:
                 # An active trade owns its timeframe regardless of direction.
