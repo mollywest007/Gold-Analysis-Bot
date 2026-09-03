@@ -3,15 +3,13 @@
     "7354092356": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
-        "M15": "BUY"
-      },
+      "active_signal": {},
       "closed_signal": {},
-      "last_fired": {
-        "M15": 1788418175.438763
-      },
+      "last_fired": {},
       "pending_signal": {},
-      "sl_cooldown_until": {},
+      "sl_cooldown_until": {
+        "M15": 1788420189.5534832
+      },
       "tp_cooldown_until": {},
       "forming_alert_sent": {},
       "momentum_shift_warned": {},
@@ -42,7 +40,7 @@
       "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
-        "H1": 1788361709.9144363
+        "H1": 1788425366.8413346
       },
       "tp_cooldown_until": {},
       "forming_alert_sent": {},
