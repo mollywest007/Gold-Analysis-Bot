@@ -250,15 +250,12 @@ def check_trades(current_price: float, recent_high: float = None,
     never used as exit evidence.  A caller must provide verified candle
     extremes in tf_extremes; otherwise only the live spot price is checked.
 
-    tf_extremes (optional): { "M15": (high, low), "H1": (high, low), ... } —
-    the high/low of each timeframe's current forming candle since the last
-    check. Gold can wick through a TP/SL level for a few seconds and snap
-    back before the next 30s poll samples current_price — checking only the
-    single spot price would miss that touch entirely (or worse, report the
-    wrong exit price once price has already moved on). Using each trade's
-    own timeframe candle extremes lets a fast wick still register the touch,
-    which is what would have actually filled on a real broker order sitting
-    at that level.
+     tf_extremes (optional): raw timeframe keys such as "M15" or "H1", or
+     combined-mode (mode, timeframe) keys such as ("scalp", "M15") —
+     each value is the high/low of that candle since the last check. Gold can
+     wick through a TP/SL level for a few seconds and snap back before the
+     next poll samples current_price. Per-trade keys prevent two combined
+     streams using the same timeframe from sharing pre-entry candle evidence.
 
     Returns a list of event dicts:
       {trade, event: 'TP1'|'TP2'|'SL', exit_price}
@@ -320,7 +317,13 @@ def check_trades(current_price: float, recent_high: float = None,
             )
             continue
 
-        tf_hi, tf_lo = tf_extremes.get(t.get("timeframe"), (None, None))
+        trade_key = (t.get("mode"), t.get("timeframe"))
+        extremes = (
+            tf_extremes[trade_key]
+            if trade_key in tf_extremes
+            else tf_extremes.get(t.get("timeframe"), (None, None))
+        )
+        tf_hi, tf_lo = extremes
         try:
             if tf_hi is not None:
                 tf_hi = float(tf_hi)

@@ -589,6 +589,26 @@
       "tp1_hit": false,
       "tp2_hit": false,
       "tp3_hit": false
+    },
+    {
+      "id": "fd60423bb2b04ad29680c8ab0066f1db",
+      "account_id": "8039158711",
+      "direction": "BUY",
+      "entry": 4426.7,
+      "limit_entry": 4420.28,
+      "sl": 4412.92,
+      "tp1": 4447.37,
+      "tp2": 4461.15,
+      "tp3": 4474.93,
+      "timeframe": "M15",
+      "mode": "scalp",
+      "confidence": 93,
+      "rr_ratio": 1.5,
+      "opened_at": 1788430589.9445515,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }

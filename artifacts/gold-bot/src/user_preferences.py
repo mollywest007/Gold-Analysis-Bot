@@ -136,7 +136,7 @@ def get_monitoring_streams(chat_id: int) -> list[tuple[str, str, str]]:
         timeframes = get_combined_timeframes(chat_id)
         return [
             ("SCALP", timeframes[SCALP_STREAM], "scalp"),
-            ("INTERVAL", timeframes[INTERVAL_STREAM], "intraday"),
+            ("INTRA-HOUR", timeframes[INTERVAL_STREAM], "intraday"),
         ]
     return [
         (

@@ -138,7 +138,11 @@ def _alert_stream_specs(account_id: int | None = None) -> list[tuple[str, str, s
             # Keep the existing single-mode state namespace unchanged. The
             # combined mode is the only mode with two independent streams,
             # so only it needs a stream-qualified key.
-            f"{label.lower()}:{timeframe}" if combined else timeframe,
+            (
+                f"{'scalp' if engine_mode == 'scalp' else 'interval'}:{timeframe}"
+                if combined
+                else timeframe
+            ),
         )
         for label, timeframe, engine_mode in get_monitoring_streams(account_id)
     ]
@@ -159,6 +163,26 @@ def _raw_timeframe(state_key: str) -> str:
     if ":" in state_key:
         return state_key.split(":", 1)[1]
     return state_key
+
+
+def _stream_alert_label(mode: str | None) -> str:
+    """Return the user-facing label for a trade's originating strategy."""
+    mode = str(mode or "").lower()
+    if mode == "scalp":
+        return "SCALP"
+    if mode == "intraday":
+        return "INTRA-HOUR"
+    return ""
+
+
+def _combined_timeframes_from_state(value: str) -> dict[str, str]:
+    """Parse the persisted combined-mode timeframe summary."""
+    result = {}
+    for part in str(value or "").split("|"):
+        stream, separator, timeframe = part.partition("=")
+        if separator and stream in {"scalp", "interval"} and timeframe:
+            result[stream] = timeframe
+    return result
 
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
@@ -455,18 +479,51 @@ def _sync_mode_state(
         )
     )
     if settings_changed:
-        logger.info(
-            f"Analysis settings changed "
-            f"{previous_mode}/{previous_timeframe} → "
-            f"{active_mode}/{active_timeframe}; clearing stale entry locks."
-        )
-        active_signal.clear()
-        closed_signal.clear()
-        tf_last_fired.clear()
-        forming_alert_sent.clear()
-        momentum_shift_warned.clear()
-        sl_cooldown_until.clear()
-        tp_cooldown_until.clear()
+        # A combined-mode timeframe change belongs to one engine only. Keep
+        # the other engine's signal locks and cooldowns alive.
+        changed_streams = set()
+        if previous_mode == active_mode == COMBINED_MODE:
+            before = _combined_timeframes_from_state(previous_timeframe)
+            after = _combined_timeframes_from_state(active_timeframe)
+            if before and after:
+                changed_streams = {
+                    stream for stream in ("scalp", "interval")
+                    if before.get(stream) != after.get(stream)
+                }
+
+        if changed_streams:
+            logger.info(
+                f"Combined timeframe settings changed "
+                f"{previous_timeframe} → {active_timeframe}; "
+                f"clearing only {', '.join(sorted(changed_streams))} stream state."
+            )
+            prefixes = tuple(f"{stream}:" for stream in changed_streams)
+            for mapping in (
+                active_signal,
+                closed_signal,
+                tf_last_fired,
+                pending_signal,
+                forming_alert_sent,
+                momentum_shift_warned,
+                sl_cooldown_until,
+                tp_cooldown_until,
+            ):
+                for key in list(mapping):
+                    if key.startswith(prefixes):
+                        mapping.pop(key, None)
+        else:
+            logger.info(
+                f"Analysis settings changed "
+                f"{previous_mode}/{previous_timeframe} → "
+                f"{active_mode}/{active_timeframe}; clearing stale entry locks."
+            )
+            active_signal.clear()
+            closed_signal.clear()
+            tf_last_fired.clear()
+            forming_alert_sent.clear()
+            momentum_shift_warned.clear()
+            sl_cooldown_until.clear()
+            tp_cooldown_until.clear()
     if (
         previous_mode != active_mode
         or previous_timeframe != active_timeframe
@@ -507,6 +564,7 @@ def _should_send(
         combined_stream_mode = {
             "scalp": "scalp",
             "interval": "intraday",
+            "intra-hour": "intraday",
         }.get(stream_name)
     cooldown_until = sl_cooldown_until.get(tf, 0.0)
     if time.time() < cooldown_until:
@@ -1039,13 +1097,7 @@ async def _send_result_image(
     timeframe  = trade.get("timeframe", "H1")
     rr_ratio   = trade.get("rr_ratio", 2.0)
     mode_name = str(trade.get("mode") or "")
-    alert_label = (
-        "SCALP"
-        if mode_name == "scalp"
-        else "INTERVAL"
-        if mode_name == "intraday"
-        else ""
-    )
+    alert_label = _stream_alert_label(mode_name)
     alert_prefix = f"{alert_label} ALERT  |  " if alert_label else ""
 
     if event == "SL":
@@ -1300,13 +1352,7 @@ async def _send_sl_cooldown_notification(
     else:
         title = "STOP LOSS TRIGGERED"
         reason = "The trade is confirmed closed by its stop-loss."
-    stream_label = (
-        "SCALP"
-        if persisted.get("mode") == "scalp"
-        else "INTERVAL"
-        if persisted.get("mode") == "intraday"
-        else ""
-    )
+    stream_label = _stream_alert_label(persisted.get("mode"))
     label_prefix = f"{stream_label} ALERT  |  " if stream_label else ""
     text = (
         f"<pre>{label_prefix}🛑  {title}  —  XAU/USD  {timeframe}\n"
@@ -1458,8 +1504,12 @@ async def _fire_signal(
                 if limit_entry and limit_entry != market_entry
                 else ""
             )
-            caption = (
-                f"{alert_label + ' ALERT  |  ' if alert_label else ''}"
+             entry_heading = {
+                 "SCALP": "⚡ SCALP ENTRY",
+                 "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
+             }.get(alert_label, f"{alert_label} ALERT" if alert_label else "")
+             caption = (
+                 f"{entry_heading + '  |  ' if entry_heading else ''}"
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                 f"{limit_str}Market: {market_entry:,.2f}   SL: {a.stop_loss:,.2f}\n"
                 f"TP1: {a.tp1:,.2f} (1:{rr1}){tp3_str}"
@@ -1743,15 +1793,24 @@ async def _check_and_alert_once(
             ]
             open_tfs = {t.get("timeframe") for t in active_trades}
 
-            # For each TF, record the earliest trade open time — we will only
-            # use candles from AFTER that point to avoid false SL/TP hits from
-            # historical data that predates the trade.
-            tf_opened_at: Dict[str, float] = {}
+            # For each trade scope, record the earliest trade open time. In
+            # combined mode the scope includes the engine, so two trades on
+            # the same candle timeframe do not share pre-entry evidence.
+            combined_trade_scope = account_scan and mode_name == COMBINED_MODE
+            trade_opened_at: Dict[object, float] = {}
             for t in active_trades:
                 tf = t.get("timeframe")
                 oa = t.get("opened_at", 0.0)
-                if tf and (tf not in tf_opened_at or oa < tf_opened_at[tf]):
-                    tf_opened_at[tf] = oa
+                scope = (
+                    (t.get("mode"), tf)
+                    if combined_trade_scope
+                    else tf
+                )
+                if tf and (
+                    scope not in trade_opened_at
+                    or oa < trade_opened_at[scope]
+                ):
+                    trade_opened_at[scope] = oa
 
             tf_extremes: Dict[str, tuple] = {}
             if open_tfs:
@@ -1776,16 +1835,27 @@ async def _check_and_alert_once(
                         # generated candle wicks into exit detection.
                         continue
 
-                    opened_at = tf_opened_at.get(tf, 0.0)
-                    extremes = _post_entry_tf_extremes(
-                        data,
-                        current_price,
-                        opened_at,
-                        timeframe=tf,
-                        now=now_ts,
+                    scopes = (
+                        [
+                            scope for scope in trade_opened_at
+                            if isinstance(scope, tuple) and scope[1] == tf
+                        ]
+                        if combined_trade_scope
+                        else [tf]
                     )
-                    if extremes is not None:
-                        tf_extremes[tf] = extremes
+                    if not scopes:
+                        continue
+                    for scope in scopes:
+                        opened_at = trade_opened_at.get(scope, 0.0)
+                        extremes = _post_entry_tf_extremes(
+                            data,
+                            current_price,
+                            opened_at,
+                            timeframe=tf,
+                            now=now_ts,
+                        )
+                        if extremes is not None:
+                            tf_extremes[scope] = extremes
 
             events = trade_tracker.check_trades(
                 current_price, tf_extremes=tf_extremes, account_id=account_id
@@ -2467,13 +2537,7 @@ async def _send_trade_reminder_once(
         entry     = _safe_float(trade.get("entry"))
         direction = trade.get("direction", "")
         tf        = trade.get("timeframe", "")
-        stream_label = (
-            "SCALP"
-            if trade.get("mode") == "scalp"
-            else "INTERVAL"
-            if trade.get("mode") == "intraday"
-            else ""
-        )
+        stream_label = _stream_alert_label(trade.get("mode"))
         sl        = _safe_float(trade.get("sl"))
         tp1       = _safe_float(trade.get("tp1"))
         tp2       = _safe_float(trade.get("tp2")) if trade.get("tp2") is not None else None

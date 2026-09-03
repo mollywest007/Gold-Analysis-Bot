@@ -710,7 +710,11 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
 
     pd_arrow = {"PREMIUM": "▲ PREMIUM", "DISCOUNT": "▼ DISCOUNT", "EQUILIBRIUM": "◆ EQUIL"}.get(pd, pd)
 
-    stream_line = f"{alert_label} ALERT  |  " if alert_label else ""
+    stream_heading = {
+        "SCALP": "⚡ SCALP ENTRY",
+        "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
+    }.get(alert_label, f"{alert_label} ALERT" if alert_label else "")
+    stream_line = f"{stream_heading}  |  " if stream_heading else ""
     lines = ["<pre>",
         f"{stream_line}XAU/USD  {a.action}  {a.timeframe}  {a.session or 'N/A'}",
         f"Grade {a.setup_quality}  |  Strength {a.win_probability}%  |  {a.trade_type}",
