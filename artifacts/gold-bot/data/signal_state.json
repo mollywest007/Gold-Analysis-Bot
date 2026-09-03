@@ -3,16 +3,12 @@
     "7354092356": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
-        "M15": "BUY"
-      },
+      "active_signal": {},
       "closed_signal": {},
-      "last_fired": {
-        "M15": 1788423865.9618368
-      },
+      "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1788420189.5534832
+        "M15": 1788425711.623456
       },
       "tp_cooldown_until": {},
       "forming_alert_sent": {},
