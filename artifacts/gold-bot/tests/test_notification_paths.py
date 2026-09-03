@@ -118,6 +118,33 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(last_fired, {"H1": 200.0})
         self.assertEqual(pending, {"H1": "SELL"})
 
+    def test_tp3_starts_ten_minute_reanalysis_cooldown(self):
+        state = alerts.AccountAlertState(active_signal={"H1": "SELL"})
+
+        with patch.object(alerts.time, "time", return_value=1000.0):
+            deadline = alerts.clear_signal_lock(
+                "H1",
+                after_tp=True,
+                state=state,
+            )
+
+        self.assertEqual(deadline, 1600.0)
+        self.assertEqual(state.tp_cooldown_until["H1"], 1600.0)
+        self.assertEqual(state.closed_signal["H1"], "SELL")
+
+        with patch.object(alerts.time, "time", return_value=1001.0):
+            self.assertFalse(
+                alerts._should_send("H1", "SELL", state=state)
+            )
+
+        # The same direction is re-armed only after the full ten-minute
+        # analysis window has elapsed.
+        with patch.object(alerts.time, "time", return_value=1601.0):
+            self.assertTrue(
+                alerts._should_send("H1", "SELL", state=state)
+            )
+        self.assertNotIn("H1", state.tp_cooldown_until)
+
     async def test_sl_result_is_blocked_while_persisted_trade_is_active(self):
         bot = AsyncMock()
         active_trade = {

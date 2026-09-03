@@ -46,6 +46,10 @@ _scan_lock = asyncio.Lock()
 _sl_cooldown_until: Dict[str, float] = {}
 # Cooldown = 2 candle periods per timeframe
 _SL_COOLDOWN_CANDLES = 2
+# After a trade reaches its final target (TP3), wait before accepting another
+# entry on that timeframe so the next signal is based on a fresh market read.
+_tp_cooldown_until: Dict[str, float] = {}
+_TP_COOLDOWN_SECONDS = 10 * 60
 # Track which reminder milestones have been sent per trade.
 # Structure: { "trade_id": {"entry", "update_2x", "update_6x"} }
 _reminded_trade_ids: Dict[str, Set[str]] = {}
@@ -162,6 +166,7 @@ class AccountAlertState:
     tf_last_fired: Dict[str, float] = field(default_factory=dict)
     pending_signal: Dict[str, str] = field(default_factory=dict)
     sl_cooldown_until: Dict[str, float] = field(default_factory=dict)
+    tp_cooldown_until: Dict[str, float] = field(default_factory=dict)
     forming_alert_sent: Dict[str, str] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
@@ -180,6 +185,7 @@ def _state_from_record(record: dict) -> AccountAlertState:
         tf_last_fired=dict(record.get("last_fired") or {}),
         pending_signal=dict(record.get("pending_signal") or {}),
         sl_cooldown_until=dict(record.get("sl_cooldown_until") or {}),
+        tp_cooldown_until=dict(record.get("tp_cooldown_until") or {}),
         forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
         reminded_trade_ids={
@@ -200,6 +206,7 @@ def _state_record(state: AccountAlertState) -> dict:
         "last_fired": state.tf_last_fired,
         "pending_signal": state.pending_signal,
         "sl_cooldown_until": state.sl_cooldown_until,
+        "tp_cooldown_until": state.tp_cooldown_until,
         "forming_alert_sent": state.forming_alert_sent,
         "momentum_shift_warned": state.momentum_shift_warned,
         "reminded_trade_ids": {
@@ -377,6 +384,7 @@ def _sync_mode_state(
         forming_alert_sent = _forming_alert_sent
         momentum_shift_warned = _momentum_shift_warned
         sl_cooldown_until = _sl_cooldown_until
+        tp_cooldown_until = _tp_cooldown_until
     else:
         active_mode = get_user_mode(account_id)
         active_timeframe = get_user_timeframe(account_id)
@@ -388,6 +396,7 @@ def _sync_mode_state(
         forming_alert_sent = state.forming_alert_sent
         momentum_shift_warned = state.momentum_shift_warned
         sl_cooldown_until = state.sl_cooldown_until
+        tp_cooldown_until = state.tp_cooldown_until
     settings_changed = (
         previous_mode
         and (
@@ -407,6 +416,7 @@ def _sync_mode_state(
         forming_alert_sent.clear()
         momentum_shift_warned.clear()
         sl_cooldown_until.clear()
+        tp_cooldown_until.clear()
     if (
         previous_mode != active_mode
         or previous_timeframe != active_timeframe
@@ -437,6 +447,7 @@ def _should_send(
     """
     # ── Post-SL cooldown check ─────────────────────────────────────────────────
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
+    tp_cooldown_until = state.tp_cooldown_until if state else _tp_cooldown_until
     pending_signal = state.pending_signal if state else _pending_signal
     active_signal = state.active_signal if state else _active_signal
     closed_signal = state.closed_signal if state else _closed_signal
@@ -445,6 +456,22 @@ def _should_send(
         remaining = int((cooldown_until - time.time()) // 60)
         logger.info(f"[{tf}] Post-SL cooldown active — {remaining}m remaining. Skipping {action}.")
         return False
+
+    tp_cooldown = tp_cooldown_until.get(tf, 0.0)
+    if time.time() < tp_cooldown:
+        remaining = max(1, int((tp_cooldown - time.time() + 59) // 60))
+        logger.info(
+            f"[{tf}] Post-TP3 cooldown active — {remaining}m remaining. "
+            f"Skipping {action} while the market is re-analyzed."
+        )
+        return False
+    if tp_cooldown:
+        tp_cooldown_until.pop(tf, None)
+        # A final-target cooldown is the deliberate re-arm boundary.  Once
+        # the fresh-analysis window has elapsed, the same direction may fire
+        # again if it is still a valid setup.
+        if closed_signal.get(tf) == action:
+            closed_signal.pop(tf, None)
 
     if tf in pending_signal:
         logger.info(
@@ -512,12 +539,14 @@ def _should_send(
 def clear_signal_lock(
     tf: str,
     after_sl: bool = False,
+    after_tp: bool = False,
     state: AccountAlertState | None = None,
     account_id: int | None = None,
 ) -> Optional[float]:
-    """Call after a trade closes so the next signal on this timeframe fires freely.
+    """Call after a trade closes so the next signal on this timeframe is gated.
 
     after_sl=True: apply a 2-candle cooldown before allowing re-entry.
+    after_tp=True: apply a fixed 10-minute cooldown after the final target.
     This prevents the bot spamming re-entries every 15s after a quick SL hit
     in volatile/choppy conditions.
 
@@ -529,6 +558,7 @@ def clear_signal_lock(
     tf_last_fired = state.tf_last_fired if state else _tf_last_fired
     momentum_shift_warned = state.momentum_shift_warned if state else _momentum_shift_warned
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
+    tp_cooldown_until = state.tp_cooldown_until if state else _tp_cooldown_until
     last_direction = active_signal.get(tf)
     active_signal.pop(tf, None)
     pending_signal.pop(tf, None)
@@ -548,14 +578,23 @@ def clear_signal_lock(
             f"[{tf}] Signal lock cleared after SL — "
             f"post-SL cooldown {cooldown // 60:.0f}m before next entry."
         )
+    elif after_tp:
+        sl_cooldown_until.pop(tf, None)
+        cooldown_until = time.time() + _TP_COOLDOWN_SECONDS
+        tp_cooldown_until[tf] = cooldown_until
+        logger.info(
+            f"[{tf}] Signal lock cleared after TP3 — "
+            f"post-TP3 cooldown {_TP_COOLDOWN_SECONDS // 60}m before next entry."
+        )
     else:
         sl_cooldown_until.pop(tf, None)
+        tp_cooldown_until.pop(tf, None)
         logger.info(
             f"[{tf}] Signal lock cleared — waiting for a direction change "
             "before re-entry."
         )
     _save_signal_state(account_id, state)
-    return cooldown_until if after_sl else None
+    return cooldown_until if (after_sl or after_tp) else None
 
 
 def _post_entry_tf_extremes(
@@ -1409,6 +1448,7 @@ async def _check_and_alert_once(
         tf_last_fired = state.tf_last_fired
         pending_signal = state.pending_signal
         sl_cooldown_until = state.sl_cooldown_until
+        tp_cooldown_until = state.tp_cooldown_until
         forming_alert_sent = state.forming_alert_sent
         momentum_shift_warned = state.momentum_shift_warned
     else:
@@ -1421,6 +1461,7 @@ async def _check_and_alert_once(
         tf_last_fired = _tf_last_fired
         pending_signal = _pending_signal
         sl_cooldown_until = _sl_cooldown_until
+        tp_cooldown_until = _tp_cooldown_until
         forming_alert_sent = _forming_alert_sent
         momentum_shift_warned = _momentum_shift_warned
 
@@ -1479,8 +1520,8 @@ async def _check_and_alert_once(
     # basis settled and must not be replayed as a fresh exit.
     #
     # tfs_closed_this_cycle: tracks TFs whose trade closed in this scan so the
-    # signal-scanner below skips them — prevents same-cycle re-entry before the
-    # post-SL cooldown has been saved to disk and the analysis re-fetched.
+    # signal-scanner below skips them — prevents same-cycle re-entry before
+    # the terminal-exit cooldown has been saved and the analysis re-fetched.
     tfs_closed_this_cycle: set = set()
     try:
         current_price = await get_gold_price()
@@ -1559,8 +1600,13 @@ async def _check_and_alert_once(
                 # Only terminal events release the entry lock.
                 if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
+                    is_final_target = ev["event"] == "TP3"
                     cooldown_until = clear_signal_lock(
-                        closed_tf, after_sl=is_loss, state=state, account_id=account_id
+                        closed_tf,
+                        after_sl=is_loss,
+                        after_tp=is_final_target,
+                        state=state,
+                        account_id=account_id,
                     )
                     tfs_closed_this_cycle.add(closed_tf)
                     if is_loss and cooldown_until and event_trade_id:

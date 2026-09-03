@@ -115,3 +115,16 @@ the next valid signal.
 
 **How to apply:** Treat the persisted trade record as the position source of
 truth; signal state is only an alert-delivery guard.
+
+## Post-TP3 re-analysis cooldown
+
+After a trade reaches its final TP3 target, entry alerts on that timeframe pause
+for 10 minutes while the scanner continues re-analyzing the market. The same
+direction is eligible again after the cooldown; TP1, TP2, SL, and break-even
+events use their existing behavior.
+
+**Why:** Immediately reopening after a completed full move can chase an
+unchanged setup and create low-quality repeat entries.
+
+**How to apply:** Keep this as a separate persisted cooldown from the
+post-stop-loss cooldown so it applies only to final-target completion.
