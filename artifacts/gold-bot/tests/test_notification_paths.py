@@ -650,6 +650,98 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             "ENTRY ALERT",
         )
 
+    async def test_combined_scan_analyzes_scalp_and_interval_profiles(self):
+        from src import market_hours
+        from src.analysis.modes import MODES
+
+        waiting = SimpleNamespace(
+            action="WAIT",
+            setup_quality="WAIT",
+            confidence=0,
+            win_probability=0,
+            is_simulated=False,
+            buy_votes=0,
+            sell_votes=0,
+            adx=10.0,
+        )
+        context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
+        state = alerts.AccountAlertState()
+
+        with patch.object(alerts, "_sync_mode_state"), \
+             patch.object(alerts, "get_user_mode", return_value="scalp_interval"), \
+             patch.object(
+                 alerts,
+                 "get_user_mode_config",
+                 return_value=MODES["scalp_interval"],
+             ), \
+             patch.object(
+                 alerts,
+                 "get_monitoring_streams",
+                 return_value=[
+                     ("SCALP", "M15", "scalp"),
+                     ("INTERVAL", "H1", "intraday"),
+                 ],
+             ), \
+             patch.object(alerts, "_load_account_state", return_value=state), \
+             patch.object(alerts, "_load", return_value={123}), \
+             patch.object(
+                 alerts,
+                 "_safe_analyze",
+                 new=AsyncMock(return_value=waiting),
+             ) as safe_analyze, \
+             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+             patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "get_all_trades", return_value=[]), \
+             patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(alerts, "_save_signal_state"), \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ):
+            await alerts._check_and_alert_once(context, account_id=123, state=state)
+
+        self.assertEqual(safe_analyze.await_count, 2)
+        safe_analyze.assert_any_await("M15", "scalp")
+        safe_analyze.assert_any_await("H1", "intraday")
+
+    async def test_entry_alert_can_identify_its_stream(self):
+        bot = AsyncMock()
+        analysis = SimpleNamespace(
+            early_entry=0.0,
+            entry=2350.0,
+            stop_loss=2335.0,
+            tp1=2380.0,
+            tp2=2400.0,
+            tp3=2420.0,
+            action="BUY",
+            setup_quality="A",
+            win_probability=78,
+        )
+
+        with patch.object(
+            alerts,
+            "early_entry_card",
+            side_effect=lambda _analysis, alert_label="": f"{alert_label} ALERT",
+        ), \
+             patch(
+                 "src.chart_generator.generate_chart_image",
+                 new=AsyncMock(return_value=None),
+             ):
+            delivered = await alerts._fire_signal(
+                bot, {123}, analysis, "M15", alert_label="SCALP"
+            )
+
+        self.assertTrue(delivered)
+        self.assertEqual(
+            bot.send_message.await_args.kwargs["text"],
+            "SCALP ALERT",
+        )
+
     async def test_entry_alert_is_withheld_when_trade_cannot_be_persisted(self):
         from src import market_hours
 

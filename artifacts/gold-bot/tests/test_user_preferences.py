@@ -64,6 +64,44 @@ class UserPreferenceTests(unittest.TestCase):
 
     def test_analysis_cache_isolated_by_mode(self):
         cache.invalidate()
+
+    def test_combined_mode_persists_independent_stream_timeframes(self):
+        account = 505
+
+        user_preferences.set_mode(account, "scalp_interval")
+        self.assertEqual(
+            user_preferences.get_combined_timeframes(account),
+            {"scalp": "M15", "interval": "H1"},
+        )
+        self.assertEqual(
+            user_preferences.get_monitoring_streams(account),
+            [
+                ("SCALP", "M15", "scalp"),
+                ("INTERVAL", "H1", "intraday"),
+            ],
+        )
+
+        user_preferences.set_combined_timeframe(account, "scalp", "M5")
+        user_preferences.set_combined_timeframe(account, "interval", "M30")
+
+        self.assertEqual(
+            user_preferences.get_combined_timeframes(account),
+            {"scalp": "M5", "interval": "M30"},
+        )
+        self.assertEqual(user_preferences.get_timeframe(account), "M5")
+
+    def test_switching_away_from_combined_preserves_single_mode_behavior(self):
+        account = 606
+
+        user_preferences.set_mode(account, "scalp_interval")
+        user_preferences.set_combined_timeframe(account, "interval", "M30")
+        user_preferences.set_mode(account, "intraday")
+
+        self.assertEqual(user_preferences.get_timeframe(account), "M15")
+        self.assertEqual(
+            user_preferences.get_monitoring_streams(account),
+            [("INTRADAY", "M15", "intraday")],
+        )
         results = [
             SimpleNamespace(analysis_mode="intraday"),
             SimpleNamespace(analysis_mode="scalp"),

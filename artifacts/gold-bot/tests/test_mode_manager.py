@@ -44,6 +44,10 @@ class ModeManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mode_manager.set_timeframe("H1")
 
+    def test_mode_menu_includes_combined_scalp_interval_option(self):
+        labels = [cfg.label for cfg in mode_manager.list_modes()]
+        self.assertIn("Scalp / Interval", labels)
+
 
 if __name__ == "__main__":
     unittest.main()

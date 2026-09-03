@@ -29,6 +29,7 @@ from src.alerts import (
     register_user,
     is_alerts_disabled,
 )
+from src.user_preferences import get_monitoring_streams
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -101,21 +102,20 @@ async def _warm_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.market_hours import market_status
     from src.analysis.cache import warm
     from src.alerts import _load
-    from src.user_preferences import get_mode_config as get_user_mode_config
     if not market_status()["is_open"]:
         logger.info("Cache warm skipped — market closed.")
         return
     requested = {
-        (cfg.name, tf)
+        (engine_mode, tf)
         for account_id in _load()
-        for cfg in [get_user_mode_config(account_id)]
-        for tf in cfg.scan_timeframes
+        for _, tf, engine_mode in get_monitoring_streams(account_id)
     }
     if not requested:
         requested = {("intraday", "H1")}
     logger.info("Warming account-configured analysis cache: %s", sorted(requested))
     for mode, tf in sorted(requested):
-        await warm([tf]) if mode == "intraday" else await warm([tf])
+        logger.info("Cache warm requested for %s/%s.", mode, tf)
+        await warm([tf], mode=mode)
 
 
 async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -123,16 +123,14 @@ async def _refresh_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.market_hours import market_status
     from src.analysis.cache import get_analysis
     from src.alerts import _load
-    from src.user_preferences import get_mode_config as get_user_mode_config
     import asyncio
     if not market_status()["is_open"]:
         return
     try:
         requested = {
-            (cfg.name, tf)
+            (engine_mode, tf)
             for account_id in _load()
-            for cfg in [get_user_mode_config(account_id)]
-            for tf in cfg.scan_timeframes
+            for _, tf, engine_mode in get_monitoring_streams(account_id)
         }
         if not requested:
             return

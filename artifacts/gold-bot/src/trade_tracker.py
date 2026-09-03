@@ -113,6 +113,7 @@ def open_trade(
     mode: str = "",
     limit_entry: float = None,
     account_id: int | str | None = None,
+    allow_same_timeframe_mode: bool = False,
 ) -> bool:
     trades = _load()
 
@@ -155,9 +156,16 @@ def open_trade(
     account_key = _account_key(account_id)
 
     for t in trades:
+        same_timeframe_slot = (
+            t.get("timeframe") == timeframe
+            and (
+                not allow_same_timeframe_mode
+                or t.get("mode") == mode
+            )
+        )
         if (
             is_active_trade(t)
-            and t.get("timeframe") == timeframe
+            and same_timeframe_slot
             and _belongs_to_account(t, account_key)
         ):
             logger.info(

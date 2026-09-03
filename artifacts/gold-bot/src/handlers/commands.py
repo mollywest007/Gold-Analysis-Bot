@@ -16,8 +16,11 @@ from src.utils.keyboards import (
 )
 from src.mode_manager import list_modes
 from src.user_preferences import (
+    COMBINED_MODE,
     get_mode as get_user_mode,
     get_mode_config as get_user_mode_config,
+    get_combined_timeframes,
+    get_monitoring_streams,
     get_timeframe as get_user_timeframe,
 )
 
@@ -29,6 +32,34 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
     selected = context.user_data.get("timeframe")
     saved = get_user_timeframe(chat_id)
     return selected if selected in cfg.scan_timeframes else saved
+
+
+def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
+    """Return the engine modes/timeframes used by manual multi-analysis."""
+    mode = get_user_mode(chat_id)
+    if mode == COMBINED_MODE:
+        return [
+            ("scalp", get_combined_timeframes(chat_id)["scalp"]),
+            ("intraday", get_combined_timeframes(chat_id)["interval"]),
+        ]
+    cfg = get_user_mode_config(chat_id)
+    return [(mode, tf) for tf in cfg.scan_timeframes]
+
+
+def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:
+    """Resolve the engine profile for a manual combined-mode request."""
+    mode = get_user_mode(chat_id)
+    if mode != COMBINED_MODE:
+        return mode
+    combined = get_combined_timeframes(chat_id)
+    # If both streams intentionally use the same timeframe, prefer Scalp for
+    # the single-timeframe command; /analyze and /recommend still run both.
+    return (
+        "intraday"
+        if timeframe == combined["interval"]
+        and timeframe != combined["scalp"]
+        else "scalp"
+    )
 
 
 def _open_trade_banner(tf: str, account_id: int) -> str:
@@ -140,7 +171,8 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Running full market analysis on {tf}...{' (' + note + ')' if note else ''}"
     )
     try:
-        a = await get_analysis(tf, mode=mode_name)
+        analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+        a = await get_analysis(tf, mode=analysis_mode)
 
         # ── Simulated data guard — block before any card is shown ─────────────
         if getattr(a, "is_simulated", False):
@@ -229,9 +261,9 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         # Sequential — see messages.py for explanation
         _analyses = []
-        for _tf in mode_cfg.scan_timeframes:
+        for _mode, _tf in _analysis_specs(chat_id):
             try:
-                _analyses.append(await _analyze(_tf, mode=mode_name))
+                _analyses.append(await _analyze(_tf, mode=_mode))
             except Exception as _e:
                 logger.warning(f"analyze({_tf}) skipped: {_e}")
         await msg.edit_text(
@@ -253,7 +285,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf, mode=mode_name)
+        analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+        a = await get_analysis(tf, mode=analysis_mode)
         # Send signal card first (always fast)
         # Simulated data guard — block before showing any signal
         if getattr(a, "is_simulated", False):
@@ -307,7 +340,8 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf, mode=mode_name)
+        analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+        a = await get_analysis(tf, mode=analysis_mode)
         await msg.edit_text(trend_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("trend", tf))
     except Exception as e:
@@ -325,7 +359,8 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf, mode=mode_name)
+        analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+        a = await get_analysis(tf, mode=analysis_mode)
         await msg.edit_text(levels_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("levels", tf))
     except Exception as e:
@@ -343,7 +378,8 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
     try:
-        a = await get_analysis(tf, mode=mode_name)
+        analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+        a = await get_analysis(tf, mode=analysis_mode)
         await msg.edit_text(outlook_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("outlook", tf))
     except Exception as e:
@@ -379,17 +415,33 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_id = update.effective_chat.id
     tf   = _get_tf(context, chat_id)
     mode = get_user_mode_config(chat_id)
-    text = (
-        "<b>Settings</b>\n\n"
-        f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
-        f"{mode.description}\n\n"
-        f"Current Timeframe: <b>{tf}</b>\n\n"
-        "Choose a mode to change the strategy, then choose a timeframe "
-        "within that mode."
-    )
+    if mode.name == COMBINED_MODE:
+        combined = get_combined_timeframes(chat_id)
+        text = (
+            "<b>Settings</b>\n\n"
+            f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
+            f"{mode.description}\n\n"
+            f"Scalp alerts timeframe: <b>{combined['scalp']}</b>\n"
+            f"Interval alerts timeframe: <b>{combined['interval']}</b>\n\n"
+            "Both alert streams run at the same time. Choose each timeframe "
+            "independently below."
+        )
+        keyboard = settings_keyboard(
+            tf, mode.name, combined_timeframes=combined
+        )
+    else:
+        text = (
+            "<b>Settings</b>\n\n"
+            f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
+            f"{mode.description}\n\n"
+            f"Current Timeframe: <b>{tf}</b>\n\n"
+            "Choose a mode to change the strategy, then choose a timeframe "
+            "within that mode."
+        )
+        keyboard = settings_keyboard(tf, mode.name)
     await update.message.reply_text(
         text, parse_mode="HTML",
-        reply_markup=settings_keyboard(tf, mode.name),
+        reply_markup=keyboard,
     )
 
 
@@ -406,10 +458,20 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for mode in list_modes():
         marker = " ✅" if mode.name == cfg.name else ""
         lines.append(f"{mode.emoji} <b>{mode.label}</b>{marker} — {mode.description}")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML",
-                                    reply_markup=settings_keyboard(
-                                        _get_tf(context, chat_id), cfg.name
-                                    ))
+    combined = (
+        get_combined_timeframes(chat_id)
+        if cfg.name == COMBINED_MODE
+        else None
+    )
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=settings_keyboard(
+            _get_tf(context, chat_id),
+            cfg.name,
+            combined_timeframes=combined,
+        ),
+    )
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -528,7 +590,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             from src.analysis import analyze
             from src.utils.formatting import pro_analysis_card, early_entry_card
-            a = await analyze(tf, mode=mode_name)
+            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
+            a = await analyze(tf, mode=analysis_mode)
             await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
                                             reply_markup=refresh_keyboard("chart", tf))
             await update.message.reply_text(early_entry_card(a), parse_mode="HTML")

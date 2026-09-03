@@ -12,8 +12,12 @@ from telegram.ext import ContextTypes
 
 from src.analysis import analyze
 from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
+from src.analysis.modes import MODES
 from src.mode_manager import get_mode_config
 from src.user_preferences import (
+    COMBINED_MODE,
+    get_combined_timeframes,
+    get_monitoring_streams,
     get_mode as get_user_mode,
     get_mode_config as get_user_mode_config,
     get_timeframe as get_user_timeframe,
@@ -115,7 +119,30 @@ def get_scan_timeframes(account_id: int | None = None) -> list[str]:
     """
     if account_id is None:
         return [get_mode_config().preferred_timeframe]
-    return [get_user_timeframe(account_id)]
+    return [timeframe for _, timeframe, _ in get_monitoring_streams(account_id)]
+
+
+def _alert_stream_specs(account_id: int | None = None) -> list[tuple[str, str, str, str]]:
+    """Return (label, timeframe, engine mode, state key) for alert streams."""
+    if account_id is None:
+        cfg = get_mode_config()
+        mode = getattr(cfg, "name", "intraday")
+        timeframe = get_scan_timeframes()[0]
+        return [(mode.upper(), timeframe, mode, timeframe)]
+    return [
+        (label, timeframe, engine_mode, f"{label.lower()}:{timeframe}")
+        for label, timeframe, engine_mode in get_monitoring_streams(account_id)
+    ]
+
+
+def _trade_state_key(trade: dict, combined: bool = False) -> str:
+    """Namespace combined locks by stream while preserving legacy keys."""
+    timeframe = str(trade.get("timeframe") or "")
+    if not combined:
+        return timeframe
+    mode = str(trade.get("mode") or "")
+    stream = "scalp" if mode == "scalp" else "interval"
+    return f"{stream}:{timeframe}"
 
 # Time-based cooldowns removed — alerts fire on every genuine direction change.
 # A "new entry" is defined as: the timeframe's signal flipped away (e.g. SELL→WAIT)
@@ -387,7 +414,13 @@ def _sync_mode_state(
         tp_cooldown_until = _tp_cooldown_until
     else:
         active_mode = get_user_mode(account_id)
-        active_timeframe = get_user_timeframe(account_id)
+        if get_user_mode(account_id) == COMBINED_MODE:
+            combined = get_combined_timeframes(account_id)
+            active_timeframe = (
+                f"scalp={combined['scalp']}|interval={combined['interval']}"
+            )
+        else:
+            active_timeframe = get_user_timeframe(account_id)
         previous_mode = state.mode
         previous_timeframe = state.timeframe
         active_signal = state.active_signal
@@ -737,6 +770,7 @@ def _reconcile_signal_locks(
     tf_last_fired: Dict[str, float],
     pending_signal: Dict[str, str],
     active_trades: list[dict],
+    key_fn=None,
 ) -> None:
     """Remove entry locks that no longer have a persisted position owner.
 
@@ -745,7 +779,7 @@ def _reconcile_signal_locks(
     the trade, leaving /active empty while the timeframe stayed blocked.
     """
     owned_timeframes = {
-        trade.get("timeframe")
+        key_fn(trade) if key_fn else trade.get("timeframe")
         for trade in active_trades
         if trade.get("timeframe")
     }
@@ -764,6 +798,7 @@ def _reconcile_signal_locks(
 def _reconcile_terminal_cooldowns(
     sl_cooldown_until: Dict[str, float],
     terminal_trades: list[dict],
+    key_fn=None,
 ) -> None:
     """Restore persisted SL cooldowns before stale signal locks are cleaned.
 
@@ -775,7 +810,7 @@ def _reconcile_terminal_cooldowns(
     for trade in terminal_trades:
         if trade.get("status") not in {"sl_hit", "tp1_sl_hit"}:
             continue
-        timeframe = trade.get("timeframe")
+        timeframe = key_fn(trade) if key_fn else trade.get("timeframe")
         cooldown_until = _safe_float(trade.get("cooldown_until"))
         if not timeframe or cooldown_until <= now:
             continue
@@ -792,6 +827,7 @@ def _reconcile_terminal_cooldowns(
 async def _send_setup_forming_alert(
     bot, subs: Set[int], a, tf: str, forming_dir: str,
     state: AccountAlertState | None = None,
+    *, lock_key: str | None = None, stream_label: str = "",
 ) -> None:
     """
     Lightweight pre-signal notice — fires when 3 indicators agree but the full
@@ -800,7 +836,8 @@ async def _send_setup_forming_alert(
     Only fires once per direction per TF; resets when direction changes.
     """
     forming_alert_sent = state.forming_alert_sent if state else _forming_alert_sent
-    if forming_alert_sent.get(tf) == forming_dir:
+    key = lock_key or tf
+    if forming_alert_sent.get(key) == forming_dir:
         return  # already warned this direction on this TF
 
     arrow = "📈" if forming_dir == "BUY" else "📉"
@@ -820,7 +857,7 @@ async def _send_setup_forming_alert(
     else:
         watch_line = ""
     text = (
-        f"<pre>⚠️  SETUP FORMING  —  XAU/USD  {tf}\n"
+        f"<pre>⚠️  SETUP FORMING  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
         f"{'─' * 34}\n"
         f"{arrow}  Direction : {forming_dir}\n"
         f"   Price    : {price:,.2f}\n"
@@ -840,7 +877,7 @@ async def _send_setup_forming_alert(
         subs -= dead
         _remove_dead_subscribers(dead)
     if delivered:
-        forming_alert_sent[tf] = forming_dir
+        forming_alert_sent[key] = forming_dir
         logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
     else:
         logger.warning(
@@ -853,6 +890,7 @@ async def _send_momentum_shift_warning(
     bot, subs: Set[int], trade: dict, tf: str, new_direction: str,
     *, confirmed: bool = False,
     state: AccountAlertState | None = None,
+    lock_key: str | None = None, stream_label: str = "",
 ) -> None:
     """Notify once when a new direction conflicts with an active trade.
 
@@ -862,7 +900,8 @@ async def _send_momentum_shift_warning(
     momentum_shift_warned = (
         state.momentum_shift_warned if state else _momentum_shift_warned
     )
-    if momentum_shift_warned.get(tf) == new_direction:
+    key = lock_key or tf
+    if momentum_shift_warned.get(key) == new_direction:
         return
 
     old_direction = trade.get("direction", "UNKNOWN")
@@ -870,7 +909,7 @@ async def _send_momentum_shift_warning(
     sl = float(trade.get("sl", 0.0))
     bias_state = "confirmed" if confirmed else "forming"
     text = (
-        f"<pre>⚠️  MOMENTUM SHIFT  —  XAU/USD  {tf}\n"
+        f"<pre>⚠️  MOMENTUM SHIFT  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
         f"{'─' * 36}\n"
         f"  Open trade  : {old_direction} from {entry:,.2f}\n"
         f"  Stop loss   : {sl:,.2f}\n"
@@ -889,7 +928,7 @@ async def _send_momentum_shift_warning(
         subs -= dead
         _remove_dead_subscribers(dead)
     if delivered:
-        momentum_shift_warned[tf] = new_direction
+        momentum_shift_warned[key] = new_direction
         logger.info(
             f"[{tf}] Momentum shift warning sent — open {old_direction} "
             f"vs new {new_direction} bias."
@@ -963,28 +1002,37 @@ async def _send_result_image(
     confidence = trade.get("confidence", 80)
     timeframe  = trade.get("timeframe", "H1")
     rr_ratio   = trade.get("rr_ratio", 2.0)
+    mode_name = str(trade.get("mode") or "")
+    alert_label = (
+        "SCALP"
+        if mode_name == "scalp"
+        else "INTERVAL"
+        if mode_name == "intraday"
+        else ""
+    )
+    alert_prefix = f"{alert_label} ALERT  |  " if alert_label else ""
 
     if event == "SL":
         result  = "LOSS"
-        caption = (f"🔴 STOP LOSS HIT  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}🔴 STOP LOSS HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
                    f"Loss: {abs(entry - exit_price):,.2f} pts")
     elif event == "TP3":
         result  = "WIN_TP2"
         tp3_val = trade.get("tp3", exit_price)
-        caption = (f"🎯 TP3 HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}🎯 TP3 HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP3: {tp3_val:,.2f}\n"
                    f"Full run profit: +{abs(entry - exit_price):,.2f} pts")
     elif event == "TP2":
         result  = "WIN_TP2"
         tp3_val = trade.get("tp3")
         watching = f"  |  Watching for TP3 @ {tp3_val:,.2f}" if tp3_val else ""
-        caption = (f"✅ TP2 HIT  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}✅ TP2 HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
                    f"Profit: +{abs(entry - exit_price):,.2f} pts{watching}")
     elif event == "TP1_SL":
         result  = "LOSS"
-        caption = (f"🟠 BREAK-EVEN EXIT (after TP1)  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}🟠 BREAK-EVEN EXIT (after TP1)  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
                    f"TP1 {tp1:,.2f} was hit — protection moved to entry; "
                    f"the original SL was {sl:,.2f}")
@@ -992,7 +1040,7 @@ async def _send_result_image(
         result  = "WIN_TP1"
         tp3_val = trade.get("tp3")
         watching = f"  |  Watching for TP2 → TP3 @ {tp3_val:,.2f}" if tp3_val else "  |  Watching for TP2"
-        caption = (f"✅ TP1 HIT  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}✅ TP1 HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
                    f"Partial profit: +{abs(entry - exit_price):,.2f} pts{watching}")
 
@@ -1204,8 +1252,16 @@ async def _send_sl_cooldown_notification(
     else:
         title = "STOP LOSS TRIGGERED"
         reason = "The trade is confirmed closed by its stop-loss."
+    stream_label = (
+        "SCALP"
+        if persisted.get("mode") == "scalp"
+        else "INTERVAL"
+        if persisted.get("mode") == "intraday"
+        else ""
+    )
+    label_prefix = f"{stream_label} ALERT  |  " if stream_label else ""
     text = (
-        f"<pre>🛑  {title}  —  XAU/USD  {timeframe}\n"
+        f"<pre>{label_prefix}🛑  {title}  —  XAU/USD  {timeframe}\n"
         f"{'─' * 38}\n"
         f"  Trade       : {direction}\n"
         f"  Entry       : {entry:,.2f}\n"
@@ -1313,10 +1369,12 @@ async def _send_market_close_notification(bot, subs: Set[int]) -> None:
         logger.error(f"Market-close notification failed: {e}")
 
 
-async def _fire_signal(bot, subs: Set[int], a, tf: str) -> bool:
+async def _fire_signal(
+    bot, subs: Set[int], a, tf: str, alert_label: str = ""
+) -> bool:
     """Broadcast a single-TF entry signal: entry card + live chart."""
     # 1. Send the entry card (same format as /recommend Part 2)
-    text = early_entry_card(a)
+    text = early_entry_card(a, alert_label=alert_label)
     dead, delivered = await _broadcast_text(
         bot, subs, text, return_result=True
     )
@@ -1353,6 +1411,7 @@ async def _fire_signal(bot, subs: Set[int], a, tf: str) -> bool:
                 else ""
             )
             caption = (
+                f"{alert_label + ' ALERT  |  ' if alert_label else ''}"
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                 f"{limit_str}Market: {market_entry:,.2f}   SL: {a.stop_loss:,.2f}\n"
                 f"TP1: {a.tp1:,.2f} (1:{rr1}){tp3_str}"
@@ -1521,7 +1580,8 @@ async def _check_and_alert_once(
         _sync_mode_state(account_id, state)
         mode_name = get_user_mode(account_id)
         mode_cfg = get_user_mode_config(account_id)
-        scan_timeframes = get_scan_timeframes(account_id)
+        scan_specs = _alert_stream_specs(account_id)
+        scan_timeframes = list(dict.fromkeys(spec[1] for spec in scan_specs))
         subs = {account_id}
         active_signal = state.active_signal
         tf_last_fired = state.tf_last_fired
@@ -1535,6 +1595,7 @@ async def _check_and_alert_once(
         mode_name = getattr(get_mode_config(), "name", "intraday")
         mode_cfg = get_mode_config()
         scan_timeframes = get_scan_timeframes()
+        scan_specs = _alert_stream_specs()
         subs = _load()
         active_signal = _active_signal
         tf_last_fired = _tf_last_fired
@@ -1589,12 +1650,25 @@ async def _check_and_alert_once(
         if account_scan
         else trade_tracker.get_all_trades()
     )
-    _reconcile_terminal_cooldowns(sl_cooldown_until, all_account_trades)
+    _reconcile_terminal_cooldowns(
+        sl_cooldown_until,
+        all_account_trades,
+        key_fn=(
+            (lambda trade: _trade_state_key(trade, combined=True))
+            if account_scan and mode_name == COMBINED_MODE
+            else None
+        ),
+    )
     _reconcile_signal_locks(
         active_signal,
         tf_last_fired,
         pending_signal,
         _get_active_trades(),
+        key_fn=(
+            (lambda trade: _trade_state_key(trade, combined=True))
+            if account_scan and mode_name == COMBINED_MODE
+            else None
+        ),
     )
 
     # ── Check open trades for TP/SL hits ──────────────────────────────────────
@@ -1681,10 +1755,14 @@ async def _check_and_alert_once(
                     # next genuine entry signal is permanently suppressed.
                     logger.info(f"[{closed_tf}] Trade expired — signal lock released.")
                     if closed_tf:
-                        clear_signal_lock(
-                            closed_tf, state=state, account_id=account_id
+                        closed_key = _trade_state_key(
+                            ev["trade"],
+                            combined=account_scan and mode_name == COMBINED_MODE,
                         )
-                        tfs_closed_this_cycle.add(closed_tf)
+                        clear_signal_lock(
+                            closed_key, state=state, account_id=account_id
+                        )
+                        tfs_closed_this_cycle.add(closed_key)
                     continue
                 await _send_verified_result_event(
                     bot, subs, ev["trade"], ev["event"], ev["exit_price"], account_id
@@ -1695,14 +1773,18 @@ async def _check_and_alert_once(
                 if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
                     is_final_target = ev["event"] == "TP3"
+                    closed_key = _trade_state_key(
+                        ev["trade"],
+                        combined=account_scan and mode_name == COMBINED_MODE,
+                    )
                     cooldown_until = clear_signal_lock(
-                        closed_tf,
+                        closed_key,
                         after_sl=is_loss,
                         after_tp=is_final_target,
                         state=state,
                         account_id=account_id,
                     )
-                    tfs_closed_this_cycle.add(closed_tf)
+                    tfs_closed_this_cycle.add(closed_key)
                     if is_loss and cooldown_until and event_trade_id:
                         cooldown_event_trade_ids.add(event_trade_id)
                         period = _TF_PERIOD_SECONDS.get(
@@ -1768,13 +1850,21 @@ async def _check_and_alert_once(
     # Each timeframe alerts independently. One card per timeframe per direction
     # change — lock releases only when the signal flips or the trade closes.
     analyses = await asyncio.gather(
-        *[_safe_analyze(tf, mode_name) for tf in scan_timeframes],
+        *[
+            _safe_analyze(tf, engine_mode)
+            for _, tf, engine_mode, _ in scan_specs
+        ],
         return_exceptions=True,
     )
 
     # Pass 1 — log all results, collect newly-triggered signals
-    new_signals: list = []   # (tf, MarketAnalysis) pairs that should fire this cycle
-    for tf, a in zip(scan_timeframes, analyses):
+    new_signals: list = []   # (stream, key, tf, engine mode, analysis) entries
+    for (stream_label, tf, analysis_mode, state_key), a in zip(scan_specs, analyses):
+        scan_cfg = (
+            mode_cfg
+            if not (account_scan and mode_name == COMBINED_MODE)
+            else MODES[analysis_mode]
+        )
         if a is None or isinstance(a, Exception):
             if isinstance(a, Exception):
                 logger.error(f"[{tf}] Analysis raised: {a}")
@@ -1783,7 +1873,7 @@ async def _check_and_alert_once(
         # Skip TFs whose trade just closed this cycle — the post-SL cooldown
         # is set, but a fresh analysis could pass _should_send before the lock
         # is fully persisted.  Skipping here guarantees no same-cycle re-entry.
-        if tf in tfs_closed_this_cycle:
+        if state_key in tfs_closed_this_cycle:
             logger.info(f"[{tf}] Skipping signal scan — trade closed this cycle, cooldown pending.")
             continue
 
@@ -1814,7 +1904,7 @@ async def _check_and_alert_once(
             # Warn the trader to watch the chart and prepare — early enough to
             # place a limit order in the OTE zone before the move starts.
             # Only fires when there is no active lock on this TF.
-            if not active_signal.get(tf):
+            if not active_signal.get(state_key):
                 forming_dir = None
                 if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
                     forming_dir = "BUY"
@@ -1825,6 +1915,10 @@ async def _check_and_alert_once(
                         (
                             t for t in _get_active_trades()
                             if t.get("timeframe") == tf
+                            and (
+                                mode_name != COMBINED_MODE
+                                or t.get("mode") == analysis_mode
+                            )
                             and t.get("direction") != forming_dir
                         ),
                         None,
@@ -1837,18 +1931,23 @@ async def _check_and_alert_once(
                             bot, subs, active_trade, tf, forming_dir,
                             confirmed=False,
                             state=state,
+                            lock_key=state_key,
+                            stream_label=stream_label,
                         )
-                    elif not active_signal.get(tf):
+                    elif not active_signal.get(state_key):
                         await _send_setup_forming_alert(
-                            bot, subs, a, tf, forming_dir, state=state
+                            bot, subs, a, tf, forming_dir,
+                            state=state,
+                            lock_key=state_key,
+                            stream_label=stream_label,
                         )
                 else:
                     # Direction collapsed — reset forming state so next build-up fires fresh
-                    forming_alert_sent.pop(tf, None)
+                    forming_alert_sent.pop(state_key, None)
             continue
 
         # Full signal fired — reset the forming-alert state for this TF
-        forming_alert_sent.pop(tf, None)
+        forming_alert_sent.pop(state_key, None)
 
         # Block simulated data before any entry or momentum-shift notification.
         if getattr(a, "is_simulated", False):
@@ -1858,7 +1957,7 @@ async def _check_and_alert_once(
             )
             continue
 
-        if _should_send(tf, a.action, state=state, account_id=account_id):
+        if _should_send(state_key, a.action, state=state, account_id=account_id):
             # Warn before the higher-timeframe gate below. A valid reversal
             # must not disappear silently just because it cannot become a new
             # entry while the current trade still owns this timeframe.
@@ -1866,6 +1965,10 @@ async def _check_and_alert_once(
                 (
                     t for t in _get_active_trades()
                     if t.get("timeframe") == tf
+                    and (
+                        mode_name != COMBINED_MODE
+                        or t.get("mode") == analysis_mode
+                    )
                     and t.get("direction") != a.action
                 ),
                 None,
@@ -1885,7 +1988,9 @@ async def _check_and_alert_once(
             # the immediate price action; the HTF lagging indicators haven't
             # caught up yet. Block the contradicting signal until the lower lock
             # is released by a trade close or direction flip.
-            TF_ORDER = scan_timeframes
+            TF_ORDER = [
+                spec[1] for spec in scan_specs if spec[0] == stream_label
+            ]
             tf_rank  = TF_ORDER.index(tf) if tf in TF_ORDER else -1
             lower_conflict = False
             if tf_rank > 0:
@@ -1941,13 +2046,13 @@ async def _check_and_alert_once(
             #   We allow it even when HTF hasn't caught up yet (ChoCH overrides
             #   the HTF block above, and lowers the win threshold here).
             is_quality    = (
-                a.win_probability >= mode_cfg.alert_min_win_probability
-                and a.setup_quality in mode_cfg.alert_min_grades
+                a.win_probability >= scan_cfg.alert_min_win_probability
+                and a.setup_quality in scan_cfg.alert_min_grades
             )
             choch_quality = (
                 choch_aligned
-                and a.win_probability >= max(50, mode_cfg.alert_min_win_probability - 4)
-                and a.setup_quality in (*mode_cfg.alert_min_grades, "B")
+                and a.win_probability >= max(50, scan_cfg.alert_min_win_probability - 4)
+                and a.setup_quality in (*scan_cfg.alert_min_grades, "B")
             )
 
             if not is_quality and not choch_quality:
@@ -1955,16 +2060,18 @@ async def _check_and_alert_once(
                     f"[{tf}] Filtered — quality too low "
                     f"(win={a.win_probability}% grade={a.setup_quality} "
                     f"adx={a.adx:.1f} choch={choch or 'none'}). "
-                    f"Need win≥{mode_cfg.alert_min_win_probability}%+"
-                    f"{'/'.join(mode_cfg.alert_min_grades)}, or ChoCH bypass."
+                    f"Need win≥{scan_cfg.alert_min_win_probability}%+"
+                    f"{'/'.join(scan_cfg.alert_min_grades)}, or ChoCH bypass."
                 )
                 continue
 
             # Claim synchronously before the first await in pass 2.  A chart
             # upload can take longer than the scheduler interval; without this
             # claim, the next overlapping scan can pass _should_send too.
-            pending_signal[tf] = a.action
-            new_signals.append((tf, a))
+            pending_signal[state_key] = a.action
+            new_signals.append(
+                (stream_label, state_key, tf, analysis_mode, a)
+            )
 
     if not new_signals:
         _save_signal_state(account_id, state)
@@ -1982,14 +2089,16 @@ async def _check_and_alert_once(
         # Entering a SELL while a BUY is still open puts the user in two
         # opposing trades simultaneously. The new signal is suppressed until
         # the existing trade resolves (TP or SL hit).
+        combined_scan = mode_name == COMBINED_MODE
         all_open = {
-            t["timeframe"]: t for t in _get_active_trades()
+            _trade_state_key(t, combined=combined_scan): t
+            for t in _get_active_trades()
             if t.get("timeframe")
         }
         clean_signals = []
-        for tf, a in sig_list:
+        for stream_label, state_key, tf, analysis_mode, a in sig_list:
             if not _entry_price_is_currently_valid(a, current_price):
-                pending_signal.pop(tf, None)
+                pending_signal.pop(state_key, None)
                 logger.warning(
                     "[%s] Entry withheld — live price %.2f is no longer "
                     "between the entry plan's stop and first target.",
@@ -1997,12 +2106,12 @@ async def _check_and_alert_once(
                     current_price,
                 )
                 continue
-            existing = all_open.get(tf)
+            existing = all_open.get(state_key)
             if existing:
                 # An active trade owns its timeframe regardless of direction.
                 # Do not send a second entry while the first plan is still
                 # being tracked; a direction change gets a single warning.
-                pending_signal.pop(tf, None)
+                pending_signal.pop(state_key, None)
                 if existing.get("direction") == direction:
                     logger.info(
                         f"[{tf}] Entry suppressed — active {direction} trade "
@@ -2012,11 +2121,13 @@ async def _check_and_alert_once(
                 # Only send the warning once per TF per shift direction —
                 # the scanner runs every 15s so without this it spams the
                 # same message continuously while the trade is open.
-                if momentum_shift_warned.get(tf) != direction:
+                if momentum_shift_warned.get(state_key) != direction:
                     await _send_momentum_shift_warning(
                         bot, subs, existing, tf, direction,
                         confirmed=True,
                         state=state,
+                        lock_key=state_key,
+                        stream_label=stream_label,
                     )
                 else:
                     logger.info(
@@ -2024,20 +2135,27 @@ async def _check_and_alert_once(
                     )
                 # Entry is held back — do not add to clean_signals
             else:
-                clean_signals.append((tf, a))
+                clean_signals.append(
+                    (stream_label, state_key, tf, analysis_mode, a)
+                )
 
         sig_list = clean_signals
         if not sig_list:
             return
 
-        claimed_tfs = {tf for tf, _ in sig_list}
+        claimed_keys = {state_key for _, state_key, _, _, _ in sig_list}
 
         # Persist each plan before sending its entry alert.  Previously the
         # alert was sent first and open_trade() ran afterward; a malformed
         # target ladder or any persistence failure could therefore tell the
         # user to enter a trade that /active could never show.
         created_trades: dict[str, dict] = {}
-        for tf, a in sig_list:
+        stream_cfg = (
+            mode_cfg
+            if not combined_scan
+            else MODES[sig_list[0][3]]
+        )
+        for stream_label, state_key, tf, analysis_mode, a in sig_list:
             try:
                 opened = trade_tracker.open_trade(
                     direction=a.action, entry=a.entry, sl=a.stop_loss,
@@ -2045,12 +2163,13 @@ async def _check_and_alert_once(
                     confidence=a.confidence, rr_ratio=a.rr_ratio,
                     tp3=getattr(a, "tp3", None),
                     atr=getattr(a, "atr", 0.0),
-                    mode=mode_name,
+                    mode=analysis_mode,
                     limit_entry=(
                         getattr(a, "early_entry", 0.0)
                         or getattr(a, "limit_entry", 0.0)
                     ),
                     account_id=account_id,
+                    allow_same_timeframe_mode=combined_scan,
                 )
             except Exception as e:
                 opened = False
@@ -2060,8 +2179,8 @@ async def _check_and_alert_once(
                 # only part of a confluence bundle.
                 for created in created_trades.values():
                     trade_tracker.cancel_trade(created["id"], account_id)
-                for claimed_tf in claimed_tfs:
-                    pending_signal.pop(claimed_tf, None)
+                for claimed_key in claimed_keys:
+                    pending_signal.pop(claimed_key, None)
                 logger.warning(
                     f"[{direction}] Entry alert withheld — trade plan could not "
                     f"be persisted for {tf}."
@@ -2088,43 +2207,54 @@ async def _check_and_alert_once(
                 )
                 _save_signal_state(account_id, state)
                 return
-            created_trades[tf] = persisted
+            created_trades[state_key] = persisted
 
         # The plans now exist before Telegram I/O.  If delivery fails for all
         # recipients, remove only these untouched records so the next scan can
         # retry without leaving a ghost position in /active.
         delivered = False
         delivered_signals = []
-        if len(sig_list) >= mode_cfg.confluence_min_tfs:
+        if len(sig_list) >= stream_cfg.confluence_min_tfs:
             try:
-                delivered = await _fire_confluence(bot, subs, sig_list, direction)
+                delivered = await _fire_confluence(
+                    bot,
+                    subs,
+                    [(tf, a) for _, _, tf, _, a in sig_list],
+                    direction,
+                )
             except Exception as e:
                 logger.error(f"[{direction}] Confluence alert delivery failed: {e}")
                 delivered = False
             if delivered:
                 delivered_signals = list(sig_list)
         else:
-            for tf, a in sig_list:
+            for stream_label, state_key, tf, analysis_mode, a in sig_list:
                 try:
-                    delivered_for_tf = await _fire_signal(bot, subs, a, tf)
+                    delivered_for_tf = await _fire_signal(
+                        bot, subs, a, tf, alert_label=stream_label
+                    )
                 except Exception as e:
                     logger.error(f"[{tf}] Entry alert delivery failed: {e}")
                     delivered_for_tf = False
                 if delivered_for_tf:
-                    delivered_signals.append((tf, a))
+                    delivered_signals.append(
+                        (stream_label, state_key, tf, analysis_mode, a)
+                    )
             delivered = bool(delivered_signals)
 
         # Do not lock a timeframe or keep a tracked trade when Telegram did
         # not accept that timeframe's alert.
-        delivered_tfs = {tf for tf, _ in delivered_signals}
-        for tf in claimed_tfs - delivered_tfs:
-            pending_signal.pop(tf, None)
-            created = created_trades.get(tf)
+        delivered_keys = {
+            state_key for _, state_key, _, _, _ in delivered_signals
+        }
+        for state_key in claimed_keys - delivered_keys:
+            pending_signal.pop(state_key, None)
+            created = created_trades.get(state_key)
             if created:
                 trade_tracker.cancel_trade(created["id"], account_id)
         if not delivered_signals:
-            for tf in claimed_tfs:
-                pending_signal.pop(tf, None)
+            for state_key in claimed_keys:
+                pending_signal.pop(state_key, None)
             logger.warning(
                 f"[{direction}] Alert not delivered; rolled back persisted "
                 "trade plans and leaving signal state unlocked for retry."
@@ -2134,26 +2264,25 @@ async def _check_and_alert_once(
         sig_list = delivered_signals
 
         now_ts = time.time()
-        delivered_tfs = {tf for tf, _ in sig_list}
-        for tf, a in sig_list:
-            active_signal[tf] = direction
-            tf_last_fired[tf] = now_ts
+        for stream_label, state_key, tf, analysis_mode, a in sig_list:
+            active_signal[state_key] = direction
+            tf_last_fired[state_key] = now_ts
             try:
                 invalidate_cache(tf)
-                pending_signal.pop(tf, None)
+                pending_signal.pop(state_key, None)
             except Exception as e:
-                pending_signal.pop(tf, None)
+                pending_signal.pop(state_key, None)
                 logger.error(f"Post-alert state update failed ({tf}): {e}")
         _save_signal_state(account_id, state)
 
-    # Group by direction so confluence alerts bundle same-direction TFs together
-    buys  = [(tf, a) for tf, a in new_signals if a.action == "BUY"]
-    sells = [(tf, a) for tf, a in new_signals if a.action == "SELL"]
-
-    if buys:
-        await _process(buys, "BUY")
-    if sells:
-        await _process(sells, "SELL")
+    # Group by stream and direction.  In combined mode the Scalp and Interval
+    # streams must stay separate so one can never become the other's confluence
+    # alert or suppress its delivery.
+    grouped: dict[tuple[str, str], list] = {}
+    for signal in new_signals:
+        grouped.setdefault((signal[0], signal[4].action), []).append(signal)
+    for (stream_label, direction), signals in grouped.items():
+        await _process(signals, direction)
 
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2288,6 +2417,13 @@ async def _send_trade_reminder_once(
         entry     = _safe_float(trade.get("entry"))
         direction = trade.get("direction", "")
         tf        = trade.get("timeframe", "")
+        stream_label = (
+            "SCALP"
+            if trade.get("mode") == "scalp"
+            else "INTERVAL"
+            if trade.get("mode") == "intraday"
+            else ""
+        )
         sl        = _safe_float(trade.get("sl"))
         tp1       = _safe_float(trade.get("tp1"))
         tp2       = _safe_float(trade.get("tp2")) if trade.get("tp2") is not None else None
@@ -2401,7 +2537,7 @@ async def _send_trade_reminder_once(
                 subtext = f"Open for {age_str} — still watching for TP/SL\n"
 
             text = (
-                f"{header}\n"
+                f"{stream_label + ' ALERT  |  ' if stream_label else ''}{header}\n"
                 f"{'─' * 30}\n"
                 f"{dir_emoji} <b>{direction}  XAU/USD  {tf}</b>  |  Conf {conf}%\n"
                 f"{subtext}"

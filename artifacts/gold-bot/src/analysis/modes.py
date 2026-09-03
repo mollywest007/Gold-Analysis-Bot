@@ -1,5 +1,5 @@
 """
-Analysis Modes — defines the four trading personas the bot can adopt.
+Analysis Modes — defines the trading personas the bot can adopt.
 
 Each mode completely changes how the engine analyses the market:
   - which timeframes are scanned for auto-alerts
@@ -254,6 +254,42 @@ MODES: Dict[str, ModeConfig] = {
             "Stops are wide; targets are large. This is a long-term strategy."
         ),
         risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
+    ),
+
+    # This is a coordinator profile for the UI and persistence layer.  The
+    # alert scanner deliberately runs the existing scalp and intraday profiles
+    # separately rather than passing this profile to the analysis engine.
+    "scalp_interval": ModeConfig(
+        name        = "scalp_interval",
+        label       = "Scalp / Interval",
+        emoji       = "⚡📊",
+        description = "Run Scalp and Interval alerts together with separate timeframes.",
+        scan_timeframes = ["M15", "H1"],
+        preferred_timeframe = "M15",
+        confirmation_map = {"M15": "H1", "H1": "H4"},
+        context_timeframes = ["M15", "H1", "H4"],
+        min_votes           = 4,
+        min_votes_kill_zone = 3,
+        confidence_threshold = 75,
+        volume_spike_threshold = 1.5,
+        breakout_lookback = 20,
+        liquidity_lookback = 15,
+        min_rr_ratio = 2.0,
+        feature_weights = {},
+        alert_min_win_probability = 62,
+        alert_min_grades = ("A+", "A"),
+        confluence_min_tfs = 99,
+        indicator_weights = {},
+        sl_mult_override = {},
+        tp_mult = (2.0, 3.5, 4.5),
+        htf_gate_strict  = False,
+        trade_type_label = "Scalp / Interval",
+        tip = (
+            "⚡📊 <b>Scalp / Interval Mode active.</b>\n"
+            "The bot monitors one Scalp timeframe and one Interval timeframe "
+            "at the same time."
+        ),
+        risk_note = "Each alert uses the risk plan of its own Scalp or Interval stream.",
     ),
 }
 

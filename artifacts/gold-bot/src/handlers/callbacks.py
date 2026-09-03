@@ -14,10 +14,13 @@ from src.utils.keyboards import (
 )
 from src.alerts import is_registered, register_user, unregister_user
 from src.user_preferences import (
+    COMBINED_MODE,
     get_mode as get_user_mode,
     get_mode_config as get_user_mode_config,
+    get_combined_timeframes,
     get_timeframe as get_user_timeframe,
     set_mode as set_user_mode,
+    set_combined_timeframe,
     set_timeframe as set_user_timeframe,
 )
 
@@ -31,7 +34,44 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
 
 
 def _scan_timeframes(chat_id: int) -> list[str]:
+    mode = get_user_mode(chat_id)
+    if mode == COMBINED_MODE:
+        combined = get_combined_timeframes(chat_id)
+        return [combined["scalp"], combined["interval"]]
     return list(get_user_mode_config(chat_id).scan_timeframes)
+
+
+def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
+    mode = get_user_mode(chat_id)
+    if mode == COMBINED_MODE:
+        combined = get_combined_timeframes(chat_id)
+        return [
+            ("scalp", combined["scalp"]),
+            ("intraday", combined["interval"]),
+        ]
+    return [(mode, tf) for tf in get_user_mode_config(chat_id).scan_timeframes]
+
+
+def _settings_text(chat_id: int, cfg, *, change: str = "") -> str:
+    if cfg.name == COMBINED_MODE:
+        combined = get_combined_timeframes(chat_id)
+        return (
+            "<b>Settings</b>\n\n"
+            f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
+            f"{cfg.description}\n\n"
+            f"Scalp alerts timeframe: <b>{combined['scalp']}</b>\n"
+            f"Interval alerts timeframe: <b>{combined['interval']}</b>\n\n"
+            f"{change}"
+            "Both alert streams run simultaneously. "
+            "Choose each timeframe independently below."
+        )
+    return (
+        "<b>Settings</b>\n\n"
+        f"{change}"
+        f"Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
+        f"Current timeframe: <b>{get_user_timeframe(chat_id)}</b>\n\n"
+        "Select a timeframe to update your default analysis window."
+    )
 
 
 def _closed_text() -> str:
@@ -109,6 +149,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    if data.startswith("set_combo_tf:"):
+        await query.answer()
+        _, stream, tf = data.split(":", 2)
+        try:
+            set_combined_timeframe(chat_id, stream, tf)
+        except ValueError as exc:
+            await query.answer(str(exc), show_alert=True)
+            return
+        cfg = get_user_mode_config(chat_id)
+        combined = get_combined_timeframes(chat_id)
+        context.user_data["timeframe"] = combined["scalp"]
+        await query.edit_message_text(
+            _settings_text(
+                chat_id,
+                cfg,
+                change=f"{stream.title()} alert timeframe updated: <b>{tf}</b>\n\n",
+            ),
+            parse_mode="HTML",
+            reply_markup=settings_keyboard(
+                combined["scalp"],
+                cfg.name,
+                combined_timeframes=combined,
+            ),
+        )
+        return
+
     if data.startswith("set_mode:"):
         await query.answer()
         mode_name = data.split(":", 1)[1]
@@ -121,17 +187,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # mode, otherwise it selects that mode's preferred timeframe.
         selected_tf = get_user_timeframe(chat_id)
         context.user_data["timeframe"] = selected_tf
-        text = (
-            "<b>Settings</b>\n\n"
-            f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
-            f"{cfg.description}\n\n"
-            f"Current timeframe: <b>{selected_tf}</b>\n"
-            f"Scans: <b>{', '.join(cfg.scan_timeframes)}</b>\n\n"
-            f"{cfg.tip}"
-        )
+        if cfg.name == COMBINED_MODE:
+            combined = get_combined_timeframes(chat_id)
+            text = (
+                f"{_settings_text(chat_id, cfg)}\n\n"
+                f"{cfg.tip}"
+            )
+            keyboard = settings_keyboard(
+                selected_tf, cfg.name, combined_timeframes=combined
+            )
+        else:
+            text = (
+                "<b>Settings</b>\n\n"
+                f"Analysis Mode: <b>{cfg.emoji} {cfg.label}</b>\n"
+                f"{cfg.description}\n\n"
+                f"Current timeframe: <b>{selected_tf}</b>\n"
+                f"Scans: <b>{', '.join(cfg.scan_timeframes)}</b>\n\n"
+                f"{cfg.tip}"
+            )
+            keyboard = settings_keyboard(selected_tf, cfg.name)
         await query.edit_message_text(
             text, parse_mode="HTML",
-            reply_markup=settings_keyboard(selected_tf, cfg.name),
+            reply_markup=keyboard,
         )
         return
 
@@ -216,7 +293,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Re-run engine analysis for the chart TF
                 from src.utils.formatting import pro_analysis_card
                 await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
-                a = await analyze(tf, mode=mode_name)
+                analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                a = await analyze(tf, mode=analysis_mode)
                 await query.edit_message_text(
                     pro_analysis_card(a), parse_mode="HTML", reply_markup=kb
                 )
@@ -230,9 +308,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
                     # Sequential — see messages.py for explanation
                     _analyses = []
-                    for _tf in _scan_timeframes(chat_id):
+                    for _mode, _tf in _analysis_specs(chat_id):
                         try:
-                            _analyses.append(await analyze(_tf, mode=mode_name))
+                            _analyses.append(await analyze(_tf, mode=_mode))
                         except Exception as _e:
                             logger.warning(f"analyze({_tf}) skipped: {_e}")
                     await query.edit_message_text(
@@ -241,28 +319,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "signal":
                     await query.edit_message_text("Scanning for setup...", reply_markup=kb)
-                    a = await analyze(tf, mode=mode_name)
+                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
                         signal_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "trend":
                     await query.edit_message_text("Reading trend...", reply_markup=kb)
-                    a = await analyze(tf, mode=mode_name)
+                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
                         trend_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "levels":
                     await query.edit_message_text("Calculating levels...", reply_markup=kb)
-                    a = await analyze(tf, mode=mode_name)
+                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
                         levels_card(a), parse_mode="HTML", reply_markup=kb
                     )
 
                 elif command == "outlook":
                     await query.edit_message_text("Generating outlook...", reply_markup=kb)
-                    a = await analyze(tf, mode=mode_name)
+                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
                         outlook_card(a), parse_mode="HTML", reply_markup=kb
                     )
@@ -272,8 +354,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
                         *[
-                            analyze(tf_name, mode=mode_name)
-                            for tf_name in _scan_timeframes(chat_id)
+                            analyze(tf_name, mode=_mode)
+                            for _mode, tf_name in _analysis_specs(chat_id)
                         ],
                         return_exceptions=True,
                     )
@@ -318,8 +400,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             import re as _re
             results = await asyncio.gather(
                 *[
-                    analyze(tf_name, mode=mode_name)
-                    for tf_name in _scan_timeframes(chat_id)
+                    analyze(tf_name, mode=_mode)
+                    for _mode, tf_name in _analysis_specs(chat_id)
                 ],
                 return_exceptions=True,
             )
@@ -342,8 +424,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             results = await asyncio.gather(
                 *[
-                    analyze(tf_name, mode=mode_name)
-                    for tf_name in _scan_timeframes(chat_id)
+                        analyze(tf_name, mode=_mode)
+                    for _mode, tf_name in _analysis_specs(chat_id)
                 ],
                 return_exceptions=True,
             )
@@ -358,7 +440,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("signal:"):
         await query.edit_message_text("Scanning for trade setup…", reply_markup=kb)
         try:
-            a = await analyze(tf, mode=mode_name)
+            analysis_mode = (
+                "scalp"
+                if mode_name == COMBINED_MODE
+                else mode_name
+            )
+            a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(signal_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -369,7 +456,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("trend:"):
         await query.edit_message_text("Reading trend…", reply_markup=kb)
         try:
-            a = await analyze(tf, mode=mode_name)
+            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(trend_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -380,7 +468,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("levels:"):
         await query.edit_message_text("Calculating levels…", reply_markup=kb)
         try:
-            a = await analyze(tf, mode=mode_name)
+            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(levels_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:
@@ -391,7 +480,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("outlook:"):
         await query.edit_message_text("Generating outlook…", reply_markup=kb)
         try:
-            a = await analyze(tf, mode=mode_name)
+            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(outlook_card(a), parse_mode="HTML",
                                           reply_markup=kb)
         except Exception as e:

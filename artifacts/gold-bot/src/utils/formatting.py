@@ -687,7 +687,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
 
 # ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
 
-def early_entry_card(a: MarketAnalysis) -> str:
+def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
     """Alert card — compact layout, all data preserved."""
     ms     = market_status()
     sl_dist = abs(a.entry - a.stop_loss)
@@ -710,8 +710,9 @@ def early_entry_card(a: MarketAnalysis) -> str:
 
     pd_arrow = {"PREMIUM": "▲ PREMIUM", "DISCOUNT": "▼ DISCOUNT", "EQUILIBRIUM": "◆ EQUIL"}.get(pd, pd)
 
+    stream_line = f"{alert_label} ALERT  |  " if alert_label else ""
     lines = ["<pre>",
-        f"XAU/USD  {a.action}  {a.timeframe}  {a.session or 'N/A'}",
+        f"{stream_line}XAU/USD  {a.action}  {a.timeframe}  {a.session or 'N/A'}",
         f"Grade {a.setup_quality}  |  Strength {a.win_probability}%  |  {a.trade_type}",
         sep,
         "INSTITUTIONAL CONTEXT",

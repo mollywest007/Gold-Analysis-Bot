@@ -42,14 +42,14 @@ async def get_analysis(
     return result
 
 
-async def warm(timeframes: Optional[list] = None) -> None:
+async def warm(timeframes: Optional[list] = None, mode: str = None) -> None:
     """Pre-fetch analysis for given timeframes — called once on bot startup."""
     if timeframes is None:
         timeframes = ["H1"]
     for tf in timeframes:
         try:
             logger.info(f"Warming analysis cache [{tf}]...")
-            result = await get_analysis(tf, max_age=0)   # force fresh fetch
+            result = await get_analysis(tf, max_age=0, mode=mode)   # force fresh fetch
             logger.info(f"Cache warm [{tf}] done — action={result.action} conf={result.confidence}%")
         except Exception as e:
             logger.warning(f"Cache warm [{tf}] failed: {e}")

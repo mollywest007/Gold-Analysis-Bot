@@ -33,7 +33,11 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
 
 
-def settings_keyboard(current_tf: str, current_mode: str = "intraday") -> InlineKeyboardMarkup:
+def settings_keyboard(
+    current_tf: str,
+    current_mode: str = "intraday",
+    combined_timeframes: dict[str, str] | None = None,
+) -> InlineKeyboardMarkup:
     tf_options = MODES.get(current_mode, MODES["intraday"]).scan_timeframes
     tf_buttons = []
     row = []
@@ -60,6 +64,36 @@ def settings_keyboard(current_tf: str, current_mode: str = "intraday") -> Inline
             mode_row = []
     if mode_row:
         mode_buttons.append(mode_row)
+
+    if current_mode == "scalp_interval":
+        if combined_timeframes is None:
+            combined_timeframes = {"scalp": "M15", "interval": "H1"}
+
+        def _stream_buttons(stream: str, options: list[str]) -> list[list[InlineKeyboardButton]]:
+            buttons = []
+            stream_row = []
+            selected = combined_timeframes.get(stream)
+            for option in options:
+                label = f"[{option}]" if option == selected else option
+                stream_row.append(
+                    InlineKeyboardButton(
+                        label,
+                        callback_data=f"set_combo_tf:{stream}:{option}",
+                    )
+                )
+                if len(stream_row) == 3:
+                    buttons.append(stream_row)
+                    stream_row = []
+            if stream_row:
+                buttons.append(stream_row)
+            return buttons
+
+        tf_buttons = [
+            [InlineKeyboardButton("Scalp alerts timeframe", callback_data="settings:tf_header")],
+            *_stream_buttons("scalp", MODES["scalp"].scan_timeframes),
+            [InlineKeyboardButton("Interval alerts timeframe", callback_data="settings:tf_header")],
+            *_stream_buttons("interval", MODES["intraday"].scan_timeframes),
+        ]
 
     rows = [
         [InlineKeyboardButton("-- Analysis Mode --", callback_data="settings:mode_header")],
