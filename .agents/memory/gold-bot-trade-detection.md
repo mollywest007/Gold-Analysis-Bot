@@ -142,6 +142,23 @@ unchanged setup and create low-quality repeat entries.
 **How to apply:** Keep this as a separate persisted cooldown from the
 post-stop-loss cooldown so it applies only to final-target completion.
 
+## Explicit post-TP reanalysis lifecycle
+
+**Rule:** A final-target close is user-visible as `ALL TP HIT`, starts a
+stream-scoped ten-minute reanalysis gate, and must deliver both a start and
+completion notice before that stream can re-arm. Failed notices remain
+retryable; completion clears the old entry, setup, momentum, pending, and
+cooldown state before the next fresh analysis.
+
+**Why:** A cooldown alone can suppress an entry while still leaving stale
+direction or warning state available for reuse, and it gives no reliable
+signal that the fresh-analysis phase has completed.
+
+**How to apply:** Persist the gate independently for `scalp:<tf>` and
+`interval:<tf>` in combined mode. Analyze during the gate, suppress
+actionable alerts, and only admit the post-window analysis after completion
+delivery succeeds.
+
 ## Legacy terminal-lock migration
 
 **Rule:** A persisted same-direction terminal lock from before the TP3 cooldown

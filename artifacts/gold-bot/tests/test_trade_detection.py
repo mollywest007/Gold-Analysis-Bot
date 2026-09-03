@@ -209,6 +209,22 @@ class TradeDetectionTests(unittest.TestCase):
             )
         )
 
+    def test_final_target_marks_trade_all_tp_hit_and_starts_reanalysis_window(self):
+        self.assertTrue(self._open_buy(tp3=130.0))
+
+        with patch.object(trade_tracker.time, "time", return_value=1000.0):
+            events = trade_tracker.check_trades(
+                100.0,
+                tf_extremes={"H1": (131.0, 99.0)},
+            )
+
+        self.assertEqual([event["event"] for event in events], ["TP3"])
+        trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(trade["status"], "tp3_hit")
+        self.assertTrue(trade["all_tp_hit"])
+        self.assertEqual(trade["completion_label"], "ALL TP HIT")
+        self.assertEqual(trade["tp_reanalysis_until"], 1600.0)
+
     def test_tp1_is_partial_and_does_not_release_trade_ownership(self):
         self.assertTrue(self._open_buy(tp3=130.0))
         events = trade_tracker.check_trades(

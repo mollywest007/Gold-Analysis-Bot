@@ -31,6 +31,7 @@ _TF_MAX_AGE = {
 }
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
 _TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp3_hit"}
+_POST_TP_REANALYSIS_SECONDS = 10 * 60
 _STORE_LOCK = threading.RLock()
 
 
@@ -430,6 +431,11 @@ def check_trades(current_price: float, recent_high: float = None,
             t["tp2_hit"] = True
             t["tp1_hit"] = True
             _mark_terminal(t, "tp3_hit", "take_profit")
+            # Keep the machine-readable tp3_hit status for compatibility while
+            # recording the user-facing completion state and reanalysis window.
+            t["all_tp_hit"] = True
+            t["completion_label"] = "ALL TP HIT"
+            t["tp_reanalysis_until"] = time.time() + _POST_TP_REANALYSIS_SECONDS
             changed = True
             events.append({"trade": t, "event": "TP3", "exit_price": tp3_exit})
             logger.info(f"Trade {t['id']} TP3 hit @ {tp3_exit:.2f}")

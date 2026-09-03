@@ -40,17 +40,19 @@
       },
       "closed_signal": {},
       "last_fired": {
-        "scalp:M15": 1788430591.7196615
+        "scalp:M15": 1788439876.8717902
       },
       "pending_signal": {
         "interval:H1": "BUY"
       },
-      "sl_cooldown_until": {},
-      "tp_cooldown_until": {},
-      "forming_alert_sent": {},
-      "momentum_shift_warned": {
-        "scalp:M15": "SELL"
+      "sl_cooldown_until": {
+        "interval:H1": 1788446934.8988976
       },
+      "tp_cooldown_until": {},
+      "tp_reanalysis_until": {},
+      "tp_reanalysis_start_sent": {},
+      "forming_alert_sent": {},
+      "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
           "entry",

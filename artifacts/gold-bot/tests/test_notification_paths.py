@@ -200,6 +200,128 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("M15", state.closed_signal)
 
+    async def test_tp_reanalysis_start_and_completion_retry_before_rearming(self):
+        bot = AsyncMock()
+        state = alerts.AccountAlertState(
+            active_signal={"scalp:M15": "BUY"},
+            closed_signal={"scalp:M15": "BUY"},
+            forming_alert_sent={"scalp:M15": "BUY"},
+            momentum_shift_warned={"scalp:M15": "SELL"},
+            tp_cooldown_until={"scalp:M15": 1600.0},
+            tp_reanalysis_until={"scalp:M15": 1600.0},
+            tp_reanalysis_start_sent={"scalp:M15": False},
+        )
+        subs = {123}
+
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts,
+            "_broadcast_text",
+            new=AsyncMock(return_value=(set(), False)),
+        ) as broadcast, patch.object(alerts.time, "time", return_value=1001.0):
+            self.assertFalse(
+                await alerts._advance_tp_reanalysis(
+                    bot, subs, "scalp:M15", "M15", "SCALP", state=state
+                )
+            )
+
+        # A failed start notice leaves the lifecycle retryable and still blocks
+        # the old signal from re-entering.
+        self.assertFalse(state.tp_reanalysis_start_sent["scalp:M15"])
+        with patch.object(alerts.trade_tracker, "get_all_trades", return_value=[]), patch.object(
+            alerts.time, "time", return_value=1001.0
+        ):
+            self.assertFalse(
+                alerts._should_send("scalp:M15", "BUY", state=state)
+            )
+
+        broadcast.return_value = (set(), True)
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts, "_broadcast_text", new=broadcast
+        ), patch.object(alerts.time, "time", return_value=1002.0):
+            self.assertFalse(
+                await alerts._advance_tp_reanalysis(
+                    bot, subs, "scalp:M15", "M15", "SCALP", state=state
+                )
+            )
+            self.assertTrue(state.tp_reanalysis_start_sent["scalp:M15"])
+
+        # Completion is also retry-safe: a failed completion cannot re-arm the
+        # stale setup or permit an entry.
+        broadcast.return_value = (set(), False)
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts, "_broadcast_text", new=broadcast
+        ), patch.object(alerts.time, "time", return_value=1601.0):
+            self.assertFalse(
+                await alerts._advance_tp_reanalysis(
+                    bot, subs, "scalp:M15", "M15", "SCALP", state=state
+                )
+            )
+        self.assertIn("scalp:M15", state.tp_reanalysis_until)
+        self.assertIn("scalp:M15", state.active_signal)
+
+        broadcast.return_value = (set(), True)
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts, "_broadcast_text", new=broadcast
+        ), patch.object(alerts.time, "time", return_value=1601.0):
+            self.assertTrue(
+                await alerts._advance_tp_reanalysis(
+                    bot, subs, "scalp:M15", "M15", "SCALP", state=state
+                )
+            )
+
+        for mapping in (
+            state.active_signal,
+            state.closed_signal,
+            state.forming_alert_sent,
+            state.momentum_shift_warned,
+            state.tp_cooldown_until,
+            state.tp_reanalysis_until,
+        ):
+            self.assertNotIn("scalp:M15", mapping)
+        self.assertIn("ALL TP HIT", broadcast.await_args_list[0].args[2])
+        self.assertIn("REANALYSIS COMPLETE", broadcast.await_args_list[-1].args[2])
+
+    async def test_combined_tp_reanalysis_is_independent_per_stream(self):
+        bot = AsyncMock()
+        state = alerts.AccountAlertState(
+            tp_reanalysis_until={
+                "scalp:M15": 1600.0,
+                "interval:H1": 1600.0,
+            },
+            tp_reanalysis_start_sent={
+                "scalp:M15": True,
+                "interval:H1": True,
+            },
+            active_signal={
+                "scalp:M15": "BUY",
+                "interval:H1": "SELL",
+            },
+        )
+
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts,
+            "_broadcast_text",
+            new=AsyncMock(return_value=(set(), True)),
+        ), patch.object(alerts.time, "time", return_value=1601.0):
+            self.assertTrue(
+                await alerts._advance_tp_reanalysis(
+                    bot, {123}, "scalp:M15", "M15", "SCALP", state=state
+                )
+            )
+
+        self.assertNotIn("scalp:M15", state.tp_reanalysis_until)
+        self.assertIn("interval:H1", state.tp_reanalysis_until)
+        self.assertIn("interval:H1", state.active_signal)
+
+        with patch.object(alerts, "_save_signal_state"), patch.object(
+            alerts, "_broadcast_text", new=AsyncMock(return_value=(set(), True))
+        ), patch.object(alerts.time, "time", return_value=1601.0):
+            self.assertTrue(
+                await alerts._advance_tp_reanalysis(
+                    bot, {123}, "interval:H1", "H1", "INTRA-HOUR", state=state
+                )
+            )
+
     def test_persisted_sl_cooldown_is_restored_before_lock_reconciliation(self):
         state = alerts.AccountAlertState(
             active_signal={"H1": "BUY"},

@@ -54,6 +54,10 @@ _SL_COOLDOWN_CANDLES = 2
 # entry on that timeframe so the next signal is based on a fresh market read.
 _tp_cooldown_until: Dict[str, float] = {}
 _TP_COOLDOWN_SECONDS = 10 * 60
+# Explicit post-TP reanalysis lifecycle. Keys are legacy timeframes in
+# single-mode and stream-qualified keys in combined mode.
+_tp_reanalysis_until: Dict[str, float] = {}
+_tp_reanalysis_start_sent: Dict[str, bool] = {}
 # Track which reminder milestones have been sent per trade.
 # Structure: { "trade_id": {"entry", "update_2x", "update_6x"} }
 _reminded_trade_ids: Dict[str, Set[str]] = {}
@@ -235,6 +239,8 @@ class AccountAlertState:
     pending_signal: Dict[str, str] = field(default_factory=dict)
     sl_cooldown_until: Dict[str, float] = field(default_factory=dict)
     tp_cooldown_until: Dict[str, float] = field(default_factory=dict)
+    tp_reanalysis_until: Dict[str, float] = field(default_factory=dict)
+    tp_reanalysis_start_sent: Dict[str, bool] = field(default_factory=dict)
     forming_alert_sent: Dict[str, str] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
@@ -254,6 +260,11 @@ def _state_from_record(record: dict) -> AccountAlertState:
         pending_signal=dict(record.get("pending_signal") or {}),
         sl_cooldown_until=dict(record.get("sl_cooldown_until") or {}),
         tp_cooldown_until=dict(record.get("tp_cooldown_until") or {}),
+        tp_reanalysis_until=dict(record.get("tp_reanalysis_until") or {}),
+        tp_reanalysis_start_sent={
+            str(key): bool(value)
+            for key, value in (record.get("tp_reanalysis_start_sent") or {}).items()
+        },
         forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
         reminded_trade_ids={
@@ -275,6 +286,8 @@ def _state_record(state: AccountAlertState) -> dict:
         "pending_signal": state.pending_signal,
         "sl_cooldown_until": state.sl_cooldown_until,
         "tp_cooldown_until": state.tp_cooldown_until,
+        "tp_reanalysis_until": state.tp_reanalysis_until,
+        "tp_reanalysis_start_sent": state.tp_reanalysis_start_sent,
         "forming_alert_sent": state.forming_alert_sent,
         "momentum_shift_warned": state.momentum_shift_warned,
         "reminded_trade_ids": {
@@ -453,6 +466,8 @@ def _sync_mode_state(
         momentum_shift_warned = _momentum_shift_warned
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
+        tp_reanalysis_until = _tp_reanalysis_until
+        tp_reanalysis_start_sent = _tp_reanalysis_start_sent
     else:
         active_mode = get_user_mode(account_id)
         if get_user_mode(account_id) == COMBINED_MODE:
@@ -471,6 +486,8 @@ def _sync_mode_state(
         momentum_shift_warned = state.momentum_shift_warned
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
+        tp_reanalysis_until = state.tp_reanalysis_until
+        tp_reanalysis_start_sent = state.tp_reanalysis_start_sent
     settings_changed = (
         previous_mode
         and (
@@ -507,6 +524,8 @@ def _sync_mode_state(
                 momentum_shift_warned,
                 sl_cooldown_until,
                 tp_cooldown_until,
+                tp_reanalysis_until,
+                tp_reanalysis_start_sent,
             ):
                 for key in list(mapping):
                     if key.startswith(prefixes):
@@ -524,6 +543,8 @@ def _sync_mode_state(
             momentum_shift_warned.clear()
             sl_cooldown_until.clear()
             tp_cooldown_until.clear()
+            tp_reanalysis_until.clear()
+            tp_reanalysis_start_sent.clear()
     if (
         previous_mode != active_mode
         or previous_timeframe != active_timeframe
@@ -555,6 +576,14 @@ def _should_send(
     # ── Post-SL cooldown check ─────────────────────────────────────────────────
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
     tp_cooldown_until = state.tp_cooldown_until if state else _tp_cooldown_until
+    tp_reanalysis_until = (
+        state.tp_reanalysis_until if state else _tp_reanalysis_until
+    )
+    tp_reanalysis_start_sent = (
+        state.tp_reanalysis_start_sent
+        if state
+        else _tp_reanalysis_start_sent
+    )
     pending_signal = state.pending_signal if state else _pending_signal
     active_signal = state.active_signal if state else _active_signal
     closed_signal = state.closed_signal if state else _closed_signal
@@ -571,6 +600,20 @@ def _should_send(
         remaining = int((cooldown_until - time.time()) // 60)
         logger.info(f"[{tf}] Post-SL cooldown active — {remaining}m remaining. Skipping {action}.")
         return False
+
+    reanalysis_until = tp_reanalysis_until.get(tf, 0.0)
+    if reanalysis_until:
+        if time.time() < reanalysis_until:
+            logger.info(
+                f"[{tf}] Post-TP reanalysis active — waiting for fresh analysis."
+            )
+            return False
+        # Production scans send the completion notice before reaching this
+        # point. Keep direct/legacy callers compatible if they arrive here
+        # after the persisted window has elapsed (including state written
+        # before start-notification tracking existed).
+        tp_reanalysis_until.pop(tf, None)
+        tp_reanalysis_start_sent.pop(tf, None)
 
     tp_cooldown = tp_cooldown_until.get(tf, 0.0)
     if time.time() < tp_cooldown:
@@ -701,6 +744,14 @@ def clear_signal_lock(
     momentum_shift_warned = state.momentum_shift_warned if state else _momentum_shift_warned
     sl_cooldown_until = state.sl_cooldown_until if state else _sl_cooldown_until
     tp_cooldown_until = state.tp_cooldown_until if state else _tp_cooldown_until
+    tp_reanalysis_until = (
+        state.tp_reanalysis_until if state else _tp_reanalysis_until
+    )
+    tp_reanalysis_start_sent = (
+        state.tp_reanalysis_start_sent
+        if state
+        else _tp_reanalysis_start_sent
+    )
     last_direction = active_signal.get(tf)
     active_signal.pop(tf, None)
     pending_signal.pop(tf, None)
@@ -727,6 +778,8 @@ def clear_signal_lock(
         sl_cooldown_until.pop(tf, None)
         cooldown_until = time.time() + _TP_COOLDOWN_SECONDS
         tp_cooldown_until[tf] = cooldown_until
+        tp_reanalysis_until[tf] = cooldown_until
+        tp_reanalysis_start_sent[tf] = False
         logger.info(
             f"[{tf}] Signal lock cleared after TP3 — "
             f"post-TP3 cooldown {_TP_COOLDOWN_SECONDS // 60}m before next entry."
@@ -734,12 +787,110 @@ def clear_signal_lock(
     else:
         sl_cooldown_until.pop(tf, None)
         tp_cooldown_until.pop(tf, None)
+        tp_reanalysis_until.pop(tf, None)
+        tp_reanalysis_start_sent.pop(tf, None)
         logger.info(
             f"[{tf}] Signal lock cleared — waiting for a direction change "
             "before re-entry."
         )
     _save_signal_state(account_id, state)
     return cooldown_until if (after_sl or after_tp) else None
+
+
+async def _advance_tp_reanalysis(
+    bot,
+    subs: Set[int],
+    state_key: str,
+    tf: str,
+    stream_label: str,
+    state: AccountAlertState | None = None,
+    account_id: int | None = None,
+) -> bool:
+    """Advance one stream's post-TP lifecycle and return entry readiness.
+
+    The market is still analyzed while this returns False, but the caller must
+    suppress every actionable signal until the start notice is delivered and
+    the completion notice is delivered after the ten-minute window.
+    """
+    reanalysis_until = (
+        state.tp_reanalysis_until if state else _tp_reanalysis_until
+    )
+    start_sent = (
+        state.tp_reanalysis_start_sent
+        if state
+        else _tp_reanalysis_start_sent
+    )
+    deadline = _safe_float(reanalysis_until.get(state_key))
+    if deadline <= 0:
+        return True
+
+    label_prefix = f"{stream_label} ALERT  |  " if stream_label else ""
+    if not start_sent.get(state_key, False):
+        text = (
+            f"<pre>{label_prefix}🔄 ALL TP HIT\n"
+            f"{'─' * 34}\n"
+            "Previous trade completed successfully.\n"
+            "⏳ Reanalyzing the market for 10 minutes...\n"
+            "The bot will wait for fresh market conditions\n"
+            "before looking for the next entry.\n"
+            f"{'─' * 34}</pre>"
+        )
+        dead, delivered = await _broadcast_text(
+            bot, subs, text, return_result=True
+        )
+        if dead:
+            subs -= dead
+            _remove_dead_subscribers(dead)
+        if delivered:
+            start_sent[state_key] = True
+            _save_signal_state(account_id, state)
+        else:
+            logger.warning(
+                f"[{tf}] TP reanalysis start notice not delivered — retrying."
+            )
+        return False
+
+    if time.time() < deadline:
+        return False
+
+    text = (
+        f"<pre>{label_prefix}✅ REANALYSIS COMPLETE\n"
+        f"{'─' * 34}\n"
+        "Fresh market analysis completed.\n"
+        "Waiting for a valid setup...\n"
+        f"{'─' * 34}</pre>"
+    )
+    dead, delivered = await _broadcast_text(
+        bot, subs, text, return_result=True
+    )
+    if dead:
+        subs -= dead
+        _remove_dead_subscribers(dead)
+    if not delivered:
+        logger.warning(
+            f"[{tf}] TP reanalysis completion notice not delivered — retrying."
+        )
+        return False
+
+    # This stream is now deliberately re-armed. Clearing every old signal
+    # marker prevents a completed trade's setup, direction, or warning state
+    # from influencing the fresh analysis that follows in this scan.
+    for mapping in (
+        (state.active_signal if state else _active_signal),
+        (state.closed_signal if state else _closed_signal),
+        (state.tf_last_fired if state else _tf_last_fired),
+        (state.pending_signal if state else _pending_signal),
+        (state.forming_alert_sent if state else _forming_alert_sent),
+        (state.momentum_shift_warned if state else _momentum_shift_warned),
+        (state.sl_cooldown_until if state else _sl_cooldown_until),
+        (state.tp_cooldown_until if state else _tp_cooldown_until),
+        reanalysis_until,
+        start_sent,
+    ):
+        mapping.pop(state_key, None)
+    _save_signal_state(account_id, state)
+    logger.info(f"[{tf}] Fresh post-TP analysis window complete.")
+    return True
 
 
 def _post_entry_tf_extremes(
@@ -1108,7 +1259,7 @@ async def _send_result_image(
     elif event == "TP3":
         result  = "WIN_TP2"
         tp3_val = trade.get("tp3", exit_price)
-        caption = (f"{alert_prefix}🎯 TP3 HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
+        caption = (f"{alert_prefix}🔄 ALL TP HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP3: {tp3_val:,.2f}\n"
                    f"Full run profit: +{abs(entry - exit_price):,.2f} pts")
     elif event == "TP2":
@@ -1739,15 +1890,67 @@ async def _check_and_alert_once(
         logger.info("Alert scan: no subscribers.")
         return
 
-    # Make the persisted trade store authoritative over any stale signal lock
-    # left by an older alert-before-persistence cycle. Restore cooldowns first:
-    # a recently stopped trade must not become eligible merely because a
-    # restart removed its now-ownerless signal lock.
     all_account_trades = (
         trade_tracker.get_all_trades(account_id)
         if account_scan
         else trade_tracker.get_all_trades()
     )
+
+    # Migrate the original persisted TP3 cooldown into the explicit
+    # reanalysis lifecycle when recovering state written by an older build.
+    reanalysis_until = state.tp_reanalysis_until if state else _tp_reanalysis_until
+    reanalysis_start_sent = (
+        state.tp_reanalysis_start_sent
+        if state
+        else _tp_reanalysis_start_sent
+    )
+    for state_key, deadline in list(
+        (state.tp_cooldown_until if state else _tp_cooldown_until).items()
+    ):
+        if (
+            _safe_float(deadline) > time.time()
+            and state_key not in reanalysis_until
+        ):
+            reanalysis_until[state_key] = float(deadline)
+            reanalysis_start_sent[state_key] = False
+
+    # A terminal trade also carries its reanalysis deadline. This recovers the
+    # gate if a process stopped after the trade was persisted but before the
+    # account alert-state write completed.
+    trade_key_fn = (
+        (lambda trade: _trade_state_key(trade, combined=True))
+        if account_scan and mode_name == COMBINED_MODE
+        else (lambda trade: str(trade.get("timeframe") or ""))
+    )
+    for trade in all_account_trades:
+        deadline = _safe_float(trade.get("tp_reanalysis_until"))
+        state_key = trade_key_fn(trade)
+        if (
+            trade.get("status") == "tp3_hit"
+            and state_key
+            and deadline > time.time()
+            and state_key not in reanalysis_until
+        ):
+            reanalysis_until[state_key] = deadline
+            reanalysis_start_sent[state_key] = False
+
+    reanalysis_blocked: set[str] = set()
+    for stream_label, tf, _analysis_mode, state_key in scan_specs:
+        if not await _advance_tp_reanalysis(
+            bot,
+            subs,
+            state_key,
+            tf,
+            stream_label,
+            state=state,
+            account_id=account_id,
+        ):
+            reanalysis_blocked.add(state_key)
+
+    # Make the persisted trade store authoritative over any stale signal lock
+    # left by an older alert-before-persistence cycle. Restore cooldowns first:
+    # a recently stopped trade must not become eligible merely because a
+    # restart removed its now-ownerless signal lock.
     _reconcile_terminal_cooldowns(
         sl_cooldown_until,
         all_account_trades,
@@ -1903,6 +2106,24 @@ async def _check_and_alert_once(
                         account_id=account_id,
                     )
                     tfs_closed_this_cycle.add(closed_key)
+                    if is_final_target:
+                        stream_label = next(
+                            (
+                                label
+                                for label, _tf, _mode, state_key in scan_specs
+                                if state_key == closed_key
+                            ),
+                            _stream_alert_label(ev["trade"].get("mode")),
+                        )
+                        await _advance_tp_reanalysis(
+                            bot,
+                            subs,
+                            closed_key,
+                            closed_tf,
+                            stream_label,
+                            state=state,
+                            account_id=account_id,
+                        )
                     if is_loss and cooldown_until and event_trade_id:
                         cooldown_event_trade_ids.add(event_trade_id)
                         period = _TF_PERIOD_SECONDS.get(
@@ -1999,6 +2220,12 @@ async def _check_and_alert_once(
             f"[{tf}] scan: action={a.action} grade={a.setup_quality} "
             f"conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
         )
+
+        if state_key in reanalysis_blocked:
+            logger.info(
+                f"[{tf}] Post-TP reanalysis active — actionable alerts suppressed."
+            )
+            continue
 
         if a.action not in ("BUY", "SELL"):
             # Do NOT clear the lock on WAIT — the market briefly returning WAIT

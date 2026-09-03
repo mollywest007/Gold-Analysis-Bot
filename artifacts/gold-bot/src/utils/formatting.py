@@ -1674,7 +1674,7 @@ def history_card(trades: list, stats: dict) -> str:
     def _status_label(t: dict) -> str:
         s = t.get("status", "")
         if s == "open":         return "OPEN     "
-        if s == "tp3_hit":      return "WIN   TP3"
+        if s == "tp3_hit":      return "ALL TP HIT"
         if s == "tp2_hit":      return "WIN   TP2"
         if s == "tp1_hit":      return "WIN   TP1"
         if s == "tp1_sl_hit":   return "TP1 / SL "
@@ -1779,7 +1779,7 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
     def _status_label(s: str) -> str:
         return {
             "open":        "OPEN",
-            "tp3_hit":     "WIN  TP3",
+            "tp3_hit":     "ALL TP HIT",
             "tp2_hit":     "WIN  TP2",
             "tp1_hit":     "WIN  TP1",
             "tp1_sl_hit":  "TP1 / SL",
