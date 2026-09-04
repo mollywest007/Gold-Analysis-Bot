@@ -90,6 +90,19 @@ high/low data to the trade tracker; use only the newest verified post-entry
 candle, and treat a missing or failed candle fetch as spot-only rather than
 exit evidence.
 
+## Terminal exit evidence
+
+**Rule:** Every terminal SL, break-even, or final-TP transition must persist the
+evidence source, timeframe, observed high/low, live spot, and capture time.
+
+**Why:** A terminal record containing only `sl_hit` or `tp3_hit` cannot
+distinguish a genuine market wick from stale, simulated, or misaligned data
+after the fact.
+
+**How to apply:** Build evidence only after the validated extremes are selected;
+store it on the trade and include it in the terminal event/log so future
+investigations can reproduce the decision path.
+
 ## Delayed result safety
 
 Terminal SL/BE notifications must be revalidated against the persisted,
@@ -184,3 +197,16 @@ eligible for an immediate duplicate entry.
 **How to apply:** Treat terminal persisted loss records as authoritative during
 startup and every account scan, while keeping the regular two-candle cooldown
 filter responsible for blocking new entries.
+
+## Restart recovery for pending alert claims
+
+**Rule:** A persisted `pending_signal` is only an in-process delivery claim, not
+proof that an alert is still being sent; claims present at the start of a new
+serialized scan must be cleared and retried.
+
+**Why:** A crash after persisting a claim can otherwise leave one direction
+silently suppressed forever, even while analysis continues to show a valid
+signal.
+
+**How to apply:** Release orphaned claims before entry scanning, then let the
+normal persistence-before-delivery and rollback logic establish the new claim.

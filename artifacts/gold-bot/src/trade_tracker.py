@@ -73,11 +73,14 @@ def _mark_terminal(
     trade: Dict[str, Any],
     status: str,
     close_reason: str,
+    exit_evidence: Dict[str, Any] = None,
 ) -> None:
     """Record an irreversible terminal transition and its result notification."""
     trade["status"] = status
     trade["closed_at"] = time.time()
     trade["close_reason"] = close_reason
+    if exit_evidence:
+        trade["exit_evidence"] = exit_evidence
     # The alert layer consumes this only after Telegram delivery succeeds.
     trade["result_notification_pending"] = True
 
@@ -356,6 +359,20 @@ def check_trades(current_price: float, recent_high: float = None,
             sl_hi = current_price
             sl_lo = current_price
 
+        # Persist the exact evidence used for a terminal decision. This is
+        # intentionally assembled here, after validation, so the record can
+        # distinguish a verified candle wick from a live-spot-only decision.
+        exit_evidence = {
+            "source": "verified_candle"
+            if tf_hi is not None and tf_lo is not None
+            else "live_spot",
+            "timeframe": t.get("timeframe"),
+            "high": tf_hi if tf_hi is not None else current_price,
+            "low": tf_lo if tf_lo is not None else current_price,
+            "spot": current_price,
+            "captured_at": time.time(),
+        }
+
         # TP detection uses post-entry candle extremes (same tf_extremes dict
         # that SL uses). tf_extremes is pre-filtered in alerts.py to include
         # only candles that opened AFTER the trade was placed, so there is no
@@ -407,38 +424,74 @@ def check_trades(current_price: float, recent_high: float = None,
             else:
                 be_hit = sl_hi >= entry
             if be_hit:
-                _mark_terminal(t, "tp1_sl_hit", "break_even_stop")
+                _mark_terminal(
+                    t, "tp1_sl_hit", "break_even_stop", exit_evidence
+                )
                 changed = True
-                events.append({"trade": t, "event": "TP1_SL", "exit_price": entry})
-                logger.info(f"Trade {t['id']} break-even SL triggered after TP1 @ {entry:.2f}")
+                events.append({
+                    "trade": t,
+                    "event": "TP1_SL",
+                    "exit_price": entry,
+                    "exit_evidence": exit_evidence,
+                })
+                logger.info(
+                    f"Trade {t['id']} break-even SL triggered after TP1 "
+                    f"@ {entry:.2f} (evidence={exit_evidence})"
+                )
                 continue
 
         if sl_hit:
             # If TP1 was already captured, mark distinctly so history shows TP1→SL
             if t.get("tp1_hit"):
-                _mark_terminal(t, "tp1_sl_hit", "stop_loss")
+                _mark_terminal(
+                    t, "tp1_sl_hit", "stop_loss", exit_evidence
+                )
                 changed = True
-                events.append({"trade": t, "event": "TP1_SL", "exit_price": sl_exit})
-                logger.info(f"Trade {t['id']} SL hit after TP1 partial @ {sl_exit:.2f}")
+                events.append({
+                    "trade": t,
+                    "event": "TP1_SL",
+                    "exit_price": sl_exit,
+                    "exit_evidence": exit_evidence,
+                })
+                logger.info(
+                    f"Trade {t['id']} SL hit after TP1 partial @ "
+                    f"{sl_exit:.2f} (evidence={exit_evidence})"
+                )
             else:
-                _mark_terminal(t, "sl_hit", "stop_loss")
+                _mark_terminal(t, "sl_hit", "stop_loss", exit_evidence)
                 changed = True
-                events.append({"trade": t, "event": "SL", "exit_price": sl_exit})
-                logger.info(f"Trade {t['id']} SL hit @ {sl_exit:.2f}")
+                events.append({
+                    "trade": t,
+                    "event": "SL",
+                    "exit_price": sl_exit,
+                    "exit_evidence": exit_evidence,
+                })
+                logger.info(
+                    f"Trade {t['id']} SL hit @ {sl_exit:.2f} "
+                    f"(evidence={exit_evidence})"
+                )
 
         elif tp3_hit and tp3_val and not t.get("tp3_hit"):
             t["tp3_hit"] = True
             t["tp2_hit"] = True
             t["tp1_hit"] = True
-            _mark_terminal(t, "tp3_hit", "take_profit")
+            _mark_terminal(t, "tp3_hit", "take_profit", exit_evidence)
             # Keep the machine-readable tp3_hit status for compatibility while
             # recording the user-facing completion state and reanalysis window.
             t["all_tp_hit"] = True
             t["completion_label"] = "ALL TP HIT"
             t["tp_reanalysis_until"] = time.time() + _POST_TP_REANALYSIS_SECONDS
             changed = True
-            events.append({"trade": t, "event": "TP3", "exit_price": tp3_exit})
-            logger.info(f"Trade {t['id']} TP3 hit @ {tp3_exit:.2f}")
+            events.append({
+                "trade": t,
+                "event": "TP3",
+                "exit_price": tp3_exit,
+                "exit_evidence": exit_evidence,
+            })
+            logger.info(
+                f"Trade {t['id']} TP3 hit @ {tp3_exit:.2f} "
+                f"(evidence={exit_evidence})"
+            )
 
         elif tp2_hit and not t.get("tp2_hit"):
             t["tp2_hit"] = True

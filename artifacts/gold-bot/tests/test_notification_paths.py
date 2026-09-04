@@ -919,6 +919,21 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state.pending_signal, {"interval:H1": "SELL"})
 
+    def test_orphaned_pending_claim_is_cleared_before_a_new_scan(self):
+        state = alerts.AccountAlertState(
+            pending_signal={"interval:H1": "BUY"},
+        )
+
+        with patch.object(alerts, "_save_signal_state") as save_state:
+            alerts._clear_orphaned_pending_claims(
+                state.pending_signal,
+                account_id=8039158711,
+                state=state,
+            )
+
+        self.assertEqual(state.pending_signal, {})
+        save_state.assert_called_once_with(8039158711, state)
+
     async def test_combined_scan_delivers_both_stream_labels(self):
         from src import market_hours
         from src.analysis.modes import MODES

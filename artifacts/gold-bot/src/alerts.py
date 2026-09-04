@@ -308,6 +308,33 @@ def _load_account_state(account_id: int) -> AccountAlertState:
         return AccountAlertState()
 
 
+def _clear_orphaned_pending_claims(
+    pending_signal: Dict[str, str],
+    account_id: int | None = None,
+    state: AccountAlertState | None = None,
+) -> None:
+    """Release claims left behind by a crashed or restarted scan.
+
+    ``pending_signal`` prevents duplicate delivery during one serialized scan,
+    but it is not a durable position lock. If the process exits after the
+    claim is persisted and before the delivery cleanup runs, retaining it would
+    suppress that direction forever. Production scans are serialized by
+    ``_scan_lock``, so claims present at the beginning of a new scan are
+    necessarily orphaned and safe to retry.
+    """
+    if not pending_signal:
+        return
+    orphaned = dict(pending_signal)
+    pending_signal.clear()
+    logger.warning(
+        "Cleared orphaned pending alert claims for account %s: %s",
+        account_id if account_id is not None else "legacy",
+        orphaned,
+    )
+    if account_id is not None and state is not None:
+        _save_signal_state(account_id, state)
+
+
 def _save_account_state(account_id: int, state: AccountAlertState) -> None:
     """Persist one account namespace while preserving other accounts."""
     os.makedirs(os.path.dirname(SIGNAL_STATE_PATH), exist_ok=True)
@@ -1839,6 +1866,11 @@ async def _check_and_alert_once(
         tp_cooldown_until = state.tp_cooldown_until
         forming_alert_sent = state.forming_alert_sent
         momentum_shift_warned = state.momentum_shift_warned
+        _clear_orphaned_pending_claims(
+            pending_signal,
+            account_id=account_id,
+            state=state,
+        )
     else:
         _sync_mode_state()
         mode_name = getattr(get_mode_config(), "name", "intraday")

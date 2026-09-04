@@ -36,23 +36,24 @@
       "mode": "scalp_interval",
       "timeframe": "scalp=M15|interval=H1",
       "active_signal": {
-        "scalp:M15": "BUY"
+        "interval:H1": "BUY"
       },
       "closed_signal": {},
       "last_fired": {
-        "scalp:M15": 1788439876.8717902
+        "interval:H1": 1788480360.3412662
       },
-      "pending_signal": {
-        "interval:H1": "BUY"
-      },
+      "pending_signal": {},
       "sl_cooldown_until": {
-        "interval:H1": 1788446934.8988976
+        "interval:H1": 1788446934.8988976,
+        "scalp:M15": 1788481980.8279982
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "forming_alert_sent": {},
-      "momentum_shift_warned": {},
+      "momentum_shift_warned": {
+        "scalp:M15": "SELL"
+      },
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
           "entry",
@@ -67,6 +68,10 @@
           "update_2x"
         ],
         "56a51c9c1f02471ab0b5409f52926b2f": [
+          "entry",
+          "update_2x"
+        ],
+        "fe8d4ba11f2e42dc9d3d9d9dab3adf02": [
           "entry"
         ]
       }
