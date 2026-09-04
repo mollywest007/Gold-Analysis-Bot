@@ -210,3 +210,18 @@ signal.
 
 **How to apply:** Release orphaned claims before entry scanning, then let the
 normal persistence-before-delivery and rollback logic establish the new claim.
+
+## Live quote integrity
+
+**Rule:** Never use a syntactically valid quote for analysis or exit detection
+until it is consistent with the other spot source, the futures basis, or the
+active trade's entry. Materially inconsistent feeds must fall back without
+returning the rejected value.
+
+**Why:** A provider returned a stale 2350 quote while XAU/USD was near 4480;
+that false jump triggered an SL and made a still-open trade disappear from
+`/active`.
+
+**How to apply:** Validate source agreement and futures/spot deviation before
+building OHLCV; skip exit transitions when a live quote is an impossible jump
+from the persisted trade entry.

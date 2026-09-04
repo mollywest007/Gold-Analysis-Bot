@@ -110,6 +110,24 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
 
 class CachedPriceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_inconsistent_spot_sources_fall_back_without_returning_outlier(self):
+        with patch.object(
+            market_data,
+            "_fetch_goldapi",
+            new=AsyncMock(return_value=2350.0),
+        ), patch.object(
+            market_data,
+            "_fetch_swissquote",
+            new=AsyncMock(return_value=4480.0),
+        ), patch.object(
+            market_data,
+            "_fetch_yf_last_close",
+            new=AsyncMock(return_value=4526.4),
+        ), patch.object(market_data, "_price_cache", (0.0, 0.0)):
+            result = await market_data.get_gold_price()
+
+        self.assertEqual(result, 4526.4)
+
     async def test_cached_candles_receive_a_fresh_spot_snapshot(self):
         data = market_data.OHLCVData(
             [100.0] * 30,
