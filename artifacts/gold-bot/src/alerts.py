@@ -27,6 +27,8 @@ from src import trade_tracker
 from src.image_gen import generate_result_image
 
 logger = logging.getLogger(__name__)
+_PROCESS_STARTED_AT = time.time()
+_STARTUP_EXIT_RECOVERY_SECONDS = 5 * 60
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "users.json")
 
@@ -926,15 +928,18 @@ def _post_entry_tf_extremes(
     opened_at: float,
     timeframe: str = "",
     now: float | None = None,
+    recover_missed: bool = False,
 ):
     """Return verified candle extremes for exit checks.
 
     Simulated OHLCV is suitable for keeping charts and analysis alive, but it
     must never close a real tracked trade.  A generated wick can otherwise
     fabricate an SL/TP touch while the spot feed shows the trade is still
-    live.  Only the newest verified post-entry candle is used: older
-    normalized futures candles can shift when the futures/spot basis changes
-    and replay a wick that did not close the live trade.
+    live.  During normal operation only the newest verified post-entry candle
+    is used: older normalized futures candles can shift when the
+    futures/spot basis changes. During the first scans after a restart,
+    ``recover_missed`` replays all verified post-entry candles available in the
+    fresh feed so an SL/TP hit during downtime is not silently lost.
     """
     if data is None or not getattr(data, "highs", None) or not getattr(data, "lows", None):
         return None
@@ -969,18 +974,31 @@ def _post_entry_tf_extremes(
                 continue
             if (
                 ts >= opened_at
+                and ts <= now
                 and i < len(highs)
                 and i < len(lows)
-                and (not period or 0 <= now - ts <= period + 5 * 60)
+                and (
+                    recover_missed
+                    or not period
+                    or 0 <= now - ts <= period + 5 * 60
+                )
             ):
                 indices.append(i)
         if not indices:
             # No verified post-entry candle exists yet.  Use spot only.
             return (current_price, current_price)
-        # Only the newest post-entry candle is valid live exit evidence.
-        # Reusing older normalized futures candles can replay a stale wick
-        # after the futures/spot basis changes.
-        indices = indices[-1:]
+        if not recover_missed:
+            # Only the newest post-entry candle is valid live exit evidence.
+            # Reusing older normalized futures candles can replay a stale wick
+            # after the futures/spot basis changes.
+            indices = indices[-1:]
+        else:
+            logger.info(
+                "[%s] Recovering exit evidence from %d post-entry candles "
+                "after restart.",
+                timeframe or "?",
+                len(indices),
+            )
         return (
             max(highs[i] for i in indices),
             min(lows[i] for i in indices),
@@ -2082,12 +2100,18 @@ async def _check_and_alert_once(
                         continue
                     for scope in scopes:
                         opened_at = trade_opened_at.get(scope, 0.0)
+                        recover_missed = (
+                            opened_at < _PROCESS_STARTED_AT
+                            and now_ts - _PROCESS_STARTED_AT
+                            <= _STARTUP_EXIT_RECOVERY_SECONDS
+                        )
                         extremes = _post_entry_tf_extremes(
                             data,
                             current_price,
                             opened_at,
                             timeframe=tf,
                             now=now_ts,
+                            recover_missed=recover_missed,
                         )
                         if extremes is not None:
                             tf_extremes[scope] = extremes

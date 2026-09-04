@@ -225,3 +225,16 @@ that false jump triggered an SL and made a still-open trade disappear from
 **How to apply:** Validate source agreement and futures/spot deviation before
 building OHLCV; skip exit transitions when a live quote is an impossible jump
 from the persisted trade entry.
+
+## Offline exit recovery
+
+**Rule:** After a process restart, replay all verified candles after each
+persisted trade's entry during a short startup window; during normal operation,
+use only the newest verified candle.
+
+**Why:** Newest-candle-only logic is safer against basis-shifted historical
+wick data, but it misses an SL/TP candle formed while the bot was offline.
+
+**How to apply:** Keep pre-entry and simulated candles excluded, use the fresh
+feed only for startup recovery, and return to newest-candle-only detection after
+the recovery window.

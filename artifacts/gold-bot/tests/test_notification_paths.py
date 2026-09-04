@@ -115,6 +115,25 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             (111.0, 99.0),
         )
 
+    def test_restart_recovery_replays_verified_post_entry_candles(self):
+        data = SimpleNamespace(
+            highs=[120.0, 111.0],
+            lows=[80.0, 99.0],
+            timestamps=[100.0, 200.0],
+            is_simulated=False,
+        )
+
+        self.assertEqual(
+            alerts._post_entry_tf_extremes(
+                data,
+                current_price=100.0,
+                opened_at=150.0,
+                recover_missed=True,
+                now=400.0,
+            ),
+            (111.0, 99.0),
+        )
+
     def test_stale_ohlcv_is_reduced_to_spot_only_for_exit_detection(self):
         data = SimpleNamespace(
             highs=[120.0],
