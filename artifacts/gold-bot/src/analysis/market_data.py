@@ -38,6 +38,8 @@ MIN_CANDLES = 30
 # ─── TTL Cache ────────────────────────────────────────────────────────────────
 OHLCV_TTL  = 5 * 60   # 5 minutes
 PRICE_TTL  = 30       # 30 seconds
+MAX_SOURCE_SPREAD = 75.0
+MAX_FUTURES_SPOT_DEVIATION = 100.0
 
 _ohlcv_cache: Dict[str, Tuple["OHLCVData", float]] = {}
 _price_cache: Tuple[float, float] = (0.0, 0.0)   # (price, timestamp)
@@ -172,14 +174,36 @@ async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
     return None
 
 
-def _first_valid_spot(results: list) -> Optional[float]:
-    """Return the first validated spot quote from concurrent source results."""
+def _first_valid_spot(
+    results: list, reference: float = 0.0
+) -> Optional[float]:
+    """Return a mutually consistent spot quote from concurrent sources.
+
+    A single source can return a syntactically valid but stale quote. When
+    multiple sources disagree materially, do not silently choose the first
+    result; callers can use their fallback feed instead.
+    """
+    values = []
     for result in results:
         if isinstance(result, (int, float)) and not isinstance(result, bool):
             value = float(result)
             if 500 < value < 25000:
-                return value
-    return None
+                values.append(value)
+    if not values:
+        return None
+
+    if len(values) > 1 and max(values) - min(values) > MAX_SOURCE_SPREAD:
+        if reference and reference > 0:
+            nearest = min(values, key=lambda value: abs(value - reference))
+            if abs(nearest - reference) <= MAX_SOURCE_SPREAD:
+                return nearest
+        return None
+
+    if reference and reference > 0:
+        value = values[0]
+        if abs(value - reference) > MAX_FUTURES_SPOT_DEVIATION:
+            return None
+    return values[0]
 
 
 async def _fetch_yf_last_close(session: aiohttp.ClientSession) -> Optional[float]:
@@ -211,14 +235,18 @@ async def get_gold_price() -> float:
         tasks = [_fetch_goldapi(session), _fetch_swissquote(session)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for res in results:
-            if isinstance(res, float) and res > 0:
-                async with _cache_lock:
-                    _price_cache = (res, time.time())
-                logger.info(f"Spot price (gold-api): {res:.2f}")
-                return res
+        selected = _first_valid_spot(
+            results,
+            reference=cached_price if cached_price > 0 else 0.0,
+        )
+        if selected is not None:
+            async with _cache_lock:
+                _price_cache = (selected, time.time())
+            logger.info(f"Spot price (validated): {selected:.2f}")
+            return selected
 
-        # Both spot sources failed — use futures
+        # Both spot sources failed or disagreed materially — use futures.
+        # Never return one of the rejected spot values here.
         price = await _fetch_yf_last_close(session)
         if price:
             async with _cache_lock:
@@ -282,11 +310,25 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         closes  = closes[:min_len]
         volumes = volumes[:min_len] if volumes else [0] * min_len
         timestamps = timestamps[:min_len]
+        futures_last = closes[-1]
+
+        # A spot source that is far outside the normal futures basis is stale
+        # or malformed. Do not let it make analysis internally inconsistent or
+        # feed an impossible live price into trade tracking.
+        if (
+            spot_price
+            and abs(futures_last - spot_price) > MAX_FUTURES_SPOT_DEVIATION
+        ):
+            logger.warning(
+                "Ignoring inconsistent spot quote %.2f vs futures %.2f.",
+                spot_price,
+                futures_last,
+            )
+            spot_price = None
 
         # Normalize futures OHLCV to spot prices by subtracting the basis.
         # Futures trade at a premium (cost of carry). Without this, all
         # calculated levels (SL, TP, S/R) come out ~$10-15 too high vs spot.
-        futures_last = closes[-1]
         if spot_price and spot_price > 0 and 0 < (futures_last - spot_price) < 60:
             basis = futures_last - spot_price
             opens   = [round(o - basis, 2) for o in opens]

@@ -32,6 +32,10 @@ _TF_MAX_AGE = {
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
 _TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp3_hit"}
 _POST_TP_REANALYSIS_SECONDS = 10 * 60
+# XAU/USD cannot move tens of percent between two 15-second scans. This guard
+# protects a live trade when a syntactically valid provider quote is stale or
+# belongs to a different instrument.
+_MAX_LIVE_QUOTE_DEVIATION = 100.0
 _STORE_LOCK = threading.RLock()
 
 
@@ -309,6 +313,20 @@ def check_trades(current_price: float, recent_high: float = None,
             tp2 = float(t["tp2"])
         except (TypeError, ValueError):
             logger.warning(f"Trade {t.get('id')} skipped — invalid numeric levels.")
+            continue
+        max_quote_deviation = max(
+            _MAX_LIVE_QUOTE_DEVIATION,
+            abs(entry) * 0.05,
+        )
+        if abs(current_price - entry) > max_quote_deviation:
+            logger.warning(
+                "Trade %s exit check skipped — implausible live quote "
+                "%.2f vs entry %.2f (max deviation %.2f).",
+                t.get("id"),
+                current_price,
+                entry,
+                max_quote_deviation,
+            )
             continue
         if (
             d == "BUY" and not sl < entry

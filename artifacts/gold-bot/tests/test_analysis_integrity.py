@@ -39,6 +39,18 @@ class AnalysisIntegrityTests(unittest.TestCase):
         )
         self.assertIsNone(market_data._first_valid_spot([None, 0.0, 250.0]))
 
+    def test_spot_source_selection_rejects_materially_inconsistent_quotes(self):
+        self.assertIsNone(
+            market_data._first_valid_spot([2350.0, 4480.0])
+        )
+        self.assertIsNone(
+            market_data._first_valid_spot([2350.0], reference=4480.0)
+        )
+        self.assertEqual(
+            market_data._first_valid_spot([2350.0, 4480.0], reference=4480.0),
+            4480.0,
+        )
+
     def test_support_one_is_nearest_support(self):
         highs = [101.0] * 25
         lows = [100.0] * 25

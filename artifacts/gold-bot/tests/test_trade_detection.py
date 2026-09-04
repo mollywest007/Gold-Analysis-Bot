@@ -94,6 +94,26 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
 
+    def test_implausible_live_quote_cannot_close_a_gold_trade(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="BUY",
+                entry=4477.1,
+                sl=4470.51,
+                tp1=4486.99,
+                tp2=4493.58,
+                tp3=4500.17,
+                timeframe="M15",
+                confidence=85,
+                rr_ratio=1.0,
+            )
+        )
+
+        events = trade_tracker.check_trades(2350.0, tf_extremes={})
+
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
     def test_post_entry_wick_triggers_target(self):
         self.assertTrue(self._open_buy())
         events = trade_tracker.check_trades(
