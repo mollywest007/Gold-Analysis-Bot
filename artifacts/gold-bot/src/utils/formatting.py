@@ -657,7 +657,40 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Direction   : {a.action}",
         f"  Confidence  : {a.confidence}%",
         f"  Setup Grade : {_quality_label(a.setup_quality)}",
+        "",
+        "══════════════════════════════════",
+        "  INSTITUTIONAL ENGINE v5",
+        "══════════════════════════════════",
+        f"  Bull / Bear : {getattr(a, 'bullish_probability', 50)}% / {getattr(a, 'bearish_probability', 50)}%",
+        f"  Confidence  : {getattr(a, 'confidence_score', 0)}/100",
+        f"  Risk        : {getattr(a, 'risk_level', 'HIGH')}",
+        f"  Macro       : {getattr(a, 'macro_status', 'UNAVAILABLE')}",
+        f"  Intermarket : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
     ]
+    report = getattr(a, "institutional_report", {}) or {}
+    structure = report.get("market_structure", {})
+    smc = report.get("smc", {})
+    volatility = report.get("volatility", {})
+    if structure:
+        lines += [
+            f"  Structure   : {structure.get('trend', 'N/A')} | "
+            f"BOS {structure.get('bos', 'NONE')} | "
+            f"CHoCH {structure.get('choch', 'NONE')}",
+            f"  Swings      : {', '.join(structure.get('labels', [])[-4:]) or 'N/A'}",
+            f"  Regime      : {volatility.get('regime', 'N/A')} | "
+            f"ATR {volatility.get('atr', 0):,.2f}",
+            f"  Liquidity   : {smc.get('liquidity_sweep', 'NONE')} | "
+            f"FVG {smc.get('fair_value_gap', 'NONE')} | "
+            f"OB {smc.get('order_block', 'NONE')}",
+        ]
+    supporting = getattr(a, "reasons_supporting", []) or []
+    against = getattr(a, "reasons_against", []) or []
+    if supporting:
+        lines.append("  Supports    : " + "; ".join(supporting[:3]))
+    if against:
+        lines.append("  Against     : " + "; ".join(against[:3]))
+    if getattr(a, "invalidating_conditions", None):
+        lines.append("  Invalidates : " + "; ".join(a.invalidating_conditions[:2]))
 
     if a.action in ("BUY", "SELL"):
         if a.setup_quality in ("A+", "A"):
@@ -1569,6 +1602,54 @@ def _wrap(text: str, width: int) -> list:
     if current:
         lines.append(current)
     return lines
+
+
+def institutional_multi_timeframe_card(combined: dict) -> str:
+    """Render the weighted W1→M5 institutional decision and its evidence."""
+    analyses = combined.get("analyses", {})
+    lines = [
+        "<pre>",
+        "XAU/USD  INSTITUTIONAL MULTI-TIMEFRAME",
+        "══════════════════════════════════",
+        f"FINAL BIAS : {combined.get('final_bias', 'WAIT')}",
+        f"BULL / BEAR: {combined.get('bullish_probability', 50)}% / {combined.get('bearish_probability', 50)}%",
+        f"CONFIDENCE : {combined.get('confidence_score', 0)}/100",
+        "══════════════════════════════════",
+        "W1 → D1 → H4 → H1 → M15 → M5",
+        "Higher-timeframe structure has priority.",
+        "",
+    ]
+    for tf in ("W1", "D1", "H4", "H1", "M15", "M5"):
+        a = analyses.get(tf)
+        if not a:
+            continue
+        report = getattr(a, "institutional_report", {}) or {}
+        structure = report.get("market_structure", {})
+        volatility = report.get("volatility", {})
+        lines += [
+            f"{tf:<4} {getattr(a, 'action', 'WAIT'):<4} "
+            f"B/B {getattr(a, 'bullish_probability', 50)}/{getattr(a, 'bearish_probability', 50)} "
+            f"Risk {getattr(a, 'risk_level', 'HIGH')}",
+            f"     Structure {structure.get('trend', 'N/A')} | "
+            f"BOS {structure.get('bos', 'NONE')} | "
+            f"CHoCH {structure.get('choch', 'NONE')} | "
+            f"Vol {volatility.get('regime', 'N/A')}",
+        ]
+        for reason in (getattr(a, "reasons_supporting", []) or [])[:2]:
+            lines.append(f"     + {reason}")
+        for reason in (getattr(a, "reasons_against", []) or [])[:1]:
+            lines.append(f"     - {reason}")
+        lines.append("")
+    if combined.get("reversal_timeframes"):
+        lines.append("REVERSAL EVIDENCE: " + ", ".join(combined["reversal_timeframes"]))
+    lines += [
+        "",
+        "Rule: lower-timeframe disagreement requires CHoCH/BOS/MSS.",
+        "No single indicator is sufficient for a trade.",
+        "Not financial advice.",
+        "</pre>",
+    ]
+    return safe_html("\n".join(lines))
 
 
 def market_conditions_card(a: MarketAnalysis) -> str:

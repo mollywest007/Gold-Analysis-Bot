@@ -3,7 +3,7 @@ import time
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, Application
 
-from src.analysis import get_analysis
+from src.analysis import get_analysis, analyze_multi_timeframe
 from src.alerts import register_user, unregister_user, is_registered
 from src.market_hours import market_status
 from src.utils.formatting import (
@@ -252,22 +252,19 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_market_open():
         await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
         return
-    from src.analysis import analyze as _analyze
-    from src.utils.formatting import multi_timeframe_card
+    from src.utils.formatting import institutional_multi_timeframe_card
     chat_id = update.effective_chat.id
     mode_name = get_user_mode(chat_id)
     mode_cfg = get_user_mode_config(chat_id)
     msg = await update.message.reply_text("Analyzing all timeframes...")
     try:
-        # Sequential — see messages.py for explanation
-        _analyses = []
-        for _mode, _tf in _analysis_specs(chat_id):
-            try:
-                _analyses.append(await _analyze(_tf, mode=_mode))
-            except Exception as _e:
-                logger.warning(f"analyze({_tf}) skipped: {_e}")
+        # Combined user mode has two legacy streams, but the institutional
+        # report intentionally evaluates the full W1→M5 hierarchy.
+        engine_mode = None if mode_name == COMBINED_MODE else mode_name
+        combined = await analyze_multi_timeframe(mode=engine_mode)
+        _analyses = list(combined["analyses"].values())
         await msg.edit_text(
-            multi_timeframe_card(_analyses), parse_mode="HTML",
+            institutional_multi_timeframe_card(combined), parse_mode="HTML",
             reply_markup=refresh_keyboard("analyze", "all"),
         )
     except Exception as e:

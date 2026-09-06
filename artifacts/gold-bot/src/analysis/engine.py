@@ -22,6 +22,12 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 
 from .market_data import fetch_ohlcv, OHLCVData
+from .institutional import (
+    as_dict as institutional_as_dict,
+    build_context as build_institutional_context,
+    combine_contexts,
+    fetch_intermarket_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +144,19 @@ class MarketAnalysis:
     market_regime:        str   = "NORMAL"   # TRENDING | RANGING | VOLATILE | SQUEEZE | NORMAL
     hidden_divergence:    str   = "NONE"     # BULLISH_HIDDEN | BEARISH_HIDDEN | NONE
     bb_bandwidth:         float = 0.0        # squeeze detector: low = BB squeeze incoming
+    # Institutional engine v5 — all fields are evidence-first and serializable.
+    institutional_report: dict = field(default_factory=dict)
+    bullish_probability: int = 50
+    bearish_probability: int = 50
+    confidence_score: int = 0
+    risk_level: str = "HIGH"
+    reasons_supporting: List[str] = field(default_factory=list)
+    reasons_against: List[str] = field(default_factory=list)
+    invalidating_conditions: List[str] = field(default_factory=list)
+    best_entry_zone: dict = field(default_factory=dict)
+    recommended_rr: float = 0.0
+    macro_status: str = "UNAVAILABLE"
+    intermarket_status: str = "UNAVAILABLE"
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -1514,6 +1533,18 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         logger.error(f"Insufficient data for {timeframe}")
         raise RuntimeError(f"Could not fetch enough market data for {timeframe}")
 
+    # The institutional layer is independent from the legacy vote engine.  It
+    # gets the same candle set, plus a cached cross-asset snapshot, and is
+    # attached to the result as a structured report for commands/API clients.
+    # A failed optional feed never fabricates a directional edge.
+    try:
+        institutional_context = build_institutional_context(
+            data, timeframe, await fetch_intermarket_snapshot()
+        )
+    except Exception as exc:
+        logger.warning("Institutional context unavailable [%s]: %s", timeframe, exc)
+        institutional_context = build_institutional_context(data, timeframe, {})
+
     closes  = data.closes
     highs   = data.highs
     lows    = data.lows
@@ -2433,6 +2464,30 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     else:
         setup_quality = "WAIT"
 
+    # Final institutional gate.  The legacy indicator profile remains useful
+    # for continuity, but it may not emit a trade when the independent
+    # context engine sees a conflict, imminent macro event, poor R:R, or
+    # insufficient evidence.
+    if action in ("BUY", "SELL"):
+        legacy_action = action
+        institutional_direction = institutional_context.direction
+        if institutional_direction == "WAIT":
+            action = "WAIT"
+            setup_quality = "WAIT"
+            win_probability = 0
+            wait_reason = (
+                "Institutional gate: WAIT — "
+                + "; ".join(institutional_context.reasons_against[:2])
+            )
+        elif institutional_direction != action:
+            action = "WAIT"
+            setup_quality = "WAIT"
+            win_probability = 0
+            wait_reason = (
+                f"Institutional gate: {institutional_direction} context conflicts "
+                f"with the legacy {legacy_action} setup"
+            )
+
     return MarketAnalysis(
         price=price, timeframe=timeframe,
         bias=bias, trend=trend, strength=strength, momentum=momentum,
@@ -2496,7 +2551,80 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         market_regime=market_regime_v,
         hidden_divergence=hidden_div,
         bb_bandwidth=bb_bw,
+        institutional_report=institutional_as_dict(institutional_context),
+        bullish_probability=institutional_context.bullish_probability,
+        bearish_probability=institutional_context.bearish_probability,
+        confidence_score=institutional_context.confidence_score,
+        risk_level=institutional_context.risk_level,
+        reasons_supporting=institutional_context.reasons_supporting,
+        reasons_against=institutional_context.reasons_against,
+        invalidating_conditions=institutional_context.invalidating_conditions,
+        best_entry_zone=institutional_context.best_entry_zone,
+        recommended_rr=institutional_context.recommended_rr,
+        macro_status=institutional_context.macro.get("status", "UNAVAILABLE"),
+        intermarket_status=institutional_context.intermarket.get("status", "UNAVAILABLE"),
     )
+
+
+async def analyze_multi_timeframe(
+    mode: str = None,
+    timeframes: Optional[List[str]] = None,
+) -> dict:
+    """Analyze W1→M5 independently, then produce one guarded final bias.
+
+    The returned ``analyses`` mapping preserves each timeframe's complete
+    evidence.  The final decision is weighted toward higher timeframes; a
+    lower-timeframe disagreement is ignored unless that timeframe reports a
+    valid CHoCH or MSS.
+    """
+    requested = list(timeframes or ("W1", "D1", "H4", "H1", "M15", "M5"))
+    requested = [tf for tf in requested if tf in HTF_MAP or tf == "MN1"]
+    results = await asyncio.gather(
+        *(analyze(tf, mode=mode) for tf in requested),
+        return_exceptions=True,
+    )
+    analyses = {
+        tf: result for tf, result in zip(requested, results)
+        if isinstance(result, MarketAnalysis)
+    }
+    if not analyses:
+        raise RuntimeError("No timeframe produced a usable analysis")
+
+    weights = {"W1": 3.0, "D1": 2.7, "H4": 2.2, "H1": 1.8, "M15": 1.2, "M5": 0.8}
+    weighted = 0.0
+    weight_total = 0.0
+    for tf, analysis in analyses.items():
+        weight = weights.get(tf, 1.0)
+        # Real OHLCV is required for a final institutional bias. Simulated
+        # candles remain useful for diagnostics but cannot create a trade.
+        if analysis.is_simulated:
+            continue
+        weighted += (analysis.bullish_probability - analysis.bearish_probability) / 100 * weight
+        weight_total += weight
+
+    normalized = weighted / weight_total if weight_total else 0.0
+    final_bias = "BUY" if normalized > 0.12 else "SELL" if normalized < -0.12 else "WAIT"
+    reversal_tfs = {
+        tf for tf, analysis in analyses.items()
+        if analysis.choch != "NONE"
+        or analysis.bos in ("BULLISH_BOS", "BEARISH_BOS")
+        or analysis.institutional_report.get("market_structure", {}).get("mss") != "NONE"
+    }
+    htf_actions = [analyses[tf].action for tf in ("W1", "D1", "H4") if tf in analyses and analyses[tf].action in ("BUY", "SELL")]
+    if htf_actions and final_bias in ("BUY", "SELL"):
+        dominant = "BUY" if htf_actions.count("BUY") > htf_actions.count("SELL") else "SELL" if htf_actions.count("SELL") > htf_actions.count("BUY") else "WAIT"
+        if dominant in ("BUY", "SELL") and dominant != final_bias:
+            final_bias = "WAIT"
+    bullish = round(max(1, min(99, 50 + normalized * 45))) if weight_total else 50
+    return {
+        "analyses": analyses,
+        "final_bias": final_bias,
+        "bullish_probability": bullish,
+        "bearish_probability": 100 - bullish,
+        "confidence_score": round(abs(bullish - (100 - bullish)) * .9),
+        "reversal_timeframes": sorted(reversal_tfs),
+        "lower_timeframe_rule": "Lower timeframe disagreement requires CHoCH/BOS/MSS; otherwise higher-timeframe bias wins.",
+    }
 
 
 def compute_fibonacci_levels(highs: List[float], lows: List[float],

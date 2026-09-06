@@ -32,3 +32,18 @@ To find your `ALLOWED_USER_ID`: send `/start` to the bot and check the workflow 
 ## User preferences
 
 - Keep HTTP client request logging below INFO level (httpx/httpcore set to WARNING) to avoid leaking bot token from query params in logs.
+
+## Institutional analysis engine
+
+The bot's `/analyze` command evaluates W1, D1, H4, H1, M15, and M5 independently,
+then applies a higher-timeframe-weighted consensus gate. Single-timeframe results
+also include a serializable institutional report covering market structure,
+liquidity/SMC, Wyckoff, Fibonacci, volume profile, volatility, momentum, sessions,
+macro-event gating, and optional intermarket confirmation.
+
+The engine uses real OHLCV data only for actionable multi-timeframe conclusions;
+simulated candles are retained for diagnostics and cannot create a final bias.
+Cross-asset data is fetched from Yahoo Finance with a short cache. An economic
+calendar is intentionally not invented: to enable the imminent-event gate, set
+`HIGH_IMPACT_EVENTS_UTC` to comma-separated `ISO-8601 timestamp|event name` values,
+for example `2026-09-07T12:30:00Z|CPI`.

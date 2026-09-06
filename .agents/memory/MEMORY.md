@@ -5,3 +5,4 @@
 - [Gold Bot Notification Delivery](gold-bot-notification-delivery.md) — only consume alert deduplication state after Telegram delivery succeeds; failed sends remain retryable
 - [Gemini Vision Compatibility](gemini-vision-compatibility.md) — Google may retire Gemini model aliases; verify the live vision endpoint instead of trusting an old model name
 - [Gold Bot Combined Monitoring](gold-bot-combined-monitoring.md) — combined mode owns independent Scalp and Interval alert streams while single modes retain their legacy behavior
+- [Institutional Engine Data Boundaries](gold-bot-institutional-engine.md) — external macro/intermarket feeds must remain explicitly unavailable rather than generating synthetic conviction
