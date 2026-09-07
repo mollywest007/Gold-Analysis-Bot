@@ -117,6 +117,10 @@ class MarketAnalysis:
     early_entry:    float = 0.0   # best pullback entry price
     early_entry_reason: str = ""  # description of the early entry zone
     setup_quality:  str = ""      # "A+" | "A" | "B" | "WAIT"
+    # Preliminary grade for the directional setup before confidence, HTF, or
+    # institutional confirmation gates. This remains visible when action is
+    # WAIT, so a forming setup is not mistaken for a directionless market.
+    setup_grade:    str = "WAIT"
     # ── Evidence-first market report fields ────────────────────────────────────
     htf_h4_bias: str = "Neutral"
     htf_d1_bias: str = "Neutral"
@@ -2439,18 +2443,19 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     # A+ = 5 core indicators + trending market
     # A  = 4 core indicators OR 3 core + ChoCH (structural confirmation)
     # B  = 3 core indicators, win >= 55%
-    if action in ("BUY", "SELL"):
+    setup_grade = "WAIT"
+    if direction in ("BUY", "SELL"):
         core_votes = sum(
             1 for i in indicators
             if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "CCI(20)", "BB %B")
-            and i.signal == action
+            and i.signal == direction
         )
         # ChoCH aligned with direction counts as structural confirmation —
         # equivalent to one extra core indicator vote for grading purposes.
         # A 3-vote setup with confirmed market structure break = grade A.
         choch_confirmed = (
-            (action == "BUY"  and choch == "BULLISH_CHOCH") or
-            (action == "SELL" and choch == "BEARISH_CHOCH")
+            (direction == "BUY"  and choch == "BULLISH_CHOCH") or
+            (direction == "SELL" and choch == "BEARISH_CHOCH")
         )
         effective_votes = core_votes + (1 if choch_confirmed else 0)
 
@@ -2458,15 +2463,18 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         adx_ap = 22 if is_kill_zone else 25
         adx_a  = 17 if is_kill_zone else 20
         if win_probability >= 68 and effective_votes >= 5 and adx >= adx_ap:
-            setup_quality = "A+"
+            setup_grade = "A+"
         elif win_probability >= 60 and (effective_votes >= 4 or (effective_votes >= 3 and market_regime_v == "TRENDING")) and adx >= adx_a:
-            setup_quality = "A"
+            setup_grade = "A"
         elif win_probability >= 55:
-            setup_quality = "B"
+            setup_grade = "B"
         else:
-            setup_quality = "C"
-    else:
-        setup_quality = "WAIT"
+            setup_grade = "C"
+
+    # setup_quality is the grade of a confirmed/actionable signal. Keep the
+    # preliminary setup_grade separate so WAIT cards can still explain the
+    # quality of an indication that has not cleared the gates.
+    setup_quality = setup_grade if action in ("BUY", "SELL") else "WAIT"
 
     # Final institutional gate.  The legacy indicator profile remains useful
     # for continuity, but it may not emit a trade when the independent
@@ -2519,6 +2527,7 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,
         early_entry=early_entry, early_entry_reason=early_entry_reason,
         setup_quality=setup_quality,
+        setup_grade=setup_grade,
         is_simulated=data.is_simulated,
         kill_zone=kill_zone_label,
         is_kill_zone=is_kill_zone,

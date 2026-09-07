@@ -423,8 +423,10 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     if a.action in ("BUY", "SELL"):
         t1 = _estimate_time(a, a.tp1)
         t2 = _estimate_time(a, a.tp2)
+        setup_grade = getattr(a, "setup_grade", "") or getattr(a, "setup_quality", "WAIT") or "WAIT"
         lines += [
             f"  SIGNAL    : {a.action}   {_trade_type_label(a)}",
+            f"  Setup Grade: {setup_grade}",
             f"  Win Rate  : {_win_bar(a.win_probability)}",
             f"  Confidence: {a.confidence}%",
             "",
@@ -449,12 +451,16 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
             f"  SIGNAL    : WAIT",
         ]
         indication = getattr(a, "directional_indication", "NEUTRAL")
+        setup_grade = getattr(a, "setup_grade", "") or getattr(a, "setup_quality", "WAIT") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
                 f"  INDICATION: {indication} (not confirmed)",
+                f"  Setup Grade: {setup_grade}",
                 f"  Confidence: {a.confidence}%",
                 "  Status    : Awaiting confirmation",
             ]
+        else:
+            lines.append(f"  Setup Grade: {setup_grade}")
         lines += [
             f"  Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
         ]

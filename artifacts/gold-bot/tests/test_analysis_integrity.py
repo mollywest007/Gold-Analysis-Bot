@@ -134,6 +134,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             reversal=False,
             liquidity_zone="4310.0 — 4330.0",
             directional_indication="SELL",
+            setup_grade="B",
         )
 
         with patch.object(
@@ -144,6 +145,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             card = formatting.analysis_card(analysis)
 
         self.assertIn("INDICATION: SELL (not confirmed)", card)
+        self.assertIn("Setup Grade: B", card)
         self.assertIn("Confidence: 75%", card)
         self.assertIn("Status    : Awaiting confirmation", card)
         self.assertIn("&lt;confirmation&gt; required", card)
