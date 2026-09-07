@@ -33,20 +33,13 @@
       }
     },
     "8039158711": {
-      "mode": "intraday",
-      "timeframe": "H1",
-      "active_signal": {
-        "H1": "SELL"
-      },
+      "mode": "scalp",
+      "timeframe": "M15",
+      "active_signal": {},
       "closed_signal": {},
-      "last_fired": {
-        "H1": 1788537077.9389105
-      },
+      "last_fired": {},
       "pending_signal": {},
-      "sl_cooldown_until": {
-        "M15": 1788481980.8279982,
-        "H1": 1788537057.8855147
-      },
+      "sl_cooldown_until": {},
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
@@ -79,7 +72,8 @@
         ],
         "129b2877e2de4e9bb0e763fb19b100c7": [
           "entry",
-          "update_2x"
+          "update_2x",
+          "update_6x"
         ]
       }
     }

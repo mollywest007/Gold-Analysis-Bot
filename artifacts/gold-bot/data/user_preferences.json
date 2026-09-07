@@ -4,8 +4,8 @@
     "timeframe": "M15"
   },
   "8039158711": {
-    "mode": "intraday",
-    "timeframe": "H1"
+    "mode": "scalp",
+    "timeframe": "M15"
   },
   "101": {
     "mode": "scalp",
