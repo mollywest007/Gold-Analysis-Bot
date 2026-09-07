@@ -104,6 +104,10 @@ class MarketAnalysis:
     market_structure: str = "RANGING"   # HH_HL | LH_LL | RANGING | TRANSITION
     choch:          str = "NONE"        # BULLISH_CHOCH | BEARISH_CHOCH | NONE — early reversal signal
     win_probability:  int = 0
+    # Direction selected by the evidence before confirmation gates are applied.
+    # This remains visible when action is WAIT, so users can distinguish an
+    # early directional indication from a confirmed trade signal.
+    directional_indication: str = "NEUTRAL"
     confluence_list: List[str] = field(default_factory=list)
     tp3:            float = 0.0
     # Early entry / Fibonacci fields
@@ -2509,6 +2513,7 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         market_structure=mkt_structure,
         choch=choch,
         win_probability=win_probability,
+        directional_indication=direction,
         confluence_list=confluence_list,
         tp3=tp3,
         fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,

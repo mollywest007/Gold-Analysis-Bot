@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.analysis import engine
 from src.analysis import market_data
+from src.analysis.engine import MarketAnalysis
+from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
@@ -107,6 +109,44 @@ class AnalysisIntegrityTests(unittest.TestCase):
             ),
             "BUY",
         )
+
+    def test_analysis_card_shows_unconfirmed_directional_indication(self):
+        analysis = MarketAnalysis(
+            price=4350.0,
+            timeframe="H1",
+            bias="Bearish",
+            trend="Bearish",
+            strength="Moderate",
+            momentum="Bearish",
+            confidence=75,
+            entry=4350.0,
+            stop_loss=4370.0,
+            tp1=4310.0,
+            tp2=4280.0,
+            rr_ratio=2.0,
+            action="WAIT",
+            wait_reason="<confirmation> required",
+            resistance1=4370.0,
+            resistance2=4400.0,
+            support1=4310.0,
+            support2=4280.0,
+            breakout=False,
+            reversal=False,
+            liquidity_zone="4310.0 — 4330.0",
+            directional_indication="SELL",
+        )
+
+        with patch.object(
+            formatting,
+            "market_status",
+            return_value={"is_open": True, "note": "test"},
+        ):
+            card = formatting.analysis_card(analysis)
+
+        self.assertIn("INDICATION: SELL (not confirmed)", card)
+        self.assertIn("Confidence: 75%", card)
+        self.assertIn("Status    : Awaiting confirmation", card)
+        self.assertIn("&lt;confirmation&gt; required", card)
 
 
 class CachedPriceTests(unittest.IsolatedAsyncioTestCase):

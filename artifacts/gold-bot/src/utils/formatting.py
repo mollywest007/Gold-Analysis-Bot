@@ -426,6 +426,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         lines += [
             f"  SIGNAL    : {a.action}   {_trade_type_label(a)}",
             f"  Win Rate  : {_win_bar(a.win_probability)}",
+            f"  Confidence: {a.confidence}%",
             "",
             f"  Entry     : {fmt_price(a.entry)}",
         ]
@@ -446,6 +447,15 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     else:
         lines += [
             f"  SIGNAL    : WAIT",
+        ]
+        indication = getattr(a, "directional_indication", "NEUTRAL")
+        if indication in ("BUY", "SELL"):
+            lines += [
+                f"  INDICATION: {indication} (not confirmed)",
+                f"  Confidence: {a.confidence}%",
+                "  Status    : Awaiting confirmation",
+            ]
+        lines += [
             f"  Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
         ]
 
