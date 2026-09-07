@@ -635,7 +635,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Fair Value Gap  : {framework_scores.get('fair_value_gap_confirmation', 0)}/10",
         f"  Candle Confirm. : {framework_scores.get('candlestick_confirmation', 0)}/5",
         f"  Framework Bias   : {framework_direction}",
-        f"  Framework Score  : {getattr(a, 'confidence_score', 0)}/100",
+        f"  Framework Score  : Earned {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
@@ -668,7 +668,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         "  INSTITUTIONAL ENGINE v5",
         "══════════════════════════════════",
         f"  Bull / Bear : {getattr(a, 'bullish_probability', 50)}% / {getattr(a, 'bearish_probability', 50)}%",
-        f"  Confidence  : {getattr(a, 'confidence_score', 0)}/100",
+        f"  Confidence  : Earned {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
         f"  Risk        : {getattr(a, 'risk_level', 'HIGH')}",
         f"  Macro       : {getattr(a, 'macro_status', 'UNAVAILABLE')}",
         f"  Intermarket : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
@@ -1638,7 +1638,7 @@ def institutional_multi_timeframe_card(combined: dict) -> str:
         "══════════════════════════════════",
         f"FINAL BIAS : {combined.get('final_bias', 'Neutral')}",
         f"BULL / BEAR: {combined.get('bullish_probability', 50)}% / {combined.get('bearish_probability', 50)}%",
-        f"CONFIDENCE : {combined.get('confidence_score', 0)}/100",
+        f"CONFIDENCE : Earned {combined.get('confidence_score', 0)}/100 | Max 100/100",
         "══════════════════════════════════",
         "DAILY → H4 → H1 → M15",
         "All four timeframes must align before a trade.",
@@ -1653,7 +1653,7 @@ def institutional_multi_timeframe_card(combined: dict) -> str:
         score_breakdown = report.get("score_breakdown", {}) or {}
         lines += [
             f"{tf:<4} {report.get('direction', 'WAIT'):<4} "
-            f"Score {getattr(a, 'confidence_score', 0)}/100 "
+            f"Score {getattr(a, 'confidence_score', 0)}/100 of max 100 "
             f"Risk {getattr(a, 'risk_level', 'HIGH')}",
             f"     Trend {structure.get('trend', 'N/A')} | "
             f"BOS {structure.get('bos', 'NONE')} | "
