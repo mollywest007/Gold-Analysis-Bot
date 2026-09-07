@@ -2332,7 +2332,7 @@ async def _check_and_alert_once(
                     # fast moves like EMA/candle deterioration before ADX and
                     # the full vote count catch up.
                     tf == "M15"
-                    and a.htf_bias == "Bearish"
+                    and getattr(a, "htf_bias", "Neutral") == "Bearish"
                     and a.sell_votes >= 2
                     and a.sell_votes >= a.buy_votes
                     and a.adx >= 10
@@ -2348,7 +2348,7 @@ async def _check_and_alert_once(
                     # Symmetric M15 early-warning path for bullish setups.
                     # Confirmed BUY gating remains unchanged.
                     tf == "M15"
-                    and a.htf_bias == "Bullish"
+                    and getattr(a, "htf_bias", "Neutral") == "Bullish"
                     and a.buy_votes >= 2
                     and a.buy_votes >= a.sell_votes
                     and a.adx >= 10
@@ -2473,8 +2473,8 @@ async def _check_and_alert_once(
                 (a.action == "SELL" and choch == "BEARISH_CHOCH")
             )
             htf_strongly_against = (
-                (a.action == "BUY"  and a.htf_bias == "Bearish") or
-                (a.action == "SELL" and a.htf_bias == "Bullish")
+                (a.action == "BUY"  and getattr(a, "htf_bias", "Neutral") == "Bearish") or
+                (a.action == "SELL" and getattr(a, "htf_bias", "Neutral") == "Bullish")
             )
             # Lower-TF same-direction lock overrides the HTF counter-trend block.
             # If M15 is already confirmed SELL and M30 wants to fire SELL, that IS
@@ -2488,7 +2488,7 @@ async def _check_and_alert_once(
             if htf_strongly_against and not choch_aligned and not lower_same_dir:
                 logger.info(
                     f"[{tf}] Filtered — strong counter-trend "
-                    f"({a.action} vs HTF={a.htf_bias}). Too risky."
+                    f"({a.action} vs HTF={getattr(a, 'htf_bias', 'Neutral')}). Too risky."
                 )
                 continue
 

@@ -587,6 +587,9 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     ote_l = getattr(a, "ote_low", 0.0)
     pd_icons = {"PREMIUM": "▲ PREMIUM (sell zone)", "DISCOUNT": "▼ DISCOUNT (buy zone)",
                 "EQUILIBRIUM": "◆ EQUILIBRIUM (chop)"}
+    institutional_report = getattr(a, "institutional_report", {}) or {}
+    framework_scores = institutional_report.get("score_breakdown", {}) or {}
+    framework_direction = institutional_report.get("direction", "WAIT")
 
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
@@ -623,25 +626,16 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Bias      : {a.bias}   Momentum: {a.momentum}",
         "",
         "══════════════════════════════════",
-        "  INDICATOR BREAKDOWN",
+        "  INSTITUTIONAL FRAMEWORK SCORE",
         "══════════════════════════════════",
-        f"  ADX  {a.adx:>5.1f}   {adx_desc}",
-        f"  +DI  {a.plus_di:>5.1f}   {di_desc}",
-        f"  -DI  {a.minus_di:>5.1f}",
-        "──────────────────────────────────",
-        f"  RSI  {a.rsi_value:>5.1f}   {rsi_desc}",
-        f"  Stoch {a.stoch_k_val:>4.1f}/{a.stoch_d_val:.1f}   {stoch_desc}",
-        "──────────────────────────────────",
-        f"  MACD Hist {a.macd_hist:>+7.3f}   {macd_desc}",
-        f"  BB%B      {a.bb_pct:>6.1f}%   {bb_desc}",
-        f"  Williams%R {getattr(a,'willr_value',-50):>5.1f}" + (f"   ← {a.willr_caution}" if getattr(a,'willr_caution','') else ""),
-        f"  Supertrend {'▲ bullish' if getattr(a,'supertrend_direction','')=='BUY' else ('▼ bearish' if getattr(a,'supertrend_direction','')=='SELL' else 'neutral')}",
-        f"  CCI(20)   {getattr(a,'cci_value',0.0):>5.0f}",
-        f"  VWAP      {getattr(a,'vwap',0.0):>10,.2f}   ({'above' if a.price > getattr(a,'vwap',a.price) else 'below'} VWAP)",
-        f"  BB BW     {getattr(a,'bb_bandwidth',0.0):>5.2f}%   Regime: {getattr(a,'market_regime','NORMAL')}",
-        "──────────────────────────────────",
-        f"  Indicator votes:",
-        f"    BUY  {a.buy_votes}/8   SELL  {a.sell_votes}/8   WAIT  {a.wait_votes}/8",
+        f"  Trend Alignment : {framework_scores.get('trend_alignment', 0)}/25",
+        f"  Market Structure: {framework_scores.get('market_structure', 0)}/25",
+        f"  Liquidity       : {framework_scores.get('liquidity_confirmation', 0)}/20",
+        f"  Order Block     : {framework_scores.get('order_block_reaction', 0)}/15",
+        f"  Fair Value Gap  : {framework_scores.get('fair_value_gap_confirmation', 0)}/10",
+        f"  Candle Confirm. : {framework_scores.get('candlestick_confirmation', 0)}/5",
+        f"  Framework Bias   : {framework_direction}",
+        f"  Framework Score  : {getattr(a, 'confidence_score', 0)}/100",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
@@ -649,18 +643,6 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
             "──────────────────────────────────",
             f"  Candle  : {a.candle_pattern}",
         ]
-    _cp = getattr(a, "chart_pattern", "None")
-    _cp_sig = getattr(a, "chart_pattern_signal", "NEUTRAL")
-    if _cp and _cp != "None":
-        lines += ["──────────────────────────────────", f"  Chrt Pat: {_cp} → {_cp_sig}"]
-    _hd = getattr(a, "hidden_divergence", "NONE")
-    if _hd != "NONE":
-        lines.append(f"  HidDiv  : {_hd.replace('_', ' ').title()}")
-    if a.breakout:
-        lines.append("  Signal  : Breakout above swing high")
-    if a.reversal:
-        lines.append("  Signal  : Divergence reversal detected")
-
     lines += [
         "",
         "══════════════════════════════════",
@@ -691,7 +673,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Macro       : {getattr(a, 'macro_status', 'UNAVAILABLE')}",
         f"  Intermarket : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
     ]
-    report = getattr(a, "institutional_report", {}) or {}
+    report = institutional_report
     structure = report.get("market_structure", {})
     smc = report.get("smc", {})
     volatility = report.get("volatility", {})
@@ -715,6 +697,25 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         lines.append("  Against     : " + "; ".join(against[:3]))
     if getattr(a, "invalidating_conditions", None):
         lines.append("  Invalidates : " + "; ".join(a.invalidating_conditions[:2]))
+
+    plan_zone = report.get("best_entry_zone", {}) or {}
+    plan_direction = report.get("direction", "WAIT")
+    plan_stop = report.get("suggested_stop_loss", 0.0)
+    plan_target = report.get("suggested_take_profit", 0.0)
+    plan_rr = report.get("recommended_rr", 0.0)
+    lines += [
+        "",
+        "  CONDITIONAL TRADE PLAN",
+        f"  Bias       : {plan_direction} (framework only)",
+        f"  Entry Zone : {fmt_price(plan_zone.get('low', 0))} – {fmt_price(plan_zone.get('high', 0))}"
+        if plan_zone.get("low") and plan_zone.get("high")
+        else "  Entry Zone : N/A — no confirmed directional setup",
+        f"  Stop Loss  : {fmt_price(plan_stop)}" if plan_stop else "  Stop Loss  : N/A",
+        f"  Take Profit: {fmt_price(plan_target)}" if plan_target else "  Take Profit: N/A",
+        f"  R:R        : 1:{plan_rr}" if plan_rr else "  R:R        : N/A",
+    ]
+    if a.action not in ("BUY", "SELL"):
+        lines.append("  Status     : NO TRADE — wait for confirmation")
 
     if a.action in ("BUY", "SELL"):
         if a.setup_quality in ("A+", "A"):
@@ -1629,35 +1630,40 @@ def _wrap(text: str, width: int) -> list:
 
 
 def institutional_multi_timeframe_card(combined: dict) -> str:
-    """Render the weighted W1→M5 institutional decision and its evidence."""
+    """Render the strict Daily → H4 → H1 → M15 institutional decision."""
     analyses = combined.get("analyses", {})
     lines = [
         "<pre>",
         "XAU/USD  INSTITUTIONAL MULTI-TIMEFRAME",
         "══════════════════════════════════",
-        f"FINAL BIAS : {combined.get('final_bias', 'WAIT')}",
+        f"FINAL BIAS : {combined.get('final_bias', 'Neutral')}",
         f"BULL / BEAR: {combined.get('bullish_probability', 50)}% / {combined.get('bearish_probability', 50)}%",
         f"CONFIDENCE : {combined.get('confidence_score', 0)}/100",
         "══════════════════════════════════",
-        "W1 → D1 → H4 → H1 → M15 → M5",
-        "Higher-timeframe structure has priority.",
+        "DAILY → H4 → H1 → M15",
+        "All four timeframes must align before a trade.",
         "",
     ]
-    for tf in ("W1", "D1", "H4", "H1", "M15", "M5"):
+    for tf in ("D1", "H4", "H1", "M15"):
         a = analyses.get(tf)
         if not a:
             continue
         report = getattr(a, "institutional_report", {}) or {}
         structure = report.get("market_structure", {})
-        volatility = report.get("volatility", {})
+        score_breakdown = report.get("score_breakdown", {}) or {}
         lines += [
-            f"{tf:<4} {getattr(a, 'action', 'WAIT'):<4} "
-            f"B/B {getattr(a, 'bullish_probability', 50)}/{getattr(a, 'bearish_probability', 50)} "
+            f"{tf:<4} {report.get('direction', 'WAIT'):<4} "
+            f"Score {getattr(a, 'confidence_score', 0)}/100 "
             f"Risk {getattr(a, 'risk_level', 'HIGH')}",
-            f"     Structure {structure.get('trend', 'N/A')} | "
+            f"     Trend {structure.get('trend', 'N/A')} | "
             f"BOS {structure.get('bos', 'NONE')} | "
-            f"CHoCH {structure.get('choch', 'NONE')} | "
-            f"Vol {volatility.get('regime', 'N/A')}",
+            f"CHoCH {structure.get('choch', 'NONE')}",
+            f"     T {score_breakdown.get('trend_alignment', 0)}/25 "
+            f"S {score_breakdown.get('market_structure', 0)}/25 "
+            f"L {score_breakdown.get('liquidity_confirmation', 0)}/20 "
+            f"OB {score_breakdown.get('order_block_reaction', 0)}/15 "
+            f"FVG {score_breakdown.get('fair_value_gap_confirmation', 0)}/10 "
+            f"C {score_breakdown.get('candlestick_confirmation', 0)}/5",
         ]
         for reason in (getattr(a, "reasons_supporting", []) or [])[:2]:
             lines.append(f"     + {reason}")
@@ -1668,8 +1674,8 @@ def institutional_multi_timeframe_card(combined: dict) -> str:
         lines.append("REVERSAL EVIDENCE: " + ", ".join(combined["reversal_timeframes"]))
     lines += [
         "",
-        "Rule: lower-timeframe disagreement requires CHoCH/BOS/MSS.",
-        "No single indicator is sufficient for a trade.",
+        "Rule: mixed evidence = Neutral / No Trade.",
+        "Confidence below 60 = No Trade.",
         "Not financial advice.",
         "</pre>",
     ]

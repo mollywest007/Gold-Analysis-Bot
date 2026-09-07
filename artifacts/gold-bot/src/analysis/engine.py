@@ -2483,7 +2483,11 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     if action in ("BUY", "SELL"):
         legacy_action = action
         institutional_direction = institutional_context.direction
-        if institutional_direction == "WAIT":
+        htf_matches = (
+            (action == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
+            or (action == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
+        )
+        if institutional_direction == "WAIT" or institutional_context.confidence_score < 60:
             action = "WAIT"
             setup_quality = "WAIT"
             win_probability = 0
@@ -2499,6 +2503,11 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
                 f"Institutional gate: {institutional_direction} context conflicts "
                 f"with the legacy {legacy_action} setup"
             )
+        elif not htf_matches:
+            action = "WAIT"
+            setup_quality = "WAIT"
+            win_probability = 0
+            wait_reason = "Institutional gate: higher-timeframe direction is not aligned"
 
     return MarketAnalysis(
         price=price, timeframe=timeframe,
@@ -2521,7 +2530,7 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         market_structure=mkt_structure,
         choch=choch,
         win_probability=win_probability,
-        directional_indication=direction,
+        directional_indication=institutional_context.direction,
         confluence_list=confluence_list,
         tp3=tp3,
         fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,
@@ -2544,12 +2553,12 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         structure_detail=structure_detail,
         bos=bos,
         liquidity_evidence=liquidity_evidence,
-        fvg_direction=fvg_dir,
-        fvg_top=fvg_top,
-        fvg_bottom=fvg_bot,
-        order_block_direction=ob_direction,
-        order_block_high=ob_high,
-        order_block_low=ob_low,
+        fvg_direction=institutional_context.smc.get("fair_value_gap", "NONE"),
+        fvg_top=institutional_context.smc.get("fvg_zone", {}).get("top", 0.0),
+        fvg_bottom=institutional_context.smc.get("fvg_zone", {}).get("bottom", 0.0),
+        order_block_direction=institutional_context.smc.get("order_block_direction", "NONE"),
+        order_block_high=institutional_context.smc.get("order_block", {}).get("high", 0.0),
+        order_block_low=institutional_context.smc.get("order_block", {}).get("low", 0.0),
         candle_evidence=candle_evidence,
         buying_pressure=buying_pressure,
         selling_pressure=selling_pressure,
@@ -2560,8 +2569,8 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         supertrend_direction=st_direction,
         cci_value=cci,
         vwap=vwap,
-        chart_pattern=chart_pat_cls,
-        chart_pattern_signal=chart_pat_sig,
+        chart_pattern="None",
+        chart_pattern_signal="NEUTRAL",
         market_regime=market_regime_v,
         hidden_divergence=hidden_div,
         bb_bandwidth=bb_bw,
@@ -2584,15 +2593,15 @@ async def analyze_multi_timeframe(
     mode: str = None,
     timeframes: Optional[List[str]] = None,
 ) -> dict:
-    """Analyze W1→M5 independently, then produce one guarded final bias.
+    """Analyze Daily → 4H → 1H → 15M in institutional order.
 
-    The returned ``analyses`` mapping preserves each timeframe's complete
-    evidence.  The final decision is weighted toward higher timeframes; a
-    lower-timeframe disagreement is ignored unless that timeframe reports a
-    valid CHoCH or MSS.
+    A final bias is emitted only when every required timeframe has real data,
+    the same directional framework result, and a score of at least 60/100.
+    Lower-timeframe evidence cannot override a higher-timeframe conflict.
     """
-    requested = list(timeframes or ("W1", "D1", "H4", "H1", "M15", "M5"))
-    requested = [tf for tf in requested if tf in HTF_MAP or tf == "MN1"]
+    framework_order = ("D1", "H4", "H1", "M15")
+    requested_input = list(timeframes or framework_order)
+    requested = [tf for tf in framework_order if tf in requested_input]
     results = await asyncio.gather(
         *(analyze(tf, mode=mode) for tf in requested),
         return_exceptions=True,
@@ -2604,40 +2613,53 @@ async def analyze_multi_timeframe(
     if not analyses:
         raise RuntimeError("No timeframe produced a usable analysis")
 
-    weights = {"W1": 3.0, "D1": 2.7, "H4": 2.2, "H1": 1.8, "M15": 1.2, "M5": 0.8}
-    weighted = 0.0
-    weight_total = 0.0
-    for tf, analysis in analyses.items():
-        weight = weights.get(tf, 1.0)
-        # Real OHLCV is required for a final institutional bias. Simulated
-        # candles remain useful for diagnostics but cannot create a trade.
-        if analysis.is_simulated:
-            continue
-        weighted += (analysis.bullish_probability - analysis.bearish_probability) / 100 * weight
-        weight_total += weight
+    usable = [
+        analyses[tf] for tf in requested
+        if tf in analyses and not analyses[tf].is_simulated
+    ]
+    directions = [
+        (analysis.institutional_report or {}).get("direction", "WAIT")
+        for analysis in usable
+    ]
+    scores = [analysis.confidence_score for analysis in usable]
+    aligned = (
+        len(usable) == len(requested) == len(framework_order)
+        and directions
+        and directions[0] in ("BUY", "SELL")
+        and all(direction == directions[0] for direction in directions)
+        and all(score >= 60 for score in scores)
+    )
+    final_direction = directions[0] if aligned else "WAIT"
+    final_score = round(sum(scores) / len(scores)) if scores else 0
+    final_score = final_score if aligned else min(59, final_score)
+    if final_direction == "BUY":
+        final_bias = "Strong Buy" if final_score >= 80 else "Buy"
+    elif final_direction == "SELL":
+        final_bias = "Strong Sell" if final_score >= 80 else "Sell"
+    else:
+        final_bias = "Neutral"
 
-    normalized = weighted / weight_total if weight_total else 0.0
-    final_bias = "BUY" if normalized > 0.12 else "SELL" if normalized < -0.12 else "WAIT"
     reversal_tfs = {
         tf for tf, analysis in analyses.items()
         if analysis.choch != "NONE"
         or analysis.bos in ("BULLISH_BOS", "BEARISH_BOS")
         or analysis.institutional_report.get("market_structure", {}).get("mss") != "NONE"
     }
-    htf_actions = [analyses[tf].action for tf in ("W1", "D1", "H4") if tf in analyses and analyses[tf].action in ("BUY", "SELL")]
-    if htf_actions and final_bias in ("BUY", "SELL"):
-        dominant = "BUY" if htf_actions.count("BUY") > htf_actions.count("SELL") else "SELL" if htf_actions.count("SELL") > htf_actions.count("BUY") else "WAIT"
-        if dominant in ("BUY", "SELL") and dominant != final_bias:
-            final_bias = "WAIT"
-    bullish = round(max(1, min(99, 50 + normalized * 45))) if weight_total else 50
+    bullish = (
+        50 + final_score // 2 if final_direction == "BUY"
+        else 50 - final_score // 2 if final_direction == "SELL"
+        else 50
+    )
     return {
         "analyses": analyses,
         "final_bias": final_bias,
+        "final_direction": final_direction,
         "bullish_probability": bullish,
         "bearish_probability": 100 - bullish,
-        "confidence_score": round(abs(bullish - (100 - bullish)) * .9),
+        "confidence_score": final_score,
         "reversal_timeframes": sorted(reversal_tfs),
-        "lower_timeframe_rule": "Lower timeframe disagreement requires CHoCH/BOS/MSS; otherwise higher-timeframe bias wins.",
+        "framework_order": list(framework_order),
+        "lower_timeframe_rule": "Daily → H4 → H1 → M15 must align; mixed evidence remains Neutral / No Trade.",
     }
 
 

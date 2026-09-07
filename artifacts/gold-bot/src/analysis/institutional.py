@@ -485,74 +485,310 @@ class InstitutionalContext:
     data_quality: str = "REAL_OHLCV"
 
 
+CORE_CANDLE_PATTERNS = {
+    "Bullish Engulfing": "BUY",
+    "Bearish Engulfing": "SELL",
+    "Hammer": "BUY",          # bullish pin-bar confirmation
+    "Shooting Star": "SELL",  # bearish pin-bar confirmation
+    "Hanging Man": "SELL",    # bearish pin-bar confirmation
+}
+
+
+def _core_candle_signal(candles: Sequence[str]) -> tuple[str, str]:
+    """Return only the requested candle confirmation signal.
+
+    Doji is deliberately neutral: it can confirm a reaction that already has
+    structural direction, but it must never create a directional setup.
+    """
+    for name in reversed(list(candles or [])):
+        signal = CORE_CANDLE_PATTERNS.get(name)
+        if signal:
+            return signal, name
+    if "Doji" in candles:
+        return "NEUTRAL", "Doji"
+    return "NEUTRAL", "None"
+
+
+def _valid_order_block(opens, highs, lows, closes, atr, direction: str) -> dict[str, Any]:
+    """Find an observable opposing candle before a displacement move."""
+    n = len(closes)
+    if n < 8 or direction not in ("BUY", "SELL"):
+        return {"direction": "NONE", "freshness": "NONE", "reaction": "NONE"}
+
+    start = max(1, n - 35)
+    for i in range(n - 2, start - 1, -1):
+        if direction == "BUY" and closes[i] >= opens[i]:
+            continue
+        if direction == "SELL" and closes[i] <= opens[i]:
+            continue
+        future = closes[i + 1:]
+        if direction == "BUY":
+            displaced = max(future, default=0) >= highs[i] + max(atr * 0.6, 0.01)
+        else:
+            displaced = min(future, default=float("inf")) <= lows[i] - max(atr * 0.6, 0.01)
+        if not displaced:
+            continue
+
+        zone_low = round(lows[i], 2)
+        zone_high = (
+            round(max(opens[i], closes[i]), 2)
+            if direction == "BUY"
+            else round(highs[i], 2)
+        )
+        later_closes = closes[i + 1:]
+        mitigated = (
+            any(close <= zone_low for close in later_closes)
+            if direction == "BUY"
+            else any(close >= zone_high for close in later_closes)
+        )
+        return {
+            "direction": "BULLISH" if direction == "BUY" else "BEARISH",
+            "low": zone_low,
+            "high": zone_high,
+            "freshness": "MITIGATED" if mitigated else "FRESH",
+            "reaction": "MITIGATED" if mitigated else "UNTESTED",
+        }
+    return {"direction": "NONE", "freshness": "NONE", "reaction": "NONE"}
+
+
+def _unfilled_fvg(highs, lows, closes, atr, lookback: int = 30) -> dict[str, Any]:
+    """Return the latest three-candle imbalance that remains unfilled."""
+    n = len(closes)
+    if n < 4:
+        return {"direction": "NONE", "filled": False}
+    for i in range(n - 1, max(2, n - lookback) - 1, -1):
+        if lows[i] > highs[i - 2] + max(atr * 0.05, 0.01):
+            bottom, top, direction = highs[i - 2], lows[i], "BULLISH"
+        elif highs[i] < lows[i - 2] - max(atr * 0.05, 0.01):
+            bottom, top, direction = highs[i], lows[i - 2], "BEARISH"
+        else:
+            continue
+        filled = any(
+            (lows[j] <= bottom if direction == "BULLISH" else highs[j] >= top)
+            for j in range(i + 1, n)
+        )
+        if not filled:
+            return {
+                "direction": direction,
+                "bottom": round(bottom, 2),
+                "top": round(top, 2),
+                "filled": False,
+                "reaction": "IN_ZONE" if bottom <= closes[-1] <= top else "AWAY",
+            }
+    return {"direction": "NONE", "filled": False}
+
+
+def _supply_demand_zones(highs, lows, closes, atr, lookback: int = 40) -> dict[str, Any]:
+    """Describe recent structural demand and supply zones."""
+    if not closes:
+        return {"demand": {}, "supply": {}}
+    high = max(highs[-lookback:])
+    low = min(lows[-lookback:])
+    width = max(atr * 0.6, 0.5)
+    price = closes[-1]
+    return {
+        "demand": {
+            "low": round(low, 2),
+            "high": round(min(low + width, high), 2),
+            "strength": "STRUCTURAL",
+            "freshness": "RECENT",
+            "respected": price >= low,
+        },
+        "supply": {
+            "low": round(max(high - width, low), 2),
+            "high": round(high, 2),
+            "strength": "STRUCTURAL",
+            "freshness": "RECENT",
+            "respected": price <= high,
+        },
+    }
+
+
+def _framework_scores(structure: dict[str, Any], smc: dict[str, Any],
+                      candles: Sequence[str]) -> tuple[
+                          dict[str, int], dict[str, list[str]], dict[str, dict[str, int]]
+                      ]:
+    """Score only the six requested institutional evidence layers."""
+    scores = {"BUY": 0, "SELL": 0}
+    evidence = {"BUY": [], "SELL": []}
+    components = {
+        "BUY": {
+            "trend_alignment": 0,
+            "market_structure": 0,
+            "liquidity_confirmation": 0,
+            "order_block_reaction": 0,
+            "fair_value_gap_confirmation": 0,
+            "candlestick_confirmation": 0,
+        },
+        "SELL": {
+            "trend_alignment": 0,
+            "market_structure": 0,
+            "liquidity_confirmation": 0,
+            "order_block_reaction": 0,
+            "fair_value_gap_confirmation": 0,
+            "candlestick_confirmation": 0,
+        },
+    }
+    trend = structure.get("trend")
+    bos = structure.get("bos")
+    choch = structure.get("choch")
+    candle_signal, candle_name = _core_candle_signal(candles)
+
+    for direction, trend_name, bos_name, choch_name in (
+        ("BUY", "BULLISH", "BULLISH_BOS", "BULLISH_CHOCH"),
+        ("SELL", "BEARISH", "BEARISH_BOS", "BEARISH_CHOCH"),
+    ):
+        if trend == trend_name:
+            components[direction]["trend_alignment"] = 25
+            evidence[direction].append("Overall trend aligned")
+        if bos == bos_name:
+            components[direction]["market_structure"] = 25
+            evidence[direction].append("Confirmed BOS")
+        elif choch == choch_name:
+            components[direction]["market_structure"] = 20
+            evidence[direction].append("CHoCH detected")
+        elif trend == trend_name:
+            components[direction]["market_structure"] = 15
+            evidence[direction].append("HH/HL or LH/LL structure aligned")
+
+        sweep = smc.get("liquidity_sweep")
+        if (direction == "BUY" and sweep == "BULLISH") or (direction == "SELL" and sweep == "BEARISH"):
+            components[direction]["liquidity_confirmation"] = 20
+            evidence[direction].append("Liquidity sweep confirmed")
+
+        ob = smc.get("order_block", {})
+        if isinstance(ob, dict) and ob.get("direction") == ("BULLISH" if direction == "BUY" else "BEARISH"):
+            if ob.get("freshness") == "FRESH":
+                components[direction]["order_block_reaction"] = 15
+                evidence[direction].append("Fresh order block")
+            elif ob.get("freshness") == "MITIGATED":
+                components[direction]["order_block_reaction"] = 5
+                evidence[direction].append("Mitigated order block")
+
+        fvg = smc.get("fvg", {})
+        if isinstance(fvg, dict) and fvg.get("direction") == ("BULLISH" if direction == "BUY" else "BEARISH") and not fvg.get("filled", True):
+            components[direction]["fair_value_gap_confirmation"] = 10
+            evidence[direction].append("Unfilled FVG")
+
+        if candle_signal == direction:
+            components[direction]["candlestick_confirmation"] = 5
+            evidence[direction].append(f"{candle_name} confirmation")
+        scores[direction] = sum(components[direction].values())
+    return scores, evidence, components
+
+
 def build_context(data, timeframe: str, intermarket: Mapping[str, Any] | None = None) -> InstitutionalContext:
     opens, highs, lows, closes, volumes = map(list, (data.opens, data.highs, data.lows, data.closes, data.volumes))
     price, atr = float(data.price), _atr(highs, lows, closes)
     structure = _structure(highs, lows, closes, atr)
     levels = _levels(highs, lows, closes, price)
-    smc = _smc(opens, highs, lows, closes, volumes, atr, structure)
+    raw_smc = _smc(opens, highs, lows, closes, volumes, atr, structure)
     volume = _volume(opens, highs, lows, closes, volumes, atr)
     volatility = _volatility(highs, lows, closes)
     momentum = _momentum(closes, highs, lows)
-    candles, charts = detect_candles(opens, highs, lows, closes), detect_chart_patterns(highs, lows, closes, atr)
-    trend_score = {"BULLISH": 1.0, "BEARISH": -1.0}.get(structure["trend"], 0.0)
-    score = {"trend": trend_score, "structure": trend_score + (0.35 if structure["bos"] == "BULLISH_BOS" else -0.35 if structure["bos"] == "BEARISH_BOS" else 0),
-             "liquidity": .35 if smc["liquidity_sweep"] == "BULLISH" else -.35 if smc["liquidity_sweep"] == "BEARISH" else 0,
-             "order_block": .25 if smc["order_block"] == "BULLISH" else -.25 if smc["order_block"] == "BEARISH" else 0,
-             "fvg": .2 if smc["fair_value_gap"] == "BULLISH" else -.2 if smc["fair_value_gap"] == "BEARISH" else 0,
-             "candles": sum(.12 if _pattern_direction(x) == "BUY" else -.12 if _pattern_direction(x) == "SELL" else 0 for x in candles),
-             "momentum": .35 if momentum["momentum_shift"] == "BULLISH" else -.35 if momentum["momentum_shift"] == "BEARISH" else 0,
-             "volatility": -.15 if volatility["regime"] == "LOW" else 0}
-    if charts:
-        score["chart_pattern"] = .25 if any(_pattern_direction(x) == "BUY" for x in charts) else -.25
-    if intermarket:
-        score["intermarket"] = float(intermarket.get("gold_confirmation", 0.0))
-    total = sum(score.values())
-    direction = _direction(total, .25)
-    macro = _macro_context()
-    if macro["status"] == "HIGH_IMPACT_IMMINENT":
-        score["macro"] = -.4
+    all_candles = detect_candles(opens, highs, lows, closes)
+    # Classical chart patterns and low-value oscillator signals are retained in
+    # compatibility fields elsewhere, but never influence this decision layer.
+    candles = [name for name in all_candles if name in CORE_CANDLE_PATTERNS or name == "Doji"]
+    charts = []
+
+    buy_ob = _valid_order_block(opens, highs, lows, closes, atr, "BUY")
+    sell_ob = _valid_order_block(opens, highs, lows, closes, atr, "SELL")
+    if structure["trend"] == "BULLISH":
+        candidate_ob = buy_ob
+    elif structure["trend"] == "BEARISH":
+        candidate_ob = sell_ob
+    elif buy_ob.get("freshness") != "NONE" and sell_ob.get("freshness") == "NONE":
+        candidate_ob = buy_ob
+    elif sell_ob.get("freshness") != "NONE" and buy_ob.get("freshness") == "NONE":
+        candidate_ob = sell_ob
+    else:
+        candidate_ob = {"direction": "NONE", "freshness": "NONE", "reaction": "NONE"}
+    fvg = _unfilled_fvg(highs, lows, closes, atr)
+    supply_demand = _supply_demand_zones(highs, lows, closes, atr)
+    smc = dict(raw_smc)
+    smc["order_block"] = candidate_ob
+    smc["fvg"] = fvg
+    smc["fair_value_gap"] = fvg.get("direction", "NONE")
+    smc["fvg_zone"] = {
+        "bottom": fvg.get("bottom", 0.0),
+        "top": fvg.get("top", 0.0),
+        "filled": fvg.get("filled", False),
+    }
+    smc["supply_demand"] = supply_demand
+
+    scores, evidence, component_scores = _framework_scores(structure, smc, candles)
+    best_direction = (
+        "BUY" if scores["BUY"] > scores["SELL"]
+        else "SELL" if scores["SELL"] > scores["BUY"]
+        else "WAIT"
+    )
+    best_score = max(scores.values())
+    direction = best_direction if best_direction in ("BUY", "SELL") and best_score >= 60 else "WAIT"
+    opposing_score = scores["SELL" if direction == "BUY" else "BUY"] if direction != "WAIT" else 0
+    if direction in ("BUY", "SELL") and best_score - opposing_score < 10:
         direction = "WAIT"
-    bull = round(max(1, min(99, 50 + total * 25)))
+
+    scored_direction = direction if direction in ("BUY", "SELL") else best_direction
+    score = component_scores.get(scored_direction, {
+        "trend_alignment": 0,
+        "market_structure": 0,
+        "liquidity_confirmation": 0,
+        "order_block_reaction": 0,
+        "fair_value_gap_confirmation": 0,
+        "candlestick_confirmation": 0,
+    })
+    macro = _macro_context()
+    signed_score = scores["BUY"] - scores["SELL"]
+    bull = round(max(1, min(99, 50 + signed_score * 0.45)))
     bear = 100 - bull
-    if direction == "BUY":
-        bull, bear = max(bull, 55), min(bear, 45)
-    elif direction == "SELL":
-        bear, bull = max(bear, 55), min(bull, 45)
-    confidence = round(abs(bull - bear) * .9)
-    reasons = []
-    against = []
-    if structure["trend"] in ("BULLISH", "BEARISH"):
-        reasons.append(f"External structure is {structure['trend'].lower()} with {structure['labels'][-2:]}")
-    if structure["bos"] != "NONE":
-        reasons.append(structure["bos"].replace("_", " "))
-    if smc["liquidity_sweep"] != "NONE":
-        reasons.append(f"{smc['liquidity_sweep'].lower()} liquidity sweep")
-    if candles:
-        reasons.append("Candles: " + ", ".join(candles[:3]))
-    if volatility["regime"] == "LOW":
-        against.append("Low-volatility regime; breakout follow-through is unconfirmed")
+    confidence = best_score
+    reasons = evidence[direction][:8] if direction in ("BUY", "SELL") else [
+        "No directional alignment across the required institutional layers"
+    ]
+    against = [
+        f"{name.replace('_', ' ').title()} not confirmed"
+        for name, points in score.items() if points == 0
+    ]
     if structure["trend"] in ("RANGING", "TRANSITION"):
-        against.append("Choppy/transitioning structure")
+        against.append("Market structure is ranging or transitioning")
     if macro["status"] == "HIGH_IMPACT_IMMINENT":
         against.append("High-impact macro event within 60 minutes")
     if not intermarket:
         against.append("Intermarket confirmation unavailable")
     support = levels.get("range_boundaries", {}).get("low", price - atr)
     resistance = levels.get("range_boundaries", {}).get("high", price + atr)
-    zone = {"low": round(max(support, price - atr * .8), 2), "high": round(min(resistance, price + atr * .8), 2)}
-    rr = round(max(0.0, (resistance - price) / max(price - support, atr * .5)), 2) if direction == "BUY" else round(max(0.0, (price - support) / max(resistance - price, atr * .5)), 2)
-    if rr < 1.5:
+    if direction == "BUY":
+        zone = supply_demand["demand"]
+        stop = round(zone.get("low", support) - atr * 0.2, 2)
+        target = round(max(resistance, price + atr * 2), 2)
+        rr = round(max(0.0, (target - price) / max(price - stop, atr * .5)), 2)
+    elif direction == "SELL":
+        zone = supply_demand["supply"]
+        stop = round(zone.get("high", resistance) + atr * 0.2, 2)
+        target = round(min(support, price - atr * 2), 2)
+        rr = round(max(0.0, (price - target) / max(stop - price, atr * .5)), 2)
+    else:
+        zone = supply_demand["demand"] if scores["BUY"] >= scores["SELL"] else supply_demand["supply"]
+        stop, target, rr = 0.0, 0.0, 0.0
+    if direction in ("BUY", "SELL") and rr < 1.5:
         against.append(f"Projected R:R {rr:.2f} is below institutional minimum")
         direction = "WAIT"
-    risk = "LOW" if confidence >= 55 and not against else "MEDIUM" if confidence >= 35 else "HIGH"
+    risk = "LOW" if confidence >= 80 and direction in ("BUY", "SELL") else "MEDIUM" if confidence >= 60 else "HIGH"
+    invalidating = (
+        [f"Close below {stop:.2f}" if direction == "BUY" else f"Close above {stop:.2f}",
+         "Higher-timeframe structure changes"]
+        if direction in ("BUY", "SELL")
+        else ["Wait for all four timeframes to align", "A confirmed BOS or CHoCH is required"]
+    )
+    smc["order_block_direction"] = candidate_ob.get("direction", "NONE")
+    smc["order_block_freshness"] = candidate_ob.get("freshness", "NONE")
     return InstitutionalContext(
         timeframe=timeframe, direction=direction, bullish_probability=bull, bearish_probability=bear,
         confidence_score=max(0, min(100, confidence)), risk_level=risk,
         reasons_supporting=reasons[:8], reasons_against=against[:8],
-        invalidating_conditions=[f"Close below {support:.2f}" if direction == "BUY" else f"Close above {resistance:.2f}", "High-impact event becomes imminent", "Higher-timeframe bias changes"],
-        best_entry_zone=zone, suggested_stop_loss=round(support - atr * .2 if direction == "BUY" else resistance + atr * .2, 2),
-        suggested_take_profit=round(resistance, 2) if direction == "BUY" else round(support, 2), recommended_rr=rr,
+        invalidating_conditions=invalidating,
+        best_entry_zone=zone, suggested_stop_loss=stop, suggested_take_profit=target, recommended_rr=rr,
         market_structure=structure, support_resistance=levels, candlesticks=candles, chart_patterns=charts,
         smc=smc, wyckoff=_wyckoff(structure, volume, closes), elliott_wave=_elliott(structure, closes),
         fibonacci=_fibonacci(highs, lows), volume=volume, volatility=volatility, momentum=momentum,
@@ -572,18 +808,40 @@ def combine_contexts(contexts: Mapping[str, InstitutionalContext]) -> dict[str, 
     usable = [(tf, c) for tf, c in contexts.items() if c and c.data_quality == "REAL_OHLCV"]
     if not usable:
         return {"direction": "WAIT", "confidence_score": 0, "bullish_probability": 50, "bearish_probability": 50, "reason": "No real multi-timeframe data available"}
-    score = 0.0
-    total_weight = 0.0
     rows = {}
     for tf, c in usable:
-        weight = TF_WEIGHT.get(tf, 1.0)
-        score += (c.bullish_probability - c.bearish_probability) / 100 * weight
-        total_weight += weight
-        rows[tf] = {"direction": c.direction, "bullish_probability": c.bullish_probability, "bearish_probability": c.bearish_probability, "confidence_score": c.confidence_score}
-    normalized = score / max(total_weight, 1)
-    direction = "BUY" if normalized > .12 else "SELL" if normalized < -.12 else "WAIT"
-    bull = round(max(1, min(99, 50 + normalized * 45)))
-    return {"direction": direction, "bullish_probability": bull, "bearish_probability": 100 - bull, "confidence_score": round(abs(bull - (100 - bull)) * .9), "timeframes": rows, "reason": "Weighted W1→M5 consensus; lower timeframes cannot overrule higher-timeframe structure without CHoCH/MSS"}
+        rows[tf] = {
+            "direction": c.direction,
+            "bullish_probability": c.bullish_probability,
+            "bearish_probability": c.bearish_probability,
+            "confidence_score": c.confidence_score,
+            "score_breakdown": c.score_breakdown,
+        }
+    directions = [c.direction for _, c in usable]
+    aligned = (
+        bool(directions)
+        and directions[0] in ("BUY", "SELL")
+        and all(direction == directions[0] for direction in directions)
+    )
+    confidence = (
+        min((c.confidence_score for _, c in usable), default=0)
+        if aligned
+        else min(59, max((c.confidence_score for _, c in usable), default=0))
+    )
+    direction = directions[0] if aligned and confidence >= 60 else "WAIT"
+    bull = (
+        50 + confidence // 2 if direction == "BUY"
+        else 50 - confidence // 2 if direction == "SELL"
+        else 50
+    )
+    return {
+        "direction": direction,
+        "bullish_probability": max(1, min(99, bull)),
+        "bearish_probability": max(1, min(99, 100 - bull)),
+        "confidence_score": confidence,
+        "timeframes": rows,
+        "reason": "Daily → H4 → H1 → M15 alignment is required; mixed evidence remains WAIT",
+    }
 
 
 _intermarket_cache: tuple[dict[str, Any], float] = ({}, 0.0)
