@@ -1157,6 +1157,8 @@ async def _send_setup_forming_alert(
     alert_title = (
         "⚠️  EARLY BEARISH WARNING"
         if early_warning and forming_dir == "SELL"
+        else "⚠️  EARLY BULLISH WARNING"
+        if early_warning and forming_dir == "BUY"
         else "⚠️  SETUP FORMING"
     )
     risk_line = (
@@ -2341,6 +2343,22 @@ async def _check_and_alert_once(
                     )
                 ):
                     forming_dir = "SELL"
+                    early_warning = True
+                elif (
+                    # Symmetric M15 early-warning path for bullish setups.
+                    # Confirmed BUY gating remains unchanged.
+                    tf == "M15"
+                    and a.htf_bias == "Bullish"
+                    and a.buy_votes >= 2
+                    and a.buy_votes >= a.sell_votes
+                    and a.adx >= 10
+                    and any(
+                        ind.name in {"EMA Stack", "Candle"}
+                        and ind.signal == "BUY"
+                        for ind in a.indicators
+                    )
+                ):
+                    forming_dir = "BUY"
                     early_warning = True
                 if forming_dir:
                     active_trade = next(
