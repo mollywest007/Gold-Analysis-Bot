@@ -452,7 +452,15 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
     lines += ["", "  Not financial advice.", "</pre>"]
-    return "\n".join(lines)
+    # Every line between the wrapper tags is analysis-derived text. Escape it
+    # as a single boundary so unexpected values from market/news feeds cannot
+    # become Telegram HTML tags and make the whole card fail to send.
+    escaped_lines = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped_lines))
 
 
 # ─── RECOMMEND CARD ───────────────────────────────────────────────────────────
