@@ -43,7 +43,9 @@
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
-      "forming_alert_sent": {},
+      "forming_alert_sent": {
+        "M15": "SELL"
+      },
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [

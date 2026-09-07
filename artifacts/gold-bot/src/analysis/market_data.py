@@ -37,6 +37,13 @@ MIN_CANDLES = 30
 
 # ─── TTL Cache ────────────────────────────────────────────────────────────────
 OHLCV_TTL  = 5 * 60   # 5 minutes
+# Fast alert timeframes need fresher candle context than report commands.
+# M15 remains based on the provider's native candles, but a one-minute cache
+# prevents a fast move from being evaluated against the same history for most
+# of the candle.
+OHLCV_TTL_BY_TIMEFRAME: Dict[str, int] = {
+    "M15": 60,
+}
 PRICE_TTL  = 30       # 30 seconds
 MAX_SOURCE_SPREAD = 75.0
 MAX_FUTURES_SPOT_DEVIATION = 100.0
@@ -363,12 +370,13 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
 
 
 async def fetch_ohlcv(timeframe: str) -> Optional["OHLCVData"]:
-    """Fetch with 5-minute TTL cache per timeframe. Falls back to simulation if YF fails."""
+    """Fetch with a timeframe-aware TTL; falls back to simulation if YF fails."""
     cached_data = None
+    cache_ttl = OHLCV_TTL_BY_TIMEFRAME.get(timeframe, OHLCV_TTL)
     async with _cache_lock:
         if timeframe in _ohlcv_cache:
             cached_data, cached_ts = _ohlcv_cache[timeframe]
-            if (time.time() - cached_ts) < OHLCV_TTL:
+            if (time.time() - cached_ts) < cache_ttl:
                 logger.debug(f"OHLCV cache hit [{timeframe}]")
             else:
                 cached_data = None

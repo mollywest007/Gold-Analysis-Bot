@@ -1125,6 +1125,7 @@ async def _send_setup_forming_alert(
     bot, subs: Set[int], a, tf: str, forming_dir: str,
     state: AccountAlertState | None = None,
     *, lock_key: str | None = None, stream_label: str = "",
+    early_warning: bool = False,
 ) -> None:
     """
     Lightweight pre-signal notice — fires when 3 indicators agree but the full
@@ -1153,17 +1154,28 @@ async def _send_setup_forming_alert(
         watch_line = f"  Watch OTE    : {ote_low:,.2f} – {ote_high:,.2f}\n"
     else:
         watch_line = ""
+    alert_title = (
+        "⚠️  EARLY BEARISH WARNING"
+        if early_warning and forming_dir == "SELL"
+        else "⚠️  SETUP FORMING"
+    )
+    risk_line = (
+        "  Risk     : HIGH — early warning only\n"
+        if early_warning
+        else ""
+    )
     text = (
-        f"<pre>⚠️  SETUP FORMING  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
+        f"<pre>{alert_title}  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
         f"{'─' * 34}\n"
         f"{arrow}  Direction : {forming_dir}\n"
         f"   Price    : {price:,.2f}\n"
         f"   Votes    : {votes}/8 core indicators agree\n"
         f"   ADX      : {adx:.1f}   Conf: {confidence}%\n"
         f"   HTF      : {htf_bias}{kz_tag}\n"
+        f"{risk_line}"
         f"{watch_line}"
         f"{'─' * 34}\n"
-        f"  Not a signal yet. Watch for entry.\n"
+        f"  Not a confirmed signal. Watch for entry.\n"
         f"  Wait for confirmation before entering.\n"
         f"</pre>"
     )
@@ -2306,10 +2318,30 @@ async def _check_and_alert_once(
             # Only fires when there is no active lock on this TF.
             if not active_signal.get(state_key):
                 forming_dir = None
+                early_warning = False
                 if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
                     forming_dir = "BUY"
                 elif a.sell_votes >= 3 and a.sell_votes > a.buy_votes and a.adx >= 15:
                     forming_dir = "SELL"
+                elif (
+                    # M15 early-warning path: do not weaken the confirmed
+                    # signal gate, but warn when bearish HTF structure and
+                    # two key bearish indicators are present. This catches
+                    # fast moves like EMA/candle deterioration before ADX and
+                    # the full vote count catch up.
+                    tf == "M15"
+                    and a.htf_bias == "Bearish"
+                    and a.sell_votes >= 2
+                    and a.sell_votes >= a.buy_votes
+                    and a.adx >= 10
+                    and any(
+                        ind.name in {"EMA Stack", "Candle"}
+                        and ind.signal == "SELL"
+                        for ind in a.indicators
+                    )
+                ):
+                    forming_dir = "SELL"
+                    early_warning = True
                 if forming_dir:
                     active_trade = next(
                         (
@@ -2340,6 +2372,7 @@ async def _check_and_alert_once(
                             state=state,
                             lock_key=state_key,
                             stream_label=stream_label,
+                            early_warning=early_warning,
                         )
                 else:
                     # Direction collapsed — reset forming state so next build-up fires fresh
