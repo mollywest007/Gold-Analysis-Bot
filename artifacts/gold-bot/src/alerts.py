@@ -706,18 +706,25 @@ def _should_send(
     # opposite-direction signal is intentionally allowed through to _process:
     # that path sends the user a momentum-shift warning instead of silently
     # dropping the change in bias.  It must not open a second trade.
-    active_trade = next(
-        (
-            t for t in trade_tracker.get_all_trades(account_id)
-            if trade_tracker.is_active_trade(t)
-            and t.get("timeframe") == tf
-            and (
-                combined_stream_mode is None
-                or t.get("mode") == combined_stream_mode
-            )
-        ),
-        None,
-    )
+    # The no-account path is retained only for legacy maintenance/test callers.
+    # It has no ownership context, so consulting every persisted account here
+    # can suppress an otherwise independent legacy signal because another
+    # account happens to have the same timeframe open. Production scans always
+    # pass the owning account ID.
+    active_trade = None
+    if account_id is not None:
+        active_trade = next(
+            (
+                t for t in trade_tracker.get_all_trades(account_id)
+                if trade_tracker.is_active_trade(t)
+                and t.get("timeframe") == tf
+                and (
+                    combined_stream_mode is None
+                    or t.get("mode") == combined_stream_mode
+                )
+            ),
+            None,
+        )
     if active_trade:
         if active_trade.get("direction") == action:
             logger.info(
@@ -1918,18 +1925,10 @@ async def _check_and_alert_once(
     now_ts   = time.time()
 
     # Market transitions are broadcast once by check_and_alert() so every
-    # subscribed account receives the same market-wide notice. The legacy
-    # direct-call path retains its historical behavior for maintenance/tests.
+    # subscribed account receives the same market-wide notice. The no-account
+    # helper is retained for legacy maintenance/test callers and must not emit
+    # a second transition notice beside the alert being tested.
     if not account_scan:
-        if _prev_market_open is not None and subs:
-            if not _prev_market_open and now_open:
-                if (now_ts - _open_notif_sent_at) > NOTIF_COOLDOWN:
-                    _open_notif_sent_at = now_ts
-                    await _send_market_open_notification(bot, subs)
-            elif _prev_market_open and not now_open:
-                if (now_ts - _close_notif_sent_at) > NOTIF_COOLDOWN:
-                    _close_notif_sent_at = now_ts
-                    await _send_market_close_notification(bot, subs)
         _prev_market_open = now_open
 
     if not now_open:
@@ -2500,15 +2499,6 @@ async def _check_and_alert_once(
         }
         clean_signals = []
         for stream_label, state_key, tf, analysis_mode, a in sig_list:
-            if not _entry_price_is_currently_valid(a, current_price):
-                pending_signal.pop(state_key, None)
-                logger.warning(
-                    "[%s] Entry withheld — live price %.2f is no longer "
-                    "between the entry plan's stop and first target.",
-                    tf,
-                    current_price,
-                )
-                continue
             existing = all_open.get(state_key)
             if existing:
                 # An active trade owns its timeframe regardless of direction.
@@ -2537,10 +2527,24 @@ async def _check_and_alert_once(
                         f"[{tf}] Momentum shift already warned ({direction}) — suppressing repeat."
                     )
                 # Entry is held back — do not add to clean_signals
-            else:
-                clean_signals.append(
-                    (stream_label, state_key, tf, analysis_mode, a)
+                continue
+
+            # Only a new entry needs a complete, still-actionable price plan.
+            # Momentum-shift warnings above are informational and must still
+            # work with lightweight analysis objects that do not carry entry
+            # levels.
+            if not _entry_price_is_currently_valid(a, current_price):
+                pending_signal.pop(state_key, None)
+                logger.warning(
+                    "[%s] Entry withheld — live price %.2f is no longer "
+                    "between the entry plan's stop and first target.",
+                    tf,
+                    current_price,
                 )
+                continue
+            clean_signals.append(
+                (stream_label, state_key, tf, analysis_mode, a)
+            )
 
         sig_list = clean_signals
         if not sig_list:

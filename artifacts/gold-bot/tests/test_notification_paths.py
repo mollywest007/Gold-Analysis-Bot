@@ -1137,6 +1137,15 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                  return_value=[interval_trade],
              ), \
              patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
+             patch.object(
+                 market_hours,
+                 "market_status",
+                 return_value={
+                     "is_open": True,
+                     "status_text": "MARKET OPEN",
+                     "note": "Test session",
+                 },
+             ), \
              patch.object(alerts, "_save_signal_state"):
             await alerts._check_and_alert_once(context, account_id=123, state=state)
 
