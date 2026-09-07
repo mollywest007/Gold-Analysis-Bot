@@ -52,6 +52,20 @@ def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
     return [(mode, tf) for tf in get_user_mode_config(chat_id).scan_timeframes]
 
 
+def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:
+    """Resolve the selected stream profile for a single-timeframe analysis."""
+    mode = get_user_mode(chat_id)
+    if mode != COMBINED_MODE:
+        return mode
+    combined = get_combined_timeframes(chat_id)
+    return (
+        "intraday"
+        if timeframe == combined["interval"]
+        and timeframe != combined["scalp"]
+        else "scalp"
+    )
+
+
 def _settings_text(chat_id: int, cfg, *, change: str = "") -> str:
     if cfg.name == COMBINED_MODE:
         combined = get_combined_timeframes(chat_id)
@@ -305,16 +319,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text(_closed_text(), parse_mode="HTML",
                                                   reply_markup=kb)
                 elif command == "analyze":
-                    await query.edit_message_text("Analyzing all timeframes...", reply_markup=kb)
-                    # Sequential — see messages.py for explanation
-                    _analyses = []
-                    for _mode, _tf in _analysis_specs(chat_id):
-                        try:
-                            _analyses.append(await analyze(_tf, mode=_mode))
-                        except Exception as _e:
-                            logger.warning(f"analyze({_tf}) skipped: {_e}")
                     await query.edit_message_text(
-                        multi_timeframe_card(_analyses), parse_mode="HTML", reply_markup=kb
+                        f"Analyzing {tf}...", reply_markup=kb
+                    )
+                    a = await analyze(
+                        tf, mode=_analysis_mode_for_timeframe(chat_id, tf)
+                    )
+                    await query.edit_message_text(
+                        analysis_card(a, account_id=chat_id),
+                        parse_mode="HTML",
+                        reply_markup=kb,
                     )
 
                 elif command == "signal":
@@ -420,18 +434,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                           reply_markup=kb)
 
     elif data.startswith("analyze:"):
-        await query.edit_message_text("Analyzing all timeframes…", reply_markup=kb)
+        await query.edit_message_text(f"Analyzing {tf}…", reply_markup=kb)
         try:
-            results = await asyncio.gather(
-                *[
-                        analyze(tf_name, mode=_mode)
-                    for _mode, tf_name in _analysis_specs(chat_id)
-                ],
-                return_exceptions=True,
+            a = await analyze(
+                tf, mode=_analysis_mode_for_timeframe(chat_id, tf)
             )
-            analyses = [r for r in results if not isinstance(r, Exception)]
-            await query.edit_message_text(multi_timeframe_card(analyses),
-                                          parse_mode="HTML", reply_markup=kb)
+            await query.edit_message_text(
+                analysis_card(a, account_id=chat_id),
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
         except Exception as e:
             logger.error(f"callback analyze: {e}")
             await query.edit_message_text("Analysis failed. Please try again.",
