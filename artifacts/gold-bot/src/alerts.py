@@ -204,6 +204,11 @@ SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
 # Tracks the last "setup forming" pre-alert sent per TF — avoids repeat spam
 # Structure: { "M15": "BUY", "H1": "SELL", ... }
 _forming_alert_sent: Dict[str, str] = {}
+_forming_alert_last_sent: Dict[str, float] = {}
+
+# Re-notify if the same setup remains active long enough for a trader to miss
+# the first warning.  The direction lock still prevents 15-second spam.
+FORMING_ALERT_RETRY_SECONDS = 30 * 60
 
 # Tracks the last momentum-shift direction warned per TF — avoids re-sending
 # the same warning every 15s while the opposing trade is still open.
@@ -244,6 +249,7 @@ class AccountAlertState:
     tp_reanalysis_until: Dict[str, float] = field(default_factory=dict)
     tp_reanalysis_start_sent: Dict[str, bool] = field(default_factory=dict)
     forming_alert_sent: Dict[str, str] = field(default_factory=dict)
+    forming_alert_last_sent: Dict[str, float] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
     mode: str = ""
@@ -268,6 +274,7 @@ def _state_from_record(record: dict) -> AccountAlertState:
             for key, value in (record.get("tp_reanalysis_start_sent") or {}).items()
         },
         forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
+        forming_alert_last_sent=dict(record.get("forming_alert_last_sent") or {}),
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
         reminded_trade_ids={
             str(trade_id): set(milestones or [])
@@ -291,6 +298,7 @@ def _state_record(state: AccountAlertState) -> dict:
         "tp_reanalysis_until": state.tp_reanalysis_until,
         "tp_reanalysis_start_sent": state.tp_reanalysis_start_sent,
         "forming_alert_sent": state.forming_alert_sent,
+        "forming_alert_last_sent": state.forming_alert_last_sent,
         "momentum_shift_warned": state.momentum_shift_warned,
         "reminded_trade_ids": {
             trade_id: sorted(milestones)
@@ -1131,12 +1139,18 @@ async def _send_setup_forming_alert(
     Lightweight pre-signal notice — fires when 3 indicators agree but the full
     signal hasn't triggered yet. Gives the trader a heads-up to watch the chart
     and prepare a limit order, without committing to an entry.
-    Only fires once per direction per TF; resets when direction changes.
+    Fires once per direction per TF, then retries after a quiet period if the
+    same setup remains active so a missed Telegram warning is not lost.
     """
     forming_alert_sent = state.forming_alert_sent if state else _forming_alert_sent
+    forming_alert_last_sent = (
+        state.forming_alert_last_sent if state else _forming_alert_last_sent
+    )
     key = lock_key or tf
     if forming_alert_sent.get(key) == forming_dir:
-        return  # already warned this direction on this TF
+        last_sent = float(forming_alert_last_sent.get(key, 0.0) or 0.0)
+        if last_sent and time.time() - last_sent < FORMING_ALERT_RETRY_SECONDS:
+            return
 
     arrow = "📈" if forming_dir == "BUY" else "📉"
     kz_tag = f"  🔔 {a.kill_zone}" if getattr(a, "is_kill_zone", False) else ""
@@ -1144,6 +1158,7 @@ async def _send_setup_forming_alert(
     price = getattr(a, "price", 0.0)
     adx = getattr(a, "adx", 0.0)
     confidence = getattr(a, "confidence", 0)
+    institutional_score = getattr(a, "confidence_score", 0)
     htf_bias = getattr(a, "htf_bias", "Neutral")
     early_entry = getattr(a, "early_entry", 0.0) or getattr(a, "limit_entry", 0.0)
     ote_high = getattr(a, "ote_high", 0.0)
@@ -1172,7 +1187,8 @@ async def _send_setup_forming_alert(
         f"{arrow}  Direction : {forming_dir}\n"
         f"   Price    : {price:,.2f}\n"
         f"   Votes    : {votes}/8 core indicators agree\n"
-        f"   ADX      : {adx:.1f}   Conf: {confidence}%\n"
+        f"   ADX      : {adx:.1f}   Legacy conf: {confidence}%\n"
+        f"   Institutional score: {institutional_score}/100\n"
         f"   HTF      : {htf_bias}{kz_tag}\n"
         f"{risk_line}"
         f"{watch_line}"
@@ -1189,6 +1205,7 @@ async def _send_setup_forming_alert(
         _remove_dead_subscribers(dead)
     if delivered:
         forming_alert_sent[key] = forming_dir
+        forming_alert_last_sent[key] = time.time()
         logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
     else:
         logger.warning(
@@ -2287,7 +2304,8 @@ async def _check_and_alert_once(
 
         logger.info(
             f"[{tf}] scan: action={a.action} grade={a.setup_quality} "
-            f"conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
+            f"inst_score={getattr(a, 'confidence_score', 0)}/100 "
+            f"legacy_conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
         )
 
         if state_key in reanalysis_blocked:
