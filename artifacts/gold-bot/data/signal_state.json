@@ -46,6 +46,9 @@
       "forming_alert_sent": {
         "M15": "SELL"
       },
+      "forming_alert_last_sent": {
+        "M15": 1788854936.8282928
+      },
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
