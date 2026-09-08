@@ -358,6 +358,8 @@ def signal_card(a: MarketAnalysis) -> str:
 
 def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     ms = market_status()
+    institutional_report = getattr(a, "institutional_report", {}) or {}
+    framework_scores = institutional_report.get("score_breakdown", {}) or {}
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  FULL ANALYSIS         ║",
@@ -377,6 +379,19 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  Trend     : {a.trend}",
         f"  Momentum  : {a.momentum}",
         f"  ADX       : {a.adx:.1f}",
+        "",
+        "──────────────────────────────────",
+        "  INSTITUTIONAL SCORE",
+        "──────────────────────────────────",
+        f"  Earned    : {getattr(a, 'confidence_score', 0)}/100",
+        f"  Maximum   : 100/100",
+        f"  Bias      : {institutional_report.get('direction', 'WAIT')}",
+        f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
+        f"S {framework_scores.get('market_structure', 0)}/25 | "
+        f"L {framework_scores.get('liquidity_confirmation', 0)}/20",
+        f"              OB {framework_scores.get('order_block_reaction', 0)}/15 | "
+        f"FVG {framework_scores.get('fair_value_gap_confirmation', 0)}/10 | "
+        f"C {framework_scores.get('candlestick_confirmation', 0)}/5",
         "",
         "──────────────────────────────────",
         "  INDICATORS",
