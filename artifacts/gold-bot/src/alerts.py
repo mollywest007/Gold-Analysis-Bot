@@ -2339,6 +2339,11 @@ async def _check_and_alert_once(
             if not active_signal.get(state_key):
                 forming_dir = None
                 early_warning = False
+                institutional_report = getattr(a, "institutional_report", {}) or {}
+                institutional_structure = institutional_report.get(
+                    "market_structure", {}
+                ) or {}
+                institutional_smc = institutional_report.get("smc", {}) or {}
                 if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
                     forming_dir = "BUY"
                 elif a.sell_votes >= 3 and a.sell_votes > a.buy_votes and a.adx >= 15:
@@ -2363,6 +2368,21 @@ async def _check_and_alert_once(
                     forming_dir = "SELL"
                     early_warning = True
                 elif (
+                    # Institutional early-warning path: a fast structural move
+                    # can be actionable to watch even when legacy indicators
+                    # are tied or lagging.
+                    tf == "M15"
+                    and getattr(a, "htf_bias", "Neutral") == "Bearish"
+                    and a.adx >= 10
+                    and (
+                        institutional_structure.get("bos") == "BEARISH_BOS"
+                        or institutional_structure.get("mss") == "BEARISH_MSS"
+                    )
+                    and institutional_smc.get("fair_value_gap") == "BEARISH"
+                ):
+                    forming_dir = "SELL"
+                    early_warning = True
+                elif (
                     # Symmetric M15 early-warning path for bullish setups.
                     # Confirmed BUY gating remains unchanged.
                     tf == "M15"
@@ -2375,6 +2395,20 @@ async def _check_and_alert_once(
                         and ind.signal == "BUY"
                         for ind in a.indicators
                     )
+                ):
+                    forming_dir = "BUY"
+                    early_warning = True
+                elif (
+                    # Symmetric institutional early-warning path for a bullish
+                    # structural move before the legacy vote catches up.
+                    tf == "M15"
+                    and getattr(a, "htf_bias", "Neutral") == "Bullish"
+                    and a.adx >= 10
+                    and (
+                        institutional_structure.get("bos") == "BULLISH_BOS"
+                        or institutional_structure.get("mss") == "BULLISH_MSS"
+                    )
+                    and institutional_smc.get("fair_value_gap") == "BULLISH"
                 ):
                     forming_dir = "BUY"
                     early_warning = True
