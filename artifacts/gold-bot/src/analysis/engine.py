@@ -157,6 +157,9 @@ class MarketAnalysis:
     bullish_probability: int = 50
     bearish_probability: int = 50
     confidence_score: int = 0
+    legacy_direction: str = "WAIT"
+    legacy_confirmation: str = "NEUTRAL"
+    combined_direction: str = "WAIT"
     risk_level: str = "HIGH"
     reasons_supporting: List[str] = field(default_factory=list)
     reasons_against: List[str] = field(default_factory=list)
@@ -2471,43 +2474,103 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         else:
             setup_grade = "C"
 
-    # setup_quality is the grade of a confirmed/actionable signal. Keep the
-    # preliminary setup_grade separate so WAIT cards can still explain the
-    # quality of an indication that has not cleared the gates.
-    setup_quality = setup_grade if action in ("BUY", "SELL") else "WAIT"
+    # Merge the legacy indicators and institutional price-action framework into
+    # one decision.  The institutional score is the canonical evidence score;
+    # legacy direction is supporting confirmation, not a second independent
+    # trade engine.  A tied/neutral legacy result cannot veto valid institutional
+    # evidence, while a direct legacy conflict remains a hard safety stop.
+    legacy_confidence = confidence
+    legacy_direction = direction if direction in ("BUY", "SELL") else "WAIT"
+    institutional_direction = institutional_context.direction
+    if legacy_direction == institutional_direction and legacy_direction in ("BUY", "SELL"):
+        legacy_confirmation = "ALIGNED"
+    elif legacy_direction in ("BUY", "SELL") and institutional_direction in ("BUY", "SELL"):
+        legacy_confirmation = "CONFLICT"
+    else:
+        legacy_confirmation = "NEUTRAL"
 
-    # Final institutional gate.  The legacy indicator profile remains useful
-    # for continuity, but it may not emit a trade when the independent
-    # context engine sees a conflict, imminent macro event, poor R:R, or
-    # insufficient evidence.
+    htf_matches = (
+        (institutional_direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
+        or (institutional_direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
+    )
+    institutional_ready = (
+        institutional_direction in ("BUY", "SELL")
+        and institutional_context.confidence_score >= 60
+        and htf_matches
+    )
+    combined_direction = (
+        institutional_direction
+        if institutional_ready and legacy_confirmation != "CONFLICT"
+        else "WAIT"
+    )
+    action = combined_direction
     if action in ("BUY", "SELL"):
-        legacy_action = action
-        institutional_direction = institutional_context.direction
-        htf_matches = (
-            (action == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
-            or (action == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
-        )
+        if legacy_confirmation == "ALIGNED":
+            setup_quality = setup_grade if setup_grade != "WAIT" else (
+                "A+" if institutional_context.confidence_score >= 80 else "A"
+            )
+        else:
+            # Institutional evidence can lead when legacy indicators are tied
+            # or neutral, but the entry remains explicitly framework-derived.
+            setup_quality = (
+                "A+" if institutional_context.confidence_score >= 80 else "A"
+            )
+            zone = institutional_context.best_entry_zone or {}
+            zone_low = float(zone.get("low", 0.0) or 0.0)
+            zone_high = float(zone.get("high", 0.0) or 0.0)
+            if zone_low and zone_high:
+                limit_entry = round((zone_low + zone_high) / 2, 2)
+                entry_note = "Combined institutional zone; legacy indicators neutral"
+            if institutional_context.suggested_stop_loss:
+                stop_loss = institutional_context.suggested_stop_loss
+            if institutional_context.suggested_take_profit:
+                tp1 = institutional_context.suggested_take_profit
+                move = abs(price - tp1)
+                if action == "BUY":
+                    tp2 = round(tp1 + move * 0.5, 2)
+                    tp3 = round(tp1 + move, 2)
+                else:
+                    tp2 = round(tp1 - move * 0.5, 2)
+                    tp3 = round(tp1 - move, 2)
+            rr_ratio = institutional_context.recommended_rr or rr_ratio
+            # Keep the existing win-rate field conservative when the
+            # institutional framework leads without a legacy direction.
+            win_probability = min(
+                72,
+                max(50, round(institutional_context.confidence_score * 0.75)),
+            )
+        wait_reason = ""
+    else:
+        setup_quality = "WAIT"
+        win_probability = 0
         if institutional_direction == "WAIT" or institutional_context.confidence_score < 60:
-            action = "WAIT"
-            setup_quality = "WAIT"
-            win_probability = 0
             wait_reason = (
-                "Institutional gate: WAIT — "
+                "Combined framework WAIT — "
                 + "; ".join(institutional_context.reasons_against[:2])
             )
-        elif institutional_direction != action:
-            action = "WAIT"
-            setup_quality = "WAIT"
-            win_probability = 0
+        elif legacy_confirmation == "CONFLICT":
             wait_reason = (
-                f"Institutional gate: {institutional_direction} context conflicts "
-                f"with the legacy {legacy_action} setup"
+                f"Combined framework WAIT — institutional {institutional_direction} "
+                f"conflicts with legacy {legacy_direction}"
             )
         elif not htf_matches:
-            action = "WAIT"
-            setup_quality = "WAIT"
-            win_probability = 0
-            wait_reason = "Institutional gate: higher-timeframe direction is not aligned"
+            wait_reason = "Combined framework WAIT — higher-timeframe direction is not aligned"
+        else:
+            wait_reason = "Combined framework WAIT — confirmation is incomplete"
+
+    combined_report = institutional_as_dict(institutional_context)
+    combined_report["legacy"] = {
+        "direction": legacy_direction,
+        "confirmation": legacy_confirmation,
+        "confidence": legacy_confidence,
+        "buy_votes": buy_votes,
+        "sell_votes": sell_votes,
+    }
+    combined_report["combined"] = {
+        "direction": combined_direction,
+        "institutional_ready": institutional_ready,
+        "rule": "Institutional score and structure lead; legacy alignment strengthens, conflict blocks",
+    }
 
     return MarketAnalysis(
         price=price, timeframe=timeframe,
@@ -2574,10 +2637,13 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
         market_regime=market_regime_v,
         hidden_divergence=hidden_div,
         bb_bandwidth=bb_bw,
-        institutional_report=institutional_as_dict(institutional_context),
+        institutional_report=combined_report,
         bullish_probability=institutional_context.bullish_probability,
         bearish_probability=institutional_context.bearish_probability,
         confidence_score=institutional_context.confidence_score,
+        legacy_direction=legacy_direction,
+        legacy_confirmation=legacy_confirmation,
+        combined_direction=combined_direction,
         risk_level=institutional_context.risk_level,
         reasons_supporting=institutional_context.reasons_supporting,
         reasons_against=institutional_context.reasons_against,

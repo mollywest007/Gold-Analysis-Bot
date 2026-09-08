@@ -10,3 +10,5 @@ Confidence is scored directionally as Trend Alignment 25, Market Structure 25, L
 **Why:** The user explicitly prioritized institutional price action over quantity of indicators and required mixed evidence to remain no-trade.
 
 **How to apply:** Analyze Daily, H4, H1, then M15. Only suggest a confirmed direction when all four real-data contexts agree and each clears the 60-point threshold; otherwise preserve WAIT and show the missing evidence.
+
+The legacy indicator engine is a secondary confirmation layer: aligned legacy direction strengthens the result, a neutral/tied legacy result does not veto valid institutional evidence, and a direct conflict blocks the trade.

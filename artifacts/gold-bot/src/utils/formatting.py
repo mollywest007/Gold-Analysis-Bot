@@ -386,6 +386,9 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  Earned    : {getattr(a, 'confidence_score', 0)}/100",
         f"  Maximum   : 100/100",
         f"  Bias      : {institutional_report.get('direction', 'WAIT')}",
+        f"  Legacy    : {institutional_report.get('legacy', {}).get('direction', 'WAIT')} "
+        f"({institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
+        f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
         f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
         f"S {framework_scores.get('market_structure', 0)}/25 | "
         f"L {framework_scores.get('liquidity_confirmation', 0)}/20",
@@ -605,6 +608,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
     framework_direction = institutional_report.get("direction", "WAIT")
+    report = institutional_report
 
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
@@ -651,6 +655,8 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Candle Confirm. : {framework_scores.get('candlestick_confirmation', 0)}/5",
         f"  Framework Bias   : {framework_direction}",
         f"  Framework Score  : Earned {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
+        f"  Legacy Confirm.  : {report.get('legacy', {}).get('confirmation', 'NEUTRAL')}",
+        f"  Combined Result  : {report.get('combined', {}).get('direction', 'WAIT')}",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
