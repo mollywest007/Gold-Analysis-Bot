@@ -396,11 +396,12 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         "──────────────────────────────────",
         "  INSTITUTIONAL SCORE",
         "──────────────────────────────────",
-        f"  Earned    : {getattr(a, 'confidence_score', 0)}/100",
+        f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
         f"  Maximum   : 100/100",
         f"  Bias      : {institutional_report.get('direction', 'WAIT')}",
         f"  Legacy    : {institutional_report.get('legacy', {}).get('direction', 'WAIT')} "
         f"({institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
+        f"  Legacy Conf.: {institutional_report.get('legacy', {}).get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
         f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
         f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
@@ -697,8 +698,9 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Fair Value Gap  : {framework_scores.get('fair_value_gap_confirmation', 0)}/10",
         f"  Candle Confirm. : {framework_scores.get('candlestick_confirmation', 0)}/5",
         f"  Framework Bias   : {framework_direction}",
-        f"  Framework Score  : Earned {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
+        f"  Institutional Score: {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
         f"  Legacy Confirm.  : {report.get('legacy', {}).get('confirmation', 'NEUTRAL')}",
+        f"  Legacy Confidence : {report.get('legacy', {}).get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined Result  : {report.get('combined', {}).get('direction', 'WAIT')}",
         f"  MTF Chain        : {_mtf_chain_text(multi_timeframe)}",
     ]
