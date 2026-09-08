@@ -1503,7 +1503,7 @@ def _select_direction(
 
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
-async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
+async def _analyze_single(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode) if mode else get_mode_config()
@@ -2655,6 +2655,88 @@ async def analyze(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
     )
 
 
+def _apply_multi_timeframe_consensus(
+    analysis: MarketAnalysis,
+    multi_timeframe: dict,
+) -> MarketAnalysis:
+    """Apply the strict Daily → H4 → H1 → M15 rule to one report."""
+    analyses = multi_timeframe.get("analyses", {})
+    framework_order = ("D1", "H4", "H1", "M15")
+    directions = [
+        (analyses[tf].institutional_report or {}).get("direction", "WAIT")
+        for tf in framework_order
+        if tf in analyses
+    ]
+    scores = [
+        analyses[tf].confidence_score
+        for tf in framework_order
+        if tf in analyses
+    ]
+    final_direction = multi_timeframe.get("final_direction", "WAIT")
+    aligned = (
+        len(directions) == len(framework_order)
+        and final_direction in ("BUY", "SELL")
+        and all(direction == final_direction for direction in directions)
+        and all(score >= 60 for score in scores)
+    )
+
+    report = analysis.institutional_report or {}
+    report["multi_timeframe"] = {
+        "framework_order": list(framework_order),
+        "directions": dict(zip(framework_order, directions)),
+        "scores": dict(zip(framework_order, scores)),
+        "aligned": aligned,
+        "final_direction": final_direction if aligned else "WAIT",
+    }
+    analysis.institutional_report = report
+
+    if not aligned:
+        analysis.action = "WAIT"
+        analysis.setup_quality = "WAIT"
+        analysis.combined_direction = "WAIT"
+        analysis.win_probability = 0
+        direction_text = ", ".join(
+            f"{tf}={directions[index] if index < len(directions) else 'NO DATA'}"
+            for index, tf in enumerate(framework_order)
+        )
+        analysis.wait_reason = (
+            "Multi-timeframe consensus WAIT — "
+            f"{direction_text}. All Daily, H4, H1 and M15 contexts must align "
+            "at 60/100 or higher."
+        )
+    elif analysis.action != final_direction:
+        analysis.action = "WAIT"
+        analysis.setup_quality = "WAIT"
+        analysis.combined_direction = "WAIT"
+        analysis.win_probability = 0
+        analysis.wait_reason = (
+            f"Multi-timeframe consensus is {final_direction}, but the active "
+            f"{analysis.timeframe} entry is not confirmed."
+        )
+    else:
+        analysis.combined_direction = final_direction
+        analysis.wait_reason = analysis.wait_reason or (
+            f"Daily → H4 → H1 → M15 aligned {final_direction}"
+        )
+
+    return analysis
+
+
+async def analyze(
+    timeframe: str = "H1",
+    mode: str = None,
+    strict_timeframes: bool = True,
+) -> MarketAnalysis:
+    """Return the normal analysis with strict multi-timeframe confirmation."""
+    if not strict_timeframes:
+        return await _analyze_single(timeframe, mode=mode)
+    multi_timeframe = await analyze_multi_timeframe(mode=mode)
+    analysis = multi_timeframe["analyses"].get(timeframe)
+    if analysis is None:
+        raise RuntimeError(f"No analysis produced for timeframe {timeframe}")
+    return _apply_multi_timeframe_consensus(analysis, multi_timeframe)
+
+
 async def analyze_multi_timeframe(
     mode: str = None,
     timeframes: Optional[List[str]] = None,
@@ -2669,7 +2751,7 @@ async def analyze_multi_timeframe(
     requested_input = list(timeframes or framework_order)
     requested = [tf for tf in framework_order if tf in requested_input]
     results = await asyncio.gather(
-        *(analyze(tf, mode=mode) for tf in requested),
+        *(_analyze_single(tf, mode=mode) for tf in requested),
         return_exceptions=True,
     )
     analyses = {

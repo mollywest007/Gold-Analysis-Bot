@@ -66,6 +66,18 @@ def _choch_label(s: str) -> str:
             "NONE": "None"}.get(s, s)
 
 
+def _mtf_chain_text(report: dict) -> str:
+    """Render the strict Daily → H4 → H1 → M15 status in one short line."""
+    directions = report.get("directions", {}) if report else {}
+    scores = report.get("scores", {}) if report else {}
+    if not directions:
+        return "Not available"
+    return " | ".join(
+        f"{tf} {directions.get(tf, 'NO DATA')}/{scores.get(tf, 0)}"
+        for tf in ("D1", "H4", "H1", "M15")
+    )
+
+
 def _trade_type_label(a: MarketAnalysis) -> str:
     return {"Scalp": "SCALP (minutes-hours)", "Intraday": "INTRADAY (same session)",
             "Swing": "SWING (1-5 days)", "Position": "POSITION (weeks)"}.get(a.trade_type, a.trade_type)
@@ -360,6 +372,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     ms = market_status()
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
+    multi_timeframe = institutional_report.get("multi_timeframe", {}) or {}
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  FULL ANALYSIS         ║",
@@ -389,6 +402,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  Legacy    : {institutional_report.get('legacy', {}).get('direction', 'WAIT')} "
         f"({institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
         f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
+        f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
         f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
         f"S {framework_scores.get('market_structure', 0)}/25 | "
         f"L {framework_scores.get('liquidity_confirmation', 0)}/20",
@@ -608,6 +622,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
     framework_direction = institutional_report.get("direction", "WAIT")
+    multi_timeframe = institutional_report.get("multi_timeframe", {}) or {}
     report = institutional_report
 
     lines = ["<pre>",
@@ -657,6 +672,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Framework Score  : Earned {getattr(a, 'confidence_score', 0)}/100 | Max 100/100",
         f"  Legacy Confirm.  : {report.get('legacy', {}).get('confirmation', 'NEUTRAL')}",
         f"  Combined Result  : {report.get('combined', {}).get('direction', 'WAIT')}",
+        f"  MTF Chain        : {_mtf_chain_text(multi_timeframe)}",
     ]
 
     if a.candle_pattern and a.candle_pattern != "None":
