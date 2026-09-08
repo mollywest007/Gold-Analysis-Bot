@@ -455,7 +455,15 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     if a.action in ("BUY", "SELL"):
         t1 = _estimate_time(a, a.tp1)
         t2 = _estimate_time(a, a.tp2)
-        setup_grade = getattr(a, "setup_grade", "") or getattr(a, "setup_quality", "WAIT") or "WAIT"
+        has_final_gate = bool(
+            (getattr(a, "institutional_report", {}) or {}).get("multi_timeframe")
+        )
+        setup_grade = (
+            getattr(a, "setup_quality", "WAIT")
+            if has_final_gate
+            else getattr(a, "setup_grade", "")
+        ) or "WAIT"
+        local_grade = getattr(a, "setup_grade", "") or "WAIT"
         lines += [
             f"  SIGNAL    : {a.action}   {_trade_type_label(a)}",
             f"  Setup Grade: {setup_grade}",
@@ -464,6 +472,11 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
             "",
             f"  Entry     : {fmt_price(a.entry)}",
         ]
+        if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
+            lines.insert(
+                lines.index(f"  Win Rate  : {_win_bar(a.win_probability)}"),
+                f"  Local Grade: {local_grade} (before MTF gate)",
+            )
         if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
             lines.append(f"  Limit     : {fmt_price(a.limit_entry)}")
         lines += [
@@ -483,16 +496,31 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
             f"  SIGNAL    : WAIT",
         ]
         indication = getattr(a, "directional_indication", "NEUTRAL")
-        setup_grade = getattr(a, "setup_grade", "") or getattr(a, "setup_quality", "WAIT") or "WAIT"
+        has_final_gate = bool(
+            (getattr(a, "institutional_report", {}) or {}).get("multi_timeframe")
+        )
+        setup_grade = (
+            getattr(a, "setup_quality", "WAIT")
+            if has_final_gate
+            else getattr(a, "setup_grade", "")
+        ) or "WAIT"
+        local_grade = getattr(a, "setup_grade", "") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
                 f"  INDICATION: {indication} (not confirmed)",
                 f"  Setup Grade: {setup_grade}",
+                *(
+                    [f"  Local Grade: {local_grade} (before MTF gate)"]
+                    if has_final_gate and local_grade != setup_grade and local_grade != "WAIT"
+                    else []
+                ),
                 f"  Confidence: {a.confidence}%",
                 "  Status    : Awaiting confirmation",
             ]
         else:
             lines.append(f"  Setup Grade: {setup_grade}")
+            if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
+                lines.append(f"  Local Grade: {local_grade} (before MTF gate)")
         lines += [
             f"  Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
         ]
