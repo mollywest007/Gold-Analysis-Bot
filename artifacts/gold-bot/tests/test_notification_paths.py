@@ -33,6 +33,23 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.data_patch.stop()
         os.unlink(self.users_file.name)
 
+    async def test_auto_alert_analysis_uses_only_selected_timeframe(self):
+        analysis_result = object()
+        with patch.object(
+            alerts,
+            "analyze",
+            new=AsyncMock(return_value=analysis_result),
+        ) as analyze_mock:
+            result = await alerts._safe_analyze("M15", mode="scalp")
+
+        self.assertIs(result, analysis_result)
+        analyze_mock.assert_awaited_once_with(
+            "M15",
+            mode="scalp",
+            strict_timeframes=False,
+            use_higher_timeframe_confirmation=False,
+        )
+
     def test_simulated_ohlcv_is_never_used_for_exit_detection(self):
         simulated = SimpleNamespace(
             highs=[4405.0],

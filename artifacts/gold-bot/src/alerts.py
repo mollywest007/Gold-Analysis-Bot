@@ -2485,64 +2485,14 @@ async def _check_and_alert_once(
                     stream_label=stream_label,
                 )
 
-            # ── Cross-TF coherence block ──────────────────────────────────────
-            # Prevent HTF signals from contradicting a confirmed lower-TF lock.
-            # If M15 or M30 already has a confirmed SELL lock (active trade),
-            # a H4/H1 BUY alert would send the opposite signal — confusing and
-            # dangerous. The lower-TF lock means the trend is confirmed down on
-            # the immediate price action; the HTF lagging indicators haven't
-            # caught up yet. Block the contradicting signal until the lower lock
-            # is released by a trade close or direction flip.
-            TF_ORDER = [
-                spec[1] for spec in scan_specs if spec[0] == stream_label
-            ]
-            tf_rank  = TF_ORDER.index(tf) if tf in TF_ORDER else -1
-            lower_conflict = False
-            if tf_rank > 0:
-                lower_tfs = TF_ORDER[:tf_rank]
-                for ltf in lower_tfs:
-                    ltf_lock = active_signal.get(ltf)
-                    if ltf_lock and ltf_lock != a.action:
-                        lower_conflict = True
-                        logger.info(
-                            f"[{tf}] Blocked — contradicts active {ltf_lock} lock "
-                            f"on {ltf}. HTF lagging; waiting for lower TF to clear."
-                        )
-                        break
-            if lower_conflict:
-                continue
-
-            # ── HTF alignment gate — block STRONG counter-trend only ──────────
-            # "Slightly" counter-trend is a valid pullback opportunity: the engine
-            # already applies a -12 confidence penalty, and the alert card shows
-            # the counter-trend warning. Hard-blocking it means missing valid entries.
-            # Exception: ChoCH confirmed on this TF overrides the HTF block —
-            # a structural break is the PRO signal that the trend HAS reversed,
-            # even before the HTF bias catches up.
+            # Automatic entries are decided by the selected strategy timeframe.
+            # There is no lower-timeframe lock or higher-timeframe alignment
+            # requirement before this timeframe can fire.
             choch = getattr(a, "choch", "") or ""
             choch_aligned = (
-                (a.action == "BUY"  and choch == "BULLISH_CHOCH") or
-                (a.action == "SELL" and choch == "BEARISH_CHOCH")
+                (a.action == "BUY" and choch == "BULLISH_CHOCH")
+                or (a.action == "SELL" and choch == "BEARISH_CHOCH")
             )
-            htf_strongly_against = (
-                (a.action == "BUY"  and getattr(a, "htf_bias", "Neutral") == "Bearish") or
-                (a.action == "SELL" and getattr(a, "htf_bias", "Neutral") == "Bullish")
-            )
-            # Lower-TF same-direction lock overrides the HTF counter-trend block.
-            # If M15 is already confirmed SELL and M30 wants to fire SELL, that IS
-            # multi-TF confluence — not a counter-trend trade. The HTF block was
-            # designed to stop isolated signals, not to suppress aligned TF stacks.
-            lower_same_dir = any(
-                active_signal.get(ltf) == a.action
-                for ltf in TF_ORDER[:tf_rank]
-            ) if tf_rank > 0 else False
-
-            if htf_strongly_against and not choch_aligned and not lower_same_dir:
-                logger.info(
-                    f"[{tf}] Filtered — strong counter-trend "
-                    f"({a.action} vs HTF={getattr(a, 'htf_bias', 'Neutral')}). Too risky."
-                )
-                continue
 
             # Quality gate — A/A+ OR ChoCH structural bypass.
             # Standard path: grade A/A+ + win ≥ 62%.
@@ -2894,7 +2844,12 @@ def _determine_htf_bias(analyses: list, timeframes: list) -> str:
 
 async def _safe_analyze(tf: str, mode: str | None = None):
     try:
-        return await analyze(tf, mode=mode)
+        return await analyze(
+            tf,
+            mode=mode,
+            strict_timeframes=False,
+            use_higher_timeframe_confirmation=False,
+        )
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")
         return None

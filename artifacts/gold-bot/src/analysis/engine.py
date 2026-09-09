@@ -1503,29 +1503,39 @@ def _select_direction(
 
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
-async def _analyze_single(timeframe: str = "H1", mode: str = None) -> MarketAnalysis:
+async def _analyze_single(
+    timeframe: str = "H1",
+    mode: str = None,
+    use_higher_timeframe_confirmation: bool = True,
+) -> MarketAnalysis:
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode) if mode else get_mode_config()
 
-    # The active mode owns the confirmation hierarchy.  The legacy map remains
-    # a safe fallback for callers that introduce a timeframe before adding it
-    # to a mode profile.
-    htf = mode_cfg.confirmation_map.get(timeframe, HTF_MAP.get(timeframe, "H4"))
+    if use_higher_timeframe_confirmation:
+        # The active mode owns the confirmation hierarchy.  The legacy map remains
+        # a safe fallback for callers that introduce a timeframe before adding it
+        # to a mode profile.
+        htf = mode_cfg.confirmation_map.get(timeframe, HTF_MAP.get(timeframe, "H4"))
 
-    async def _neutral() -> str:
-        return "Neutral"
+        bias_timeframes = set(mode_cfg.context_timeframes) | {htf}
+        # Always include the active chart so reports have a local reference even
+        # when a future mode defines a very small context set.
+        bias_timeframes.add(timeframe)
+        bias_results = await asyncio.gather(
+            fetch_ohlcv(timeframe),
+            *(_get_htf_bias(bias_tf) for bias_tf in sorted(bias_timeframes)),
+        )
+        data = bias_results[0]
+        bias_by_tf = dict(zip(sorted(bias_timeframes), bias_results[1:]))
+    else:
+        # Automatic entry alerts are intentionally local to the selected
+        # strategy timeframe.  Do not fetch or compare any other timeframe
+        # before deciding whether this analysis can produce an entry.
+        htf = "Disabled"
+        data = await fetch_ohlcv(timeframe)
+        bias_by_tf = {}
 
-    bias_timeframes = set(mode_cfg.context_timeframes) | {htf}
-    # Always include the active chart so reports have a local reference even
-    # when a future mode defines a very small context set.
-    bias_timeframes.add(timeframe)
-    bias_results = await asyncio.gather(
-        fetch_ohlcv(timeframe),
-        *(_get_htf_bias(bias_tf) for bias_tf in sorted(bias_timeframes)),
-    )
-    data = bias_results[0]
-    bias_by_tf = dict(zip(sorted(bias_timeframes), bias_results[1:]))
     htf_h4_bias = bias_by_tf.get("H4", "Neutral")
     htf_d1_bias = bias_by_tf.get("D1", "Neutral")
     ltf_h1_bias = bias_by_tf.get("H1", "Neutral")
@@ -1772,8 +1782,10 @@ async def _analyze_single(timeframe: str = "H1", mode: str = None) -> MarketAnal
         else "NEUTRAL"
     ) if market_regime_v in ("TRENDING", "SQUEEZE") else "NEUTRAL"
     macro_direction = (
-        "BUY" if htf_bias in ("Bullish", "Slightly Bullish")
-        else "SELL" if htf_bias in ("Bearish", "Slightly Bearish")
+        "BUY" if use_higher_timeframe_confirmation
+        and htf_bias in ("Bullish", "Slightly Bullish")
+        else "SELL" if use_higher_timeframe_confirmation
+        and htf_bias in ("Bearish", "Slightly Bearish")
         else "NEUTRAL"
     )
     feature_directions = {
@@ -1825,7 +1837,7 @@ async def _analyze_single(timeframe: str = "H1", mode: str = None) -> MarketAnal
     # ── HTF gate (hard block for strong misalignment, penalty for slight) ──────
     htf_align  = True
     htf_reason = ""
-    if direction in ("BUY", "SELL"):
+    if use_higher_timeframe_confirmation and direction in ("BUY", "SELL"):
         htf_strongly_bullish = htf_bias == "Bullish"
         htf_slightly_bullish = htf_bias == "Slightly Bullish"
         htf_strongly_bearish = htf_bias == "Bearish"
@@ -2727,10 +2739,15 @@ async def analyze(
     timeframe: str = "H1",
     mode: str = None,
     strict_timeframes: bool = True,
+    use_higher_timeframe_confirmation: bool = True,
 ) -> MarketAnalysis:
-    """Return the normal analysis with strict multi-timeframe confirmation."""
+    """Return analysis with optional strict and higher-timeframe confirmation."""
     if not strict_timeframes:
-        return await _analyze_single(timeframe, mode=mode)
+        return await _analyze_single(
+            timeframe,
+            mode=mode,
+            use_higher_timeframe_confirmation=use_higher_timeframe_confirmation,
+        )
     multi_timeframe = await analyze_multi_timeframe(mode=mode)
     analysis = multi_timeframe["analyses"].get(timeframe)
     if analysis is None:
