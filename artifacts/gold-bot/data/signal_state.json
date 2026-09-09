@@ -39,7 +39,9 @@
       "closed_signal": {},
       "last_fired": {},
       "pending_signal": {},
-      "sl_cooldown_until": {},
+      "sl_cooldown_until": {
+        "H1": 1788963736.0745275
+      },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
