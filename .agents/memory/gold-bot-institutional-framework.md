@@ -12,3 +12,9 @@ Confidence is scored directionally as Trend Alignment 25, Market Structure 25, L
 **How to apply:** Analyze Daily, H4, H1, then M15. Only suggest a confirmed direction when all four real-data contexts agree and each clears the 60-point threshold; otherwise preserve WAIT and show the missing evidence.
 
 The legacy indicator engine is a secondary confirmation layer: aligned legacy direction strengthens the result, a neutral/tied legacy result does not veto valid institutional evidence, and a direct conflict blocks the trade.
+
+Manual analysis reports and automatic entry alerts must use this same strict consensus gate. Lower-timeframe scalp reports may retain their local indicator details, but they remain gated by the Daily → H4 → H1 → M15 consensus.
+
+**Why:** Different gates made the bot's explanation say WAIT while its background scanner could still treat a local setup as actionable.
+
+**How to apply:** Do not disable strict timeframe consensus in the automatic alert path; use the shared analysis entry point so Telegram alerts and `/analyze` cannot disagree.

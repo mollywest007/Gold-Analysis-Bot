@@ -2844,12 +2844,10 @@ def _determine_htf_bias(analyses: list, timeframes: list) -> str:
 
 async def _safe_analyze(tf: str, mode: str | None = None):
     try:
-        return await analyze(
-            tf,
-            mode=mode,
-            strict_timeframes=False,
-            use_higher_timeframe_confirmation=False,
-        )
+        # Keep automatic entries consistent with /analyze. The strict
+        # Daily → H4 → H1 → M15 consensus gate must be the same source of
+        # truth for both manual reports and background notifications.
+        return await analyze(tf, mode=mode)
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")
         return None

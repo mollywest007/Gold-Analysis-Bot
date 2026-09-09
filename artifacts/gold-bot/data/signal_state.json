@@ -43,9 +43,11 @@
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
-      "forming_alert_sent": {},
+      "forming_alert_sent": {
+        "M15": "BUY"
+      },
       "forming_alert_last_sent": {
-        "M15": 1788954358.8313513,
+        "M15": 1788955493.1561632,
         "H1": 1788954268.457043
       },
       "momentum_shift_warned": {},

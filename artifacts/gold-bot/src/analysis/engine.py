@@ -2751,7 +2751,15 @@ async def analyze(
     multi_timeframe = await analyze_multi_timeframe(mode=mode)
     analysis = multi_timeframe["analyses"].get(timeframe)
     if analysis is None:
-        raise RuntimeError(f"No analysis produced for timeframe {timeframe}")
+        # The institutional consensus framework is anchored to D1/H4/H1/M15,
+        # but Scalp Mode also exposes M1/M3/M5. Preserve the strict consensus
+        # gate for those lower-timeframe reports while keeping their local
+        # indicator values and trade-plan calculations.
+        analysis = await _analyze_single(
+            timeframe,
+            mode=mode,
+            use_higher_timeframe_confirmation=False,
+        )
     return _apply_multi_timeframe_consensus(analysis, multi_timeframe)
 
 
