@@ -2702,7 +2702,8 @@ def _apply_multi_timeframe_consensus(
         analysis.wait_reason = (
             "Multi-timeframe consensus WAIT — "
             f"{direction_text}. All Daily, H4, H1 and M15 contexts must align "
-            "at 60/100 or higher."
+            "at 60/100 or higher; a bullish local move alone is not yet an "
+            "entry confirmation."
         )
     elif analysis.action != final_direction:
         analysis.action = "WAIT"

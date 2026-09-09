@@ -2550,10 +2550,21 @@ async def _check_and_alert_once(
             #   + win ≥ 58% — ChoCH IS the pro signal for early reversal entry.
             #   We allow it even when HTF hasn't caught up yet (ChoCH overrides
             #   the HTF block above, and lowers the win threshold here).
+            # Institutional-led path: when the institutional framework is
+            # directionally valid and the legacy layer is neutral, the legacy
+            # win-rate estimate is intentionally conservative (65 institutional
+            # score used to become 50% here).  Treating that derived estimate
+            # as a hard blocker contradicted the engine's stated rule that
+            # neutral legacy evidence cannot veto valid institutional evidence.
+            institutional_lead_quality = (
+                getattr(a, "legacy_confirmation", "NEUTRAL") == "NEUTRAL"
+                and getattr(a, "confidence_score", 0) >= 60
+                and a.setup_quality in scan_cfg.alert_min_grades
+            )
             is_quality    = (
                 a.win_probability >= scan_cfg.alert_min_win_probability
                 and a.setup_quality in scan_cfg.alert_min_grades
-            )
+            ) or institutional_lead_quality
             choch_quality = (
                 choch_aligned
                 and a.win_probability >= max(50, scan_cfg.alert_min_win_probability - 4)
@@ -2566,9 +2577,19 @@ async def _check_and_alert_once(
                     f"(win={a.win_probability}% grade={a.setup_quality} "
                     f"adx={a.adx:.1f} choch={choch or 'none'}). "
                     f"Need win≥{scan_cfg.alert_min_win_probability}%+"
-                    f"{'/'.join(scan_cfg.alert_min_grades)}, or ChoCH bypass."
+                    f"{'/'.join(scan_cfg.alert_min_grades)}, institutional "
+                    f"score≥60 with neutral legacy evidence, or ChoCH bypass."
                 )
                 continue
+            if institutional_lead_quality and not (
+                a.win_probability >= scan_cfg.alert_min_win_probability
+                and a.setup_quality in scan_cfg.alert_min_grades
+            ):
+                logger.info(
+                    f"[{tf}] Institutional-led entry accepted — "
+                    f"score={a.confidence_score}/100 grade={a.setup_quality}; "
+                    "legacy evidence is neutral, not conflicting."
+                )
 
             # Claim synchronously before the first await in pass 2.  A chart
             # upload can take longer than the scheduler interval; without this
