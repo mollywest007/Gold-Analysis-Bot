@@ -47,7 +47,8 @@
         "M15": "BUY"
       },
       "forming_alert_last_sent": {
-        "M15": 1788954059.2317502
+        "M15": 1788954358.8313513,
+        "H1": 1788954268.457043
       },
       "momentum_shift_warned": {},
       "reminded_trade_ids": {
