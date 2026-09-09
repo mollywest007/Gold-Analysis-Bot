@@ -222,6 +222,47 @@ def _pd_line(a: MarketAnalysis) -> str:
     return f"  Regime    : {icons.get(pd, pd)}"
 
 
+def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
+    """Explain why a directional setup is not yet a confirmed entry."""
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    score = getattr(a, "confidence_score", 0)
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    legacy_confirmation = getattr(a, "legacy_confirmation", "NEUTRAL")
+
+    if direction not in ("BUY", "SELL"):
+        return "NO DIRECTION", getattr(
+            a, "wait_reason", ""
+        ) or getattr(a, "verdict_reason", "") or "Evidence is mixed."
+
+    htf_is_against = (
+        direction == "BUY"
+        and any(word in htf_bias.lower() for word in ("bearish", "sell"))
+    ) or (
+        direction == "SELL"
+        and any(word in htf_bias.lower() for word in ("bullish", "buy"))
+    )
+    if htf_is_against:
+        return (
+            f"{direction} FORMING",
+            f"Blocked: {a.timeframe} leans {direction}, but higher timeframe "
+            f"bias is {htf_bias}.",
+        )
+    if score < 60:
+        return (
+            f"{direction} FORMING",
+            f"Blocked: institutional evidence is {score}/100; 60/100 is required.",
+        )
+    if legacy_confirmation == "CONFLICT":
+        return (
+            f"{direction} FORMING",
+            f"Blocked: institutional {direction} conflicts with legacy indicators.",
+        )
+    return (
+        f"{direction} FORMING",
+        "Blocked: Daily → H4 → H1 → M15 confirmation is not complete.",
+    )
+
+
 def signal_card(a: MarketAnalysis) -> str:
     ms = market_status()
 
@@ -313,15 +354,21 @@ def signal_card(a: MarketAnalysis) -> str:
         if a.candle_pattern and a.candle_pattern not in ("None", "Doji", "Spinning Top"):
             lines.append(f"  Pattern   : {a.candle_pattern}")
     else:
+        wait_status, wait_detail = _wait_status(a)
         lines += [
             "╔══════════════════════════════════╗",
             "║  XAU/USD  [ WAIT ]               ║",
             "╚══════════════════════════════════╝",
             "",
-            f"  No entry. Setup not confirmed.",
-            f"  Reason: {(a.wait_reason or 'Indicators mixed')[:42]}",
+            f"  Status    : {wait_status}",
+            f"  Blocker   : {wait_detail}",
+            f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
+            f"  Legacy conf.: {a.confidence}% (supporting only)",
             "",
-            f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+            "  No confirmed entry yet.",
+            "  A moving chart is not confirmation by itself.",
+            "",
+            f"  ADX       : {a.adx:.1f}",
             f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
             f"  HTF Bias  : {a.htf_bias}",
@@ -497,6 +544,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
             f"  SIGNAL    : WAIT",
         ]
         indication = getattr(a, "directional_indication", "NEUTRAL")
+        wait_status, wait_detail = _wait_status(a)
         has_final_gate = bool(
             (getattr(a, "institutional_report", {}) or {}).get("multi_timeframe")
         )
@@ -508,7 +556,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         local_grade = getattr(a, "setup_grade", "") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
-                f"  INDICATION: {indication} (not confirmed)",
+                f"  INDICATION: {wait_status}",
                 f"  Setup Grade: {setup_grade}",
                 *(
                     [f"  Local Grade: {local_grade} (before MTF gate)"]
@@ -516,14 +564,14 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
                     else []
                 ),
                 f"  Confidence: {a.confidence}%",
-                "  Status    : Awaiting confirmation",
+                f"  Blocked   : {wait_detail}",
             ]
         else:
             lines.append(f"  Setup Grade: {setup_grade}")
             if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
                 lines.append(f"  Local Grade: {local_grade} (before MTF gate)")
         lines += [
-            f"  Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
+            f"  Reason    : {wait_detail[:72]}",
         ]
 
     if not ms["is_open"]:
