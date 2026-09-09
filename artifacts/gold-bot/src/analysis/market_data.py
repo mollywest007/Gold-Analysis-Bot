@@ -452,10 +452,16 @@ def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":
 
 
 def invalidate_cache(timeframe: str = None) -> None:
-    """Force-expire cache — call after trade alert fires."""
+    """Force-expire OHLCV cache — call after a trade alert or hard refresh."""
     global _price_cache
     if timeframe:
         _ohlcv_cache.pop(timeframe, None)
     else:
         _ohlcv_cache.clear()
+    _price_cache = (0.0, 0.0)
+
+
+def invalidate_price_cache() -> None:
+    """Force the next request to read a fresh live spot quote."""
+    global _price_cache
     _price_cache = (0.0, 0.0)

@@ -115,12 +115,25 @@ _MARKET_REFRESH_COMMANDS = frozenset(
 )
 
 
-def _invalidate_refresh_market_data(command: str) -> None:
-    """Make a user-requested refresh fetch new candles and a new spot quote."""
-    if command in _MARKET_REFRESH_COMMANDS:
-        from src.analysis.market_data import invalidate_cache
+def _invalidate_refresh_market_data(command: str, timeframe: str) -> None:
+    """Refresh the selected candle set without discarding all context data."""
+    from src.analysis.market_data import invalidate_cache, invalidate_price_cache
 
-        invalidate_cache()
+    # The active-trades panel only needs a live quote. Throwing away all
+    # timeframe history made that otherwise lightweight button unnecessarily
+    # expensive.
+    if command == "active":
+        invalidate_price_cache()
+        return
+
+    if command in _MARKET_REFRESH_COMMANDS:
+        # Recommend is intentionally a complete multi-timeframe report.
+        # Other cards can keep their higher-timeframe context cached while the
+        # selected chart timeframe is fetched fresh.
+        if command == "recommend" or timeframe == "all":
+            invalidate_cache()
+        else:
+            invalidate_cache(timeframe)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -276,7 +289,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Always answer the query first so Telegram never shows a frozen button
         await query.answer()
-        _invalidate_refresh_market_data(command)
+        _invalidate_refresh_market_data(command, tf)
 
         _unchanged = False
         try:
