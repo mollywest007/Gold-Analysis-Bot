@@ -10,10 +10,23 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.analysis import engine
 from src.analysis import market_data
 from src.analysis.engine import MarketAnalysis
+from src.handlers import callbacks
 from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
+    def test_refresh_analysis_commands_invalidate_market_data(self):
+        with patch.object(market_data, "invalidate_cache") as invalidate:
+            callbacks._invalidate_refresh_market_data("analyze")
+
+        invalidate.assert_called_once_with()
+
+    def test_non_market_refresh_commands_keep_market_data_cache(self):
+        with patch.object(market_data, "invalidate_cache") as invalidate:
+            callbacks._invalidate_refresh_market_data("news")
+
+        invalidate.assert_not_called()
+
     def test_ohlcv_cleanup_keeps_columns_and_timestamps_aligned(self):
         quote = {
             "open": [100.0, 101.0, None, 103.0],

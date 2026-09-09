@@ -110,6 +110,19 @@ def _is_open() -> bool:
     return market_status()["is_open"]
 
 
+_MARKET_REFRESH_COMMANDS = frozenset(
+    {"active", "chart", "analyze", "signal", "trend", "levels", "outlook", "recommend"}
+)
+
+
+def _invalidate_refresh_market_data(command: str) -> None:
+    """Make a user-requested refresh fetch new candles and a new spot quote."""
+    if command in _MARKET_REFRESH_COMMANDS:
+        from src.analysis.market_data import invalidate_cache
+
+        invalidate_cache()
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     data = query.data or ""
@@ -263,6 +276,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Always answer the query first so Telegram never shows a frozen button
         await query.answer()
+        _invalidate_refresh_market_data(command)
 
         _unchanged = False
         try:
