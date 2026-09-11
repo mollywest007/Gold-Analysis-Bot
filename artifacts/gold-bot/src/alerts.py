@@ -1133,12 +1133,11 @@ async def _send_setup_forming_alert(
     bot, subs: Set[int], a, tf: str, forming_dir: str,
     state: AccountAlertState | None = None,
     *, lock_key: str | None = None, stream_label: str = "",
-    early_warning: bool = False,
+    early_warning: bool = False, early_entry_watch: bool = False,
 ) -> None:
     """
-    Lightweight pre-signal notice — fires when 3 indicators agree but the full
-    signal hasn't triggered yet. Gives the trader a heads-up to watch the chart
-    and prepare a limit order, without committing to an entry.
+    Lightweight pre-signal notice — gives the trader a heads-up to watch the
+    chart and prepare a limit order, without committing to an entry.
     Fires once per direction per TF, then retries after a quiet period if the
     same setup remains active so a missed Telegram warning is not lost.
     """
@@ -1170,7 +1169,9 @@ async def _send_setup_forming_alert(
     else:
         watch_line = ""
     alert_title = (
-        "⚠️  EARLY BEARISH WARNING"
+        "⚠️  EARLY ENTRY WATCH"
+        if early_entry_watch
+        else "⚠️  EARLY BEARISH WARNING"
         if early_warning and forming_dir == "SELL"
         else "⚠️  EARLY BULLISH WARNING"
         if early_warning and forming_dir == "BUY"
@@ -1190,11 +1191,13 @@ async def _send_setup_forming_alert(
         f"   ADX      : {adx:.1f}   Legacy conf: {confidence}%\n"
         f"   Institutional score: {institutional_score}/100\n"
         f"   HTF      : {htf_bias}{kz_tag}\n"
+        f"  Status   : UNCONFIRMED — strict confirmation still running\n"
         f"{risk_line}"
         f"{watch_line}"
         f"{'─' * 34}\n"
-        f"  Not a confirmed signal. Watch for entry.\n"
-        f"  Wait for confirmation before entering.\n"
+        f"  This is an early-entry watch only.\n"
+        f"  A separate confirmed alert will follow\n"
+        f"  if the strict timeframe gate aligns.\n"
         f"</pre>"
     )
     dead, delivered = await _broadcast_text(
@@ -2339,6 +2342,7 @@ async def _check_and_alert_once(
             if not active_signal.get(state_key):
                 forming_dir = None
                 early_warning = False
+                early_entry = False
                 institutional_report = getattr(a, "institutional_report", {}) or {}
                 institutional_structure = institutional_report.get(
                     "market_structure", {}
@@ -2412,6 +2416,32 @@ async def _check_and_alert_once(
                 ):
                     forming_dir = "BUY"
                     early_warning = True
+                elif (
+                    # Generic early-entry watch for every configured timeframe
+                    # and mode. This is deliberately separate from the strict
+                    # action gate: it informs the trader about a directional
+                    # setup without opening a trade or consuming the strict
+                    # signal lock.
+                    getattr(a, "directional_indication", "NEUTRAL")
+                    in ("BUY", "SELL")
+                    and getattr(a, "confidence_score", 0) >= 55
+                    and (
+                        (
+                            getattr(a, "directional_indication", "") == "BUY"
+                            and a.buy_votes >= 2
+                        )
+                        or (
+                            getattr(a, "directional_indication", "") == "SELL"
+                            and a.sell_votes >= 2
+                        )
+                        or getattr(a, "adx", 0) >= 18
+                        or getattr(a, "choch", "NONE") != "NONE"
+                        or getattr(a, "bos", "NONE")
+                        in ("BULLISH_BOS", "BEARISH_BOS")
+                    )
+                ):
+                    forming_dir = getattr(a, "directional_indication")
+                    early_entry = True
                 if forming_dir:
                     active_trade = next(
                         (
@@ -2443,6 +2473,7 @@ async def _check_and_alert_once(
                             lock_key=state_key,
                             stream_label=stream_label,
                             early_warning=early_warning,
+                            early_entry_watch=early_entry,
                         )
                 else:
                     # Direction collapsed — reset forming state so next build-up fires fresh
