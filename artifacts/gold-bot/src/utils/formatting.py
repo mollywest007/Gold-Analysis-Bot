@@ -263,6 +263,87 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
     )
 
 
+def _early_watch_lines(a: MarketAnalysis) -> list[str]:
+    """Explain the separate early-entry watch without changing the strict signal."""
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    action = getattr(a, "action", "WAIT")
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    choch = getattr(a, "choch", "NONE")
+    bos = getattr(a, "bos", "NONE")
+
+    lines = [
+        "",
+        "──────────────────────────────────",
+        "  EARLY ENTRY WATCH",
+        "──────────────────────────────────",
+        "  Separate from strict confirmation.",
+    ]
+
+    if direction not in ("BUY", "SELL"):
+        reasons_against = getattr(a, "reasons_against", []) or []
+        reason = (
+            (reasons_against[0] if reasons_against else "")
+            or getattr(a, "wait_reason", "")
+            or "Evidence is mixed — no early direction yet."
+        )
+        lines += [
+            "  Status    : NO EARLY DIRECTION",
+            "  Direction : WAIT",
+            f"  Analysis  : {reason[:78]}",
+            "  Decision  : No early watch; wait for directional evidence.",
+            "  Strict    : WAITING for Daily → H4 → H1 → M15 alignment.",
+        ]
+        return lines
+
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    if choch != "NONE":
+        evidence.append(choch.replace("_", " "))
+    if bos in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(bos.replace("_", " "))
+
+    watch_ready = score >= 55 and bool(evidence)
+    lines += [
+        f"  Status    : {'WATCH READY' if watch_ready else 'FORMING'}",
+        f"  Direction : {direction}",
+        f"  Watch score: {score}/100  (needs 55+)",
+        f"  Evidence  : {', '.join(evidence) if evidence else 'Not enough supporting evidence'}",
+    ]
+
+    watch_entry = (
+        float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    if watch_entry > 0:
+        lines.append(f"  Watch entry: {fmt_price(watch_entry)}")
+
+    watch_reason = getattr(a, "early_entry_reason", "") or ""
+    if watch_reason:
+        lines.append(f"  Method    : {watch_reason[:78]}")
+
+    missing = []
+    if score < 55:
+        missing.append(f"score {score}/100 < 55")
+    if not evidence:
+        missing.append("directional support")
+    if missing:
+        lines.append(f"  Needs     : {', '.join(missing)}")
+
+    if action in ("BUY", "SELL"):
+        lines.append(f"  Strict    : CONFIRMED {action} — watch has progressed.")
+    else:
+        lines.append("  Strict    : WAITING — timeframe confirmation is incomplete.")
+    lines.append("  Decision  : Watch only; this does not open a trade.")
+    return lines
+
+
 def signal_card(a: MarketAnalysis) -> str:
     ms = market_status()
 
@@ -457,6 +538,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"              OB {framework_scores.get('order_block_reaction', 0)}/15 | "
         f"FVG {framework_scores.get('fair_value_gap_confirmation', 0)}/10 | "
         f"C {framework_scores.get('candlestick_confirmation', 0)}/5",
+        *_early_watch_lines(a),
         "",
         "──────────────────────────────────",
         "  INDICATORS",
