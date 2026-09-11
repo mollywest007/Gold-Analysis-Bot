@@ -205,6 +205,9 @@ SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
 # Structure: { "M15": "BUY", "H1": "SELL", ... }
 _forming_alert_sent: Dict[str, str] = {}
 _forming_alert_last_sent: Dict[str, float] = {}
+# Last Telegram message IDs for setup-forming alerts, grouped by alert key and
+# chat.  These let a new bullish/bearish warning replace the previous one.
+_forming_alert_message_ids: Dict[str, Dict[str, int]] = {}
 
 # Re-notify if the same setup remains active long enough for a trader to miss
 # the first warning.  The direction lock still prevents 15-second spam.
@@ -250,6 +253,7 @@ class AccountAlertState:
     tp_reanalysis_start_sent: Dict[str, bool] = field(default_factory=dict)
     forming_alert_sent: Dict[str, str] = field(default_factory=dict)
     forming_alert_last_sent: Dict[str, float] = field(default_factory=dict)
+    forming_alert_message_ids: Dict[str, Dict[str, int]] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
     mode: str = ""
@@ -275,6 +279,14 @@ def _state_from_record(record: dict) -> AccountAlertState:
         },
         forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
         forming_alert_last_sent=dict(record.get("forming_alert_last_sent") or {}),
+        forming_alert_message_ids={
+            str(key): {
+                str(chat_id): int(message_id)
+                for chat_id, message_id in (messages or {}).items()
+                if str(message_id).isdigit()
+            }
+            for key, messages in (record.get("forming_alert_message_ids") or {}).items()
+        },
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
         reminded_trade_ids={
             str(trade_id): set(milestones or [])
@@ -299,6 +311,7 @@ def _state_record(state: AccountAlertState) -> dict:
         "tp_reanalysis_start_sent": state.tp_reanalysis_start_sent,
         "forming_alert_sent": state.forming_alert_sent,
         "forming_alert_last_sent": state.forming_alert_last_sent,
+        "forming_alert_message_ids": state.forming_alert_message_ids,
         "momentum_shift_warned": state.momentum_shift_warned,
         "reminded_trade_ids": {
             trade_id: sorted(milestones)
@@ -500,6 +513,7 @@ def _sync_mode_state(
         closed_signal = _closed_signal
         tf_last_fired = _tf_last_fired
         forming_alert_sent = _forming_alert_sent
+        forming_alert_message_ids = _forming_alert_message_ids
         momentum_shift_warned = _momentum_shift_warned
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
@@ -520,6 +534,7 @@ def _sync_mode_state(
         closed_signal = state.closed_signal
         tf_last_fired = state.tf_last_fired
         forming_alert_sent = state.forming_alert_sent
+        forming_alert_message_ids = state.forming_alert_message_ids
         momentum_shift_warned = state.momentum_shift_warned
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
@@ -558,6 +573,7 @@ def _sync_mode_state(
                 tf_last_fired,
                 state.pending_signal if state is not None else _pending_signal,
                 forming_alert_sent,
+                forming_alert_message_ids,
                 momentum_shift_warned,
                 sl_cooldown_until,
                 tp_cooldown_until,
@@ -577,6 +593,7 @@ def _sync_mode_state(
             closed_signal.clear()
             tf_last_fired.clear()
             forming_alert_sent.clear()
+            forming_alert_message_ids.clear()
             momentum_shift_warned.clear()
             sl_cooldown_until.clear()
             tp_cooldown_until.clear()
@@ -1145,6 +1162,9 @@ async def _send_setup_forming_alert(
     forming_alert_last_sent = (
         state.forming_alert_last_sent if state else _forming_alert_last_sent
     )
+    forming_alert_message_ids = (
+        state.forming_alert_message_ids if state else _forming_alert_message_ids
+    )
     key = lock_key or tf
     if forming_alert_sent.get(key) == forming_dir:
         last_sent = float(forming_alert_last_sent.get(key, 0.0) or 0.0)
@@ -1200,8 +1220,12 @@ async def _send_setup_forming_alert(
         f"  if the strict timeframe gate aligns.\n"
         f"</pre>"
     )
-    dead, delivered = await _broadcast_text(
-        bot, subs, text, return_result=True
+    # Replace the previous warning for this timeframe/stream instead of
+    # leaving stale bullish and bearish cards in the chat together.
+    previous_messages = forming_alert_message_ids.pop(key, {})
+    await _delete_messages(bot, previous_messages)
+    dead, delivered, message_ids = await _broadcast_text(
+        bot, subs, text, return_result=True, return_messages=True
     )
     if dead:
         subs -= dead
@@ -1209,6 +1233,7 @@ async def _send_setup_forming_alert(
     if delivered:
         forming_alert_sent[key] = forming_dir
         forming_alert_last_sent[key] = time.time()
+        forming_alert_message_ids[key] = message_ids
         logger.info(f"[{tf}] Setup-forming pre-alert sent — {forming_dir} ({votes}/8 votes)")
     else:
         logger.warning(
@@ -1272,7 +1297,8 @@ async def _send_momentum_shift_warning(
 
 
 async def _broadcast_text(
-    bot, subs: Set[int], text: str, *, return_result: bool = False
+    bot, subs: Set[int], text: str, *, return_result: bool = False,
+    return_messages: bool = False,
 ):
     """Send text to subscribers.
 
@@ -1282,17 +1308,45 @@ async def _broadcast_text(
     """
     dead: Set[int] = set()
     delivered = 0
+    message_ids: Dict[str, int] = {}
     for chat_id in list(subs):
         try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            message = await bot.send_message(
+                chat_id=chat_id, text=text, parse_mode="HTML"
+            )
             delivered += 1
+            if return_messages and getattr(message, "message_id", None):
+                message_ids[str(chat_id)] = int(message.message_id)
         except Exception as e:
             err = str(e).lower()
             if "blocked" in err or "not found" in err or "deactivated" in err:
                 dead.add(chat_id)
             else:
                 logger.warning(f"Text send failed for {chat_id}: {e}")
-    return (dead, delivered > 0) if return_result else dead
+    if return_result and return_messages:
+        return dead, delivered > 0, message_ids
+    if return_result:
+        return dead, delivered > 0
+    return dead
+
+
+async def _delete_messages(bot, message_ids: Dict[str, int]) -> None:
+    """Delete previously sent setup warnings, ignoring already-missing cards."""
+    for chat_id, message_id in list(message_ids.items()):
+        try:
+            await bot.delete_message(
+                chat_id=int(chat_id),
+                message_id=int(message_id),
+            )
+        except Exception as e:
+            error = str(e).lower()
+            if "not found" not in error and "message to delete" not in error:
+                logger.warning(
+                    "Old setup warning could not be deleted for %s/%s: %s",
+                    chat_id,
+                    message_id,
+                    e,
+                )
 
 
 async def _broadcast_photo(bot, subs: Set[int], img_bytes: bytes, caption: str) -> Set[int]:
@@ -1924,6 +1978,7 @@ async def _check_and_alert_once(
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
         forming_alert_sent = state.forming_alert_sent
+        forming_alert_message_ids = state.forming_alert_message_ids
         momentum_shift_warned = state.momentum_shift_warned
         _clear_orphaned_pending_claims(
             pending_signal,
@@ -1943,6 +1998,7 @@ async def _check_and_alert_once(
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
         forming_alert_sent = _forming_alert_sent
+        forming_alert_message_ids = _forming_alert_message_ids
         momentum_shift_warned = _momentum_shift_warned
 
     def _get_active_trades():
@@ -2774,6 +2830,14 @@ async def _check_and_alert_once(
             _save_signal_state(account_id, state)
             return
         sig_list = delivered_signals
+
+        # A confirmed alert supersedes any earlier setup-forming card for the
+        # same timeframe/stream. Keep the confirmed alert as the only current
+        # entry message in the chat.
+        for _, state_key, _, _, _ in sig_list:
+            previous_messages = forming_alert_message_ids.pop(state_key, {})
+            await _delete_messages(bot, previous_messages)
+            forming_alert_sent.pop(state_key, None)
 
         now_ts = time.time()
         for stream_label, state_key, tf, analysis_mode, a in sig_list:
