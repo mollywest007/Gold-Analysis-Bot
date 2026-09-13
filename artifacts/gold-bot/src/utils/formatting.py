@@ -799,7 +799,7 @@ def signal_card(a: MarketAnalysis) -> str:
 
 # ─── ANALYSIS CARD ────────────────────────────────────────────────────────────
 
-def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
+def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     ms = market_status()
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
@@ -971,6 +971,165 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     # Every line between the wrapper tags is analysis-derived text. Escape it
     # as a single boundary so unexpected values from market/news feeds cannot
     # become Telegram HTML tags and make the whole card fail to send.
+    escaped_lines = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped_lines))
+
+
+def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
+    """Compact single-message analysis board designed for quick reading."""
+    ms = market_status()
+    report = getattr(a, "institutional_report", {}) or {}
+    framework = report.get("score_breakdown", {}) or {}
+    multi = report.get("multi_timeframe", {}) or {}
+    directions = multi.get("directions", {}) or {}
+    scores = multi.get("scores", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    action = getattr(a, "action", "WAIT")
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    strict_ready = action in ("BUY", "SELL")
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    legacy = report.get("legacy", {}) or {}
+    legacy_status = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    mtf_text = " | ".join(
+        f"{tf}:{directions.get(tf, 'NO DATA')}/{int(scores.get(tf, 0) or 0)}"
+        for tf in ("D1", "H4", "H1", "M15")
+    )
+
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if float(getattr(a, "adx", 0.0) or 0.0) >= 18:
+        evidence.append(f"ADX {float(a.adx):.1f}")
+    if getattr(a, "choch", "NONE") != "NONE":
+        evidence.append(str(a.choch).replace("_", " "))
+    if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(str(a.bos).replace("_", " "))
+    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+
+    watch_entry = (
+        float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
+    zone_text = (
+        f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
+        if zone.get("low") and zone.get("high")
+        else "Not formed"
+    )
+
+    blockers = []
+    if score < 60:
+        blockers.append(f"score {score}/60")
+    for tf in ("D1", "H4", "H1", "M15"):
+        if (
+            direction not in ("BUY", "SELL")
+            or directions.get(tf, "NO DATA") != direction
+            or int(scores.get(tf, 0) or 0) < 60
+        ):
+            blockers.append(f"{tf} alignment")
+    if legacy_status == "CONFLICT":
+        blockers.append("legacy conflict")
+    if not blockers and not strict_ready:
+        blockers.append("strict gate")
+    blocker_text = ", ".join(blockers[:5]) if blockers else "None"
+
+    structure = report.get("market_structure", {}) or {}
+    smc = report.get("smc", {}) or {}
+    layers = (
+        f"T {framework.get('trend_alignment', 0)}/25 | "
+        f"S {framework.get('market_structure', 0)}/25 | "
+        f"L {framework.get('liquidity_confirmation', 0)}/20 | "
+        f"OB {framework.get('order_block_reaction', 0)}/15 | "
+        f"FVG {framework.get('fair_value_gap_confirmation', 0)}/10 | "
+        f"C {framework.get('candlestick_confirmation', 0)}/5"
+    )
+    supertrend = getattr(a, "supertrend_direction", "NEUTRAL")
+    supertrend_text = (
+        "Bullish" if supertrend == "BUY"
+        else "Bearish" if supertrend == "SELL"
+        else "Neutral"
+    )
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║ XAU/USD  ANALYSIS BOARD          ║",
+        "╚══════════════════════════════════╝",
+        f"  Price {fmt_price(a.price)} | {a.timeframe} | {a.session or 'N/A'}",
+        f"  Market {_mkt_line()}",
+        "",
+        "── DECISION ───────────────────────",
+        f"  Strict : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        f"  Early  : {'WATCH READY ' + direction if watch_ready else 'FORMING'}",
+        f"  Score  : {score}/100  (watch 55 | strict 60)",
+        f"  MTF    : {mtf_text}",
+        f"  HTF    : {htf_bias} | Legacy {legacy_status}",
+        f"  Data   : {report.get('data_quality', 'REAL_OHLCV')}",
+        "",
+        "── ENTRY INFORMATION ──────────────",
+        f"  Strict gate : score 60+ | MTF 60+ | HTF aligned | no conflict",
+    ]
+    if strict_ready:
+        lines += [
+            f"  Confirmed   : {action} @ {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  SL / TP1    : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
+            f"{fmt_price(getattr(a, 'tp1', 0.0))}",
+            f"  TP2 / TP3   : {fmt_price(getattr(a, 'tp2', 0.0))} / "
+            f"{fmt_price(getattr(a, 'tp3', 0.0))} | R:R 1:{getattr(a, 'rr_ratio', 0)}",
+        ]
+    else:
+        lines.append("  Confirmed   : None — no active trade")
+    lines += [
+        f"  Early watch : {direction if direction in ('BUY', 'SELL') else 'WAIT'} | "
+        f"Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
+        f"  Watch zone  : {zone_text}",
+        "  Early plan  : provisional manual review only; never active",
+        "",
+        "── WHY ────────────────────────────",
+        f"  Evidence : {', '.join(evidence) if evidence else 'None yet'}",
+        f"  Structure: {structure.get('trend', getattr(a, 'trend', 'N/A'))} | "
+        f"BOS {structure.get('bos', getattr(a, 'bos', 'NONE'))} | "
+        f"CHoCH {structure.get('choch', getattr(a, 'choch', 'NONE'))}",
+        f"  Layers   : {layers}",
+        f"  ADX      : {float(getattr(a, 'adx', 0.0) or 0.0):.1f} | "
+        f"Votes BUY {buy_votes}/8 SELL {sell_votes}/8",
+        f"  Risk     : {getattr(a, 'risk_level', 'HIGH')} | "
+        f"Macro {getattr(a, 'macro_status', 'UNAVAILABLE')}",
+        f"  Intermkt : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
+        "",
+        "── MARKET SNAPSHOT ────────────────",
+        f"  RSI {float(getattr(a, 'rsi_value', 0.0) or 0.0):.1f} | "
+        f"MACD {float(getattr(a, 'macd_hist', 0.0) or 0.0):+.2f} | "
+        f"Stoch {float(getattr(a, 'stoch_k_val', 0.0) or 0.0):.1f}/"
+        f"{float(getattr(a, 'stoch_d_val', 0.0) or 0.0):.1f}",
+        f"  CCI {float(getattr(a, 'cci_value', 0.0) or 0.0):.0f} | "
+        f"VWAP {float(getattr(a, 'vwap', 0.0) or 0.0):,.2f} | "
+        f"BB%B {float(getattr(a, 'bb_pct', 0.0) or 0.0):.1f}",
+        f"  Supertrend {supertrend_text} | Regime {getattr(a, 'market_regime', 'NORMAL')}",
+        f"  Levels R2 {fmt_price(a.resistance2)} | R1 {fmt_price(a.resistance1)} | "
+        f"Price {fmt_price(a.price)}",
+        f"  Levels S1 {fmt_price(a.support1)} | S2 {fmt_price(a.support2)} | "
+        f"ATR {fmt_price(a.atr)}",
+        "",
+        "── BLOCKERS ───────────────────────",
+        f"  Waiting for: {blocker_text}",
+        f"  Reason     : "
+        f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'No additional blocker')[:110]}",
+    ]
+    invalidating = getattr(a, "invalidating_conditions", []) or []
+    if invalidating:
+        lines.append("  Invalidation: " + "; ".join(str(x) for x in invalidating[:2]))
+    if not ms["is_open"]:
+        lines.append(f"  Market note: {ms['status_text']} — {ms['note']}")
+    lines += ["", "  Not financial advice.", "</pre>"]
     escaped_lines = [
         lines[0],
         *(html.escape(str(line), quote=False) for line in lines[1:-1]),
