@@ -263,8 +263,67 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
     )
 
 
+def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
+    """Keep the most important decision state near the top of the full card."""
+    report = getattr(a, "institutional_report", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    action = getattr(a, "action", "WAIT")
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    choch = getattr(a, "choch", "NONE")
+    bos = getattr(a, "bos", "NONE")
+    evidence = []
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    if choch != "NONE":
+        evidence.append(choch.replace("_", " "))
+    if bos in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(bos.replace("_", " "))
+    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    legacy = report.get("legacy", {}) or {}
+    legacy_confirmation = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    multi = report.get("multi_timeframe", {}) or {}
+    mtf_directions = multi.get("directions", {}) or {}
+    mtf_scores = multi.get("scores", {}) or {}
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    htf_matches = (
+        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
+    ) or (
+        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
+    )
+    mtf_text = " | ".join(
+        f"{tf} {mtf_directions.get(tf, 'NO DATA')}/{int(mtf_scores.get(tf, 0) or 0)}"
+        for tf in ("D1", "H4", "H1", "M15")
+    )
+    return [
+        "",
+        "──────────────────────────────────",
+        "  DECISION SUMMARY",
+        "──────────────────────────────────",
+        f"  Strict confirmed: "
+        f"{'CONFIRMED ' + action if action in ('BUY', 'SELL') else 'WAITING'}",
+        f"  Early watch     : "
+        f"{'READY ' + direction if watch_ready else 'FORMING'}",
+        f"  Score           : {score}/100  "
+        f"(watch 55 + evidence | strict 60)",
+        f"  MTF chain       : {mtf_text}",
+        f"  HTF bias        : {htf_bias}  {'✓' if htf_matches else '…'}",
+        f"  Legacy layer    : {legacy_confirmation}  "
+        f"(BUY {buy_votes} / SELL {sell_votes})",
+        f"  Data            : {report.get('data_quality', 'REAL_OHLCV')}",
+        f"  Evidence        : {', '.join(evidence) if evidence else 'None yet'}",
+    ]
+
+
 def _early_watch_lines(a: MarketAnalysis) -> list[str]:
-    """Explain every early-entry gate without changing the strict signal."""
+    """Explain the strict and early-entry paths in a fixed reading order."""
     report = getattr(a, "institutional_report", {}) or {}
     direction = getattr(a, "directional_indication", "NEUTRAL")
     action = getattr(a, "action", "WAIT")
@@ -288,6 +347,15 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     mtf_directions = multi.get("directions", {}) or {}
     mtf_scores = multi.get("scores", {}) or {}
     legacy = report.get("legacy", {}) or {}
+    legacy_confirmation = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    htf_matches = (
+        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
+    ) or (
+        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
+    )
     evidence = []
     if matching_votes >= 2:
         evidence.append(f"{direction} votes {matching_votes}")
@@ -303,16 +371,68 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     lines = [
         "",
         "──────────────────────────────────",
-        "  EARLY ENTRY CONFIRMATION BOARD",
+        "  1) DECISION SUMMARY",
         "──────────────────────────────────",
-        "  A provisional plan may be shown when the early",
-        "  watch criteria pass. It is not opened automatically.",
-        f"  Status    : {'WATCH READY' if watch_ready else 'FORMING'}",
-        f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
-        f"  Watch gate: {score}/100  (needs 55 + evidence)",
-        f"  Evidence  : {', '.join(evidence) if evidence else 'None yet'}",
+        f"  STRICT CONFIRMED ENTRY: "
+        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        f"  EARLY WATCH           : "
+        f"{'READY ' + direction if watch_ready else 'FORMING'}",
+        f"  Score                 : {score}/100 "
+        f"(watch 55 + evidence | strict 60)",
+    ]
+
+    strict_mtf_rows = []
+    for tf in ("D1", "H4", "H1", "M15"):
+        tf_direction = mtf_directions.get(tf, "NO DATA")
+        tf_score = int(mtf_scores.get(tf, 0) or 0)
+        passed = (
+            direction in ("BUY", "SELL")
+            and tf_direction == direction
+            and tf_score >= 60
+        )
+        strict_mtf_rows.append(
+            f"{tf} {tf_direction}/{tf_score}{'✓' if passed else '…'}"
+        )
+    lines += [
+        f"  MTF chain             : {' | '.join(strict_mtf_rows)}",
+        f"  HTF bias              : {htf_bias} "
+        f"{'✓ MATCH' if htf_matches else '… WAITING'}",
+        f"  Legacy layer          : {legacy_confirmation} "
+        f"(BUY {buy_votes} / SELL {sell_votes})",
+        f"  Data quality          : {report.get('data_quality', 'REAL_OHLCV')}",
         "",
-        "  INSTITUTIONAL LAYERS (strict gate: 60/100)",
+        "──────────────────────────────────",
+        "  2) STRICT CONFIRMED ENTRY",
+        "──────────────────────────────────",
+        f"  Status                : "
+        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        "  Gate                  : score 60+ | all four timeframes 60+",
+        "                          HTF aligned | no legacy conflict",
+    ]
+    if strict_ready:
+        lines += [
+            f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  Stop Loss             : {fmt_price(getattr(a, 'stop_loss', 0.0))}",
+            f"  TP1 / TP2 / TP3       : {fmt_price(getattr(a, 'tp1', 0.0))} / "
+            f"{fmt_price(getattr(a, 'tp2', 0.0))} / {fmt_price(getattr(a, 'tp3', 0.0))}",
+            f"  R:R                   : 1:{getattr(a, 'rr_ratio', 0)}",
+            "  Trade state           : ACTIVE PLAN — confirmed gate passed",
+        ]
+    else:
+        lines += [
+            "  Trade plan            : NO ACTIVE TRADE",
+            "  Meaning               : strict confirmation is incomplete",
+        ]
+
+    lines += [
+        "",
+        "──────────────────────────────────",
+        "  3) EARLY WATCH / PROVISIONAL ENTRY",
+        "──────────────────────────────────",
+        f"  Status                : {'WATCH READY' if watch_ready else 'FORMING'}",
+        f"  Direction             : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        f"  Evidence              : {', '.join(evidence) if evidence else 'None yet'}",
+        "  Meaning               : manual review only; never an active trade",
     ]
 
     layer_rows = [
@@ -339,54 +459,6 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         ),
         "Candle confirmation": ", ".join(report.get("candlesticks", []) or []) or "None",
     }
-    for label, key, maximum in layer_rows:
-        points = int(framework.get(key, 0) or 0)
-        marker = "✓" if points > 0 else "…"
-        lines.append(
-            f"  {marker} {label:<18} {points:>2}{maximum}  {layer_details[label]}"
-        )
-
-    lines += [
-        "",
-        "  TIMEFRAME CONFIRMATION (all must agree at 60+)",
-    ]
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = mtf_directions.get(tf, "NO DATA")
-        tf_score = int(mtf_scores.get(tf, 0) or 0)
-        passed = (
-            direction in ("BUY", "SELL")
-            and tf_direction == direction
-            and tf_score >= 60
-        )
-        marker = "✓" if passed else "…"
-        lines.append(
-            f"  {marker} {tf:<4} {tf_direction:<7} {tf_score:>3}/100"
-            f"  {'ALIGNED' if passed else 'WAITING'}"
-        )
-
-    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
-    htf_matches = (
-        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
-    ) or (
-        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
-    legacy_confirmation = legacy.get(
-        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
-    )
-    lines += [
-        "",
-        "  SECONDARY SAFETY CHECKS",
-        f"  {'✓' if htf_matches else '…'} HTF bias        {htf_bias}"
-        f"  {'MATCH' if htf_matches else 'WAITING'}",
-        f"  {'✕' if legacy_confirmation == 'CONFLICT' else '✓' if legacy_confirmation == 'ALIGNED' else '·'}"
-        f" Legacy layer    {legacy_confirmation}"
-        f"  (BUY {buy_votes} / SELL {sell_votes})",
-        f"  · ADX / strength  {adx:.1f} / {getattr(a, 'strength', 'N/A')}",
-        f"  · Data quality    {report.get('data_quality', 'REAL_OHLCV')}",
-        f"  · Macro calendar  {getattr(a, 'macro_status', 'UNAVAILABLE')}",
-        f"  · Intermarket     {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
-    ]
-
     watch_entry = (
         float(getattr(a, "early_entry", 0.0) or 0.0)
         or float(getattr(a, "limit_entry", 0.0) or 0.0)
@@ -395,48 +467,79 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
     lines += [
         "",
-        "  EARLY ENTRY LOCATION",
-        f"  Watch price : {fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
-        f"  Zone        : "
+        "  EARLY WATCH LOCATION",
+        f"  Watch entry           : "
+        f"{fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
+        f"  Entry zone            : "
         f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
         if zone.get("low") and zone.get("high")
-        else "  Zone        : Not formed",
+        else "  Entry zone            : Not formed",
     ]
     if watch_reason:
-        lines.append(f"  Method      : {watch_reason[:110]}")
+        lines.append(f"  Method                : {watch_reason[:100]}")
+
+    lines += [
+        "",
+        "──────────────────────────────────",
+        "  4) INSTITUTIONAL EVIDENCE",
+        "──────────────────────────────────",
+        "  Strict score gate: 60/100",
+    ]
+    for label, key, maximum in layer_rows:
+        points = int(framework.get(key, 0) or 0)
+        marker = "✓" if points > 0 else "…"
+        lines.append(
+            f"  {marker} {label:<18} {points:>2}{maximum} "
+            f"{layer_details[label]}"
+        )
+
+    lines += [
+        "",
+        "──────────────────────────────────",
+        "  5) MARKET CONTEXT & SAFETY",
+        "──────────────────────────────────",
+        f"  Structure             : {structure.get('trend', 'NONE')} | "
+        f"BOS {structure.get('bos', 'NONE')} | CHoCH {structure.get('choch', 'NONE')}",
+        f"  ADX / strength       : {adx:.1f} / {getattr(a, 'strength', 'N/A')}",
+        f"  Macro calendar        : {getattr(a, 'macro_status', 'UNAVAILABLE')}",
+        f"  Intermarket           : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
+        f"  Risk level            : {getattr(a, 'risk_level', 'HIGH')}",
+    ]
 
     missing = []
     if direction not in ("BUY", "SELL"):
-        missing.append("a clear directional institutional setup")
+        missing.append("clear BUY/SELL direction")
     if score < 55:
-        missing.append(f"watch score to reach 55 (currently {score})")
+        missing.append(f"watch score 55 (now {score})")
     if not evidence:
-        missing.append("directional evidence: 2 votes, ADX 18+, BOS, or CHoCH")
+        missing.append("directional evidence")
     if score < 60:
-        missing.append("institutional score to reach 60 for strict confirmation")
+        missing.append("strict score 60")
     for tf in ("D1", "H4", "H1", "M15"):
         tf_direction = mtf_directions.get(tf, "NO DATA")
         tf_score = int(mtf_scores.get(tf, 0) or 0)
         if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
-            missing.append(f"{tf} alignment ({tf_direction}, {tf_score}/100)")
+            missing.append(f"{tf} alignment")
     if not htf_matches:
-        missing.append(f"HTF bias to match {direction} (currently {htf_bias})")
+        missing.append(f"HTF bias {direction}")
     if legacy_confirmation == "CONFLICT":
-        missing.append("legacy conflict to clear")
+        missing.append("legacy conflict clearance")
     if getattr(a, "macro_status", "") == "HIGH_IMPACT_IMMINENT":
-        missing.append("high-impact event window to clear")
+        missing.append("high-impact event window")
 
     lines += [
         "",
-        "  WHAT IT IS WAITING FOR",
-        "  " + ("; ".join(missing[:7]) if missing else "No listed blocker"),
-        f"  Strict result: {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        f"  Reason       : {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Confirmation is still incomplete')[:140]}",
-        "  Decision     : Provisional alert only — no active trade is created.",
+        "──────────────────────────────────",
+        "  6) BLOCKERS & INVALIDATION",
+        "──────────────────────────────────",
+        "  Still missing          : " + ("; ".join(missing[:8]) if missing else "None"),
+        f"  Strict result          : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        f"  Reason                : "
+        f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Confirmation is still incomplete')[:120]}",
     ]
     invalidating = getattr(a, "invalidating_conditions", []) or []
     if invalidating:
-        lines.append("  Invalidation : " + "; ".join(str(item) for item in invalidating[:3]))
+        lines.append("  Invalidation           : " + "; ".join(str(item) for item in invalidating[:3]))
     return lines
 
 
@@ -627,6 +730,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  Price     : {fmt_price(a.price)}",
         f"  Timeframe : {a.timeframe}   {_mkt_line()}",
         f"  Session   : {a.session or 'N/A'}",
+        *_decision_summary_lines(a),
         "",
         "──────────────────────────────────",
         "  MARKET STRUCTURE",
@@ -640,7 +744,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  ADX       : {a.adx:.1f}",
         "",
         "──────────────────────────────────",
-        "  INSTITUTIONAL SCORE",
+        "  INSTITUTIONAL EVIDENCE",
         "──────────────────────────────────",
         f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
         f"  Maximum   : 100/100",
@@ -656,7 +760,6 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"              OB {framework_scores.get('order_block_reaction', 0)}/15 | "
         f"FVG {framework_scores.get('fair_value_gap_confirmation', 0)}/10 | "
         f"C {framework_scores.get('candlestick_confirmation', 0)}/5",
-        *_early_watch_lines(a),
         "",
         "──────────────────────────────────",
         "  INDICATORS",
@@ -697,6 +800,8 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  S2        : {fmt_price(a.support2)}",
         f"  ATR(14)   : {fmt_price(a.atr)}",
         "",
+        "──────────────────────────────────",
+        "  STRICT CONFIRMED ENTRY",
         "──────────────────────────────────",
     ]
 
@@ -741,7 +846,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
                 lines.append(f"    + {cf}")
     else:
         lines += [
-            f"  SIGNAL    : WAIT",
+            f"  STATUS    : WAITING — no confirmed entry",
         ]
         indication = getattr(a, "directional_indication", "NEUTRAL")
         wait_status, wait_detail = _wait_status(a)
@@ -756,7 +861,9 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         local_grade = getattr(a, "setup_grade", "") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
-                f"  INDICATION: {wait_status}",
+                f"  INDICATION: {indication} (not confirmed)",
+                f"  Wait state : {wait_status}",
+                "  Status    : Awaiting confirmation",
                 f"  Setup Grade: {setup_grade}",
                 *(
                     [f"  Local Grade: {local_grade} (before MTF gate)"]
@@ -765,6 +872,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
                 ),
                 f"  Confidence: {a.confidence}%",
                 f"  Blocked   : {wait_detail}",
+                f"  Engine note: {(a.wait_reason or a.verdict_reason or wait_detail)[:72]}",
             ]
         else:
             lines.append(f"  Setup Grade: {setup_grade}")
