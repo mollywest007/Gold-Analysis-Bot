@@ -1004,6 +1004,7 @@ def _legacy_compact_analysis_board(
         f"{tf}:{directions.get(tf, 'NO DATA')}/{int(scores.get(tf, 0) or 0)}"
         for tf in ("D1", "H4", "H1", "M15")
     )
+    mtf_parts = mtf_text.split(" | ")
 
     matching_votes = buy_votes if direction == "BUY" else sell_votes
     evidence = []
@@ -1072,7 +1073,8 @@ def _legacy_compact_analysis_board(
         f"  Strict : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
         f"  Early  : {'WATCH READY ' + direction if watch_ready else 'FORMING'}",
         f"  Score  : {score}/100  (watch 55 | strict 60)",
-        f"  MTF    : {mtf_text}",
+        f"  MTF    : {' | '.join(mtf_parts[:2])}",
+        f"           {' | '.join(mtf_parts[2:])}",
         f"  HTF    : {htf_bias} | Legacy {legacy_status}",
         f"  Data   : {report.get('data_quality', 'REAL_OHLCV')}",
         "",
@@ -1089,6 +1091,13 @@ def _legacy_compact_analysis_board(
         ]
     else:
         lines.append("  Confirmed   : None — no active trade")
+        if direction in ("BUY", "SELL"):
+            lines += [
+                f"  INDICATION: {direction} (not confirmed)",
+                "  Status    : Awaiting confirmation",
+                f"  Setup Grade: {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
+                f"  Confidence: {getattr(a, 'confidence', 0)}%",
+            ]
     lines += [
         f"  Early watch : {direction if direction in ('BUY', 'SELL') else 'WAIT'} | "
         f"Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
@@ -1148,7 +1157,10 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     the trade.  Detailed indicator output stays available without competing
     with the decision at the top of the message.
     """
-    del account_id  # Kept in the public signature for handler compatibility.
+    # Keep the familiar board order used before the recent redesign.  The
+    # legacy renderer below is the same information architecture, with only
+    # the readability improvements applied above.
+    return _legacy_compact_analysis_board(a, account_id)
 
     ms = market_status()
     report = getattr(a, "institutional_report", {}) or {}
