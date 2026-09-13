@@ -379,28 +379,44 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
     return [
         "",
         "──────────────────────────────────",
-        "  ENTRY DECISION PATHS",
+        "  STRICT CONFIRMED ENTRY",
         "──────────────────────────────────",
-        f"  STRICT CONFIRMED ENTRY : "
+        f"  Status                : "
         f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        "  Strict gate            : score 60+ | D1/H4/H1/M15 60+ | "
-        "HTF aligned | no conflict",
-        f"  EARLY WATCH            : "
-        f"{'READY ' + direction if watch_ready else 'FORMING'}",
-        f"  Watch gate             : {score}/100 "
-        f"(needs 55 + directional evidence)",
-        f"  Evidence               : {', '.join(evidence) if evidence else 'None yet'}",
-        f"  Watch entry            : "
+        "  Gate                  : score 60+ | D1/H4/H1/M15 60+",
+        "                          HTF aligned | no conflict",
+        *(
+            [
+                f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
+                f"  Stop Loss             : {fmt_price(getattr(a, 'stop_loss', 0.0))}",
+                f"  TP1 / TP2 / TP3       : {fmt_price(getattr(a, 'tp1', 0.0))} / "
+                f"{fmt_price(getattr(a, 'tp2', 0.0))} / "
+                f"{fmt_price(getattr(a, 'tp3', 0.0))}",
+                f"  R:R                   : 1:{getattr(a, 'rr_ratio', 0)}",
+                "  Trade state           : ACTIVE PLAN",
+            ]
+            if strict_ready
+            else [
+                "  Trade plan            : NO ACTIVE TRADE",
+                f"  Still missing         : "
+                f"{'; '.join(missing[:6]) if missing else 'confirmation'}",
+            ]
+        ),
+        "",
+        "──────────────────────────────────",
+        "  EARLY WATCH ENTRY",
+        "──────────────────────────────────",
+        f"  Status                : {'READY' if watch_ready else 'FORMING'}",
+        f"  Direction             : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        f"  Entry                 : "
         f"{fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
-        f"  Watch zone             : "
+        f"  Entry zone            : "
         f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
         if zone.get("low") and zone.get("high")
-        else "  Watch zone             : Not formed",
+        else "  Entry zone            : Not formed",
+        f"  Evidence              : {', '.join(evidence) if evidence else 'None yet'}",
         f"  HTF / legacy           : {htf_bias} / {legacy_confirmation}",
-        f"  Remaining blockers     : "
-        f"{'; '.join(missing[:6]) if missing else 'None'}",
-        "  Early-watch meaning    : provisional manual review only; "
-        "never an active trade",
+        "  Trade state           : MANUAL REVIEW ONLY — NEVER ACTIVE",
     ]
 
 
@@ -1079,32 +1095,44 @@ def _legacy_compact_analysis_board(
         f"           {' | '.join(mtf_parts[2:])}",
         f"  Legacy : {legacy_status}  |  Data {report.get('data_quality', 'REAL_OHLCV')}",
         "",
-        "── ENTRY PLAN ─────────────────────",
+        "── STRICT CONFIRMED ENTRY ─────────",
     ]
     if strict_ready:
         lines += [
-            f"  Confirmed : {action} @ {fmt_price(getattr(a, 'entry', 0.0))}",
-            f"  SL / TP1 : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
+            f"  Status    : CONFIRMED {action}",
+            f"  Entry     : {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  SL / TP1  : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp1', 0.0))}",
-            f"  TP2 / TP3: {fmt_price(getattr(a, 'tp2', 0.0))} / "
+            f"  TP2 / TP3 : {fmt_price(getattr(a, 'tp2', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp3', 0.0))} | R:R 1:{getattr(a, 'rr_ratio', 0)}",
+            "  State     : ACTIVE PLAN",
         ]
     else:
-        lines.append("  Confirmed : None — no active trade")
-        if direction in ("BUY", "SELL"):
-            lines += [
+        lines += [
+            "  Status    : Awaiting confirmation",
+            "  Trade plan: NO ACTIVE TRADE",
+            f"  Missing   : {blocker_text}",
+        ]
+    lines += [
+        "",
+        "── EARLY WATCH ENTRY ──────────────",
+        f"  Status    : {'READY' if watch_ready else 'FORMING'}",
+        f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        *(
+            [
                 f"  INDICATION: {direction} (not confirmed)",
-                "  Status    : Awaiting confirmation",
                 f"  Setup Grade: {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
                 f"  Confidence: {getattr(a, 'confidence', 0)}%",
             ]
-    lines += [
-        f"  Watch     : {direction if direction in ('BUY', 'SELL') else 'WAIT'} | "
-        f"Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
-        f"  Zone      : {zone_text}  |  manual only",
+            if direction in ("BUY", "SELL") and not strict_ready
+            else []
+        ),
+        f"  Entry     : {fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
+        f"  Zone      : {zone_text}",
+        f"  Evidence  : {', '.join(evidence) if evidence else 'None yet'}",
+        "  State     : MANUAL REVIEW ONLY — NEVER ACTIVE",
         "",
         "── WHY ────────────────────────────",
-        f"  Evidence : {', '.join(evidence) if evidence else 'None yet'}",
         f"  Structure: {structure.get('trend', getattr(a, 'trend', 'N/A'))} | "
         f"BOS {structure.get('bos', getattr(a, 'bos', 'NONE'))} | "
         f"CHoCH {structure.get('choch', getattr(a, 'choch', 'NONE'))}",
