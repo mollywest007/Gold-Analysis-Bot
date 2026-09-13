@@ -322,6 +322,88 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
     ]
 
 
+def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
+    """Show both entry paths together without creating a second Telegram card."""
+    report = getattr(a, "institutional_report", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    action = getattr(a, "action", "WAIT")
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    if getattr(a, "choch", "NONE") != "NONE":
+        evidence.append(str(a.choch).replace("_", " "))
+    if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(str(a.bos).replace("_", " "))
+
+    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    strict_ready = action in ("BUY", "SELL")
+    legacy = report.get("legacy", {}) or {}
+    legacy_confirmation = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    multi = report.get("multi_timeframe", {}) or {}
+    mtf_directions = multi.get("directions", {}) or {}
+    mtf_scores = multi.get("scores", {}) or {}
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    htf_matches = (
+        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
+    ) or (
+        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
+    )
+    watch_entry = (
+        float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
+
+    missing = []
+    if score < 60:
+        missing.append(f"score 60 (now {score})")
+    for tf in ("D1", "H4", "H1", "M15"):
+        tf_direction = mtf_directions.get(tf, "NO DATA")
+        tf_score = int(mtf_scores.get(tf, 0) or 0)
+        if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
+            missing.append(f"{tf} alignment")
+    if not htf_matches:
+        missing.append("HTF alignment")
+    if legacy_confirmation == "CONFLICT":
+        missing.append("legacy conflict clearance")
+
+    return [
+        "",
+        "──────────────────────────────────",
+        "  ENTRY DECISION PATHS",
+        "──────────────────────────────────",
+        f"  STRICT CONFIRMED ENTRY : "
+        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        "  Strict gate            : score 60+ | D1/H4/H1/M15 60+ | "
+        "HTF aligned | no conflict",
+        f"  EARLY WATCH            : "
+        f"{'READY ' + direction if watch_ready else 'FORMING'}",
+        f"  Watch gate             : {score}/100 "
+        f"(needs 55 + directional evidence)",
+        f"  Evidence               : {', '.join(evidence) if evidence else 'None yet'}",
+        f"  Watch entry            : "
+        f"{fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
+        f"  Watch zone             : "
+        f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
+        if zone.get("low") and zone.get("high")
+        else "  Watch zone             : Not formed",
+        f"  HTF / legacy           : {htf_bias} / {legacy_confirmation}",
+        f"  Remaining blockers     : "
+        f"{'; '.join(missing[:6]) if missing else 'None'}",
+        "  Early-watch meaning    : provisional manual review only; "
+        "never an active trade",
+    ]
+
+
 def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     """Explain the strict and early-entry paths in a fixed reading order."""
     report = getattr(a, "institutional_report", {}) or {}
@@ -731,6 +813,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
         f"  Timeframe : {a.timeframe}   {_mkt_line()}",
         f"  Session   : {a.session or 'N/A'}",
         *_decision_summary_lines(a),
+        *_entry_paths_lines(a),
         "",
         "──────────────────────────────────",
         "  MARKET STRUCTURE",
@@ -1086,6 +1169,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
         f"  Direction   : {a.action}",
         f"  Confidence  : {a.confidence}%",
         f"  Setup Grade : {_quality_label(a.setup_quality)}",
+        *_entry_paths_lines(a),
         "",
         "══════════════════════════════════",
         "  INSTITUTIONAL ENGINE v5",

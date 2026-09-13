@@ -9,7 +9,7 @@ from src.market_hours import market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card, news_card,
-    pro_analysis_card, early_confirmation_card, early_entry_card,
+    pro_analysis_card, early_entry_card,
     no_early_entry_card,
 )
 from src.utils.keyboards import (
@@ -189,11 +189,6 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # ── Part 1: Full professional market analysis ──────────────────────────
         await msg.edit_text(pro_analysis_card(a), parse_mode="HTML",
                             reply_markup=refresh_keyboard("recommend", tf))
-        await update.message.reply_text(
-            early_confirmation_card(a),
-            parse_mode="HTML",
-        )
-
         banner = _open_trade_banner(tf, chat_id)
         if banner:
             await update.message.reply_text(banner, parse_mode="HTML")
@@ -269,10 +264,6 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text(
             analysis_card(a, account_id=chat_id), parse_mode="HTML",
             reply_markup=refresh_keyboard("analyze", tf),
-        )
-        await update.message.reply_text(
-            early_confirmation_card(a),
-            parse_mode="HTML",
         )
     except Exception as e:
         logger.error(f"analyze error: {e}")
