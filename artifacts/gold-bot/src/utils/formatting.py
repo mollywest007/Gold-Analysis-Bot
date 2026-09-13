@@ -979,8 +979,10 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
     return safe_html("\n".join(escaped_lines))
 
 
-def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
-    """Compact single-message analysis board designed for quick reading."""
+def _legacy_compact_analysis_board(
+    a: MarketAnalysis, account_id: int | None = None
+) -> str:
+    """Previous compact board kept as a reference while the layout evolves."""
     ms = market_status()
     report = getattr(a, "institutional_report", {}) or {}
     framework = report.get("score_breakdown", {}) or {}
@@ -1130,6 +1132,203 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     if not ms["is_open"]:
         lines.append(f"  Market note: {ms['status_text']} — {ms['note']}")
     lines += ["", "  Not financial advice.", "</pre>"]
+    escaped_lines = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped_lines))
+
+
+def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
+    """Render one concise, scannable analysis board.
+
+    The board is intentionally ordered by the user's decision flow:
+    what to do, what levels matter, why the engine says it, then what blocks
+    the trade.  Detailed indicator output stays available without competing
+    with the decision at the top of the message.
+    """
+    del account_id  # Kept in the public signature for handler compatibility.
+
+    ms = market_status()
+    report = getattr(a, "institutional_report", {}) or {}
+    framework = report.get("score_breakdown", {}) or {}
+    multi = report.get("multi_timeframe", {}) or {}
+    directions = multi.get("directions", {}) or {}
+    scores = multi.get("scores", {}) or {}
+
+    direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    action = getattr(a, "action", "WAIT") or "WAIT"
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    strict_ready = action in ("BUY", "SELL")
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    legacy = report.get("legacy", {}) or {}
+    legacy_status = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+
+    def _short_direction(value: object) -> str:
+        text = str(value or "NO DATA").upper()
+        return {"BUY": "B", "SELL": "S", "WAIT": "-", "NEUTRAL": "-"}.get(
+            text, "?"
+        )
+
+    def _mtf_row(timeframes: tuple[str, ...]) -> str:
+        return "  " + "  ".join(
+            f"{tf} {_short_direction(directions.get(tf))}/"
+            f"{int(scores.get(tf, 0) or 0)}"
+            for tf in timeframes
+        )
+
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    choch = getattr(a, "choch", "NONE") or "NONE"
+    bos = getattr(a, "bos", "NONE") or "NONE"
+    if choch != "NONE":
+        evidence.append(str(choch).replace("_", " "))
+    if bos in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(str(bos).replace("_", " "))
+    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+
+    watch_entry = (
+        float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
+    zone_text = (
+        f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
+        if zone.get("low") and zone.get("high")
+        else "Not formed"
+    )
+
+    blockers = []
+    if score < 60:
+        blockers.append(f"score {score}/60")
+    for tf in ("D1", "H4", "H1", "M15"):
+        if (
+            direction not in ("BUY", "SELL")
+            or directions.get(tf, "NO DATA") != direction
+            or int(scores.get(tf, 0) or 0) < 60
+        ):
+            blockers.append(f"{tf} alignment")
+    if legacy_status == "CONFLICT":
+        blockers.append("legacy conflict")
+    if not blockers and not strict_ready:
+        blockers.append("strict gate")
+
+    structure = report.get("market_structure", {}) or {}
+    structure_trend = structure.get("trend", getattr(a, "trend", "N/A"))
+    framework_line_1 = (
+        f"T {framework.get('trend_alignment', 0)}/25  "
+        f"S {framework.get('market_structure', 0)}/25  "
+        f"L {framework.get('liquidity_confirmation', 0)}/20"
+    )
+    framework_line_2 = (
+        f"OB {framework.get('order_block_reaction', 0)}/15  "
+        f"FVG {framework.get('fair_value_gap_confirmation', 0)}/10  "
+        f"C {framework.get('candlestick_confirmation', 0)}/5"
+    )
+
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║ XAU/USD  ANALYSIS BOARD          ║",
+        "╚══════════════════════════════════╝",
+        f"  {fmt_price(a.price)}  |  {a.timeframe}  |  {a.session or 'N/A'}",
+        f"  Market: {_mkt_line()}",
+        "",
+        "1) DECISION",
+        "──────────────────────────────────",
+        f"  Strict : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        f"  Early  : {'WATCH READY ' + direction if watch_ready else 'FORMING'}",
+        f"  Score  : {score}/100  (watch 55 | strict 60)",
+        _mtf_row(("D1", "H4")),
+        _mtf_row(("H1", "M15")),
+        f"  HTF    : {htf_bias}  |  Legacy {legacy_status}",
+        f"  Data   : {report.get('data_quality', 'REAL_OHLCV')}",
+        "",
+        "2) ENTRY / ACTION",
+        "──────────────────────────────────",
+    ]
+
+    if strict_ready:
+        lines += [
+            f"  Plan   : CONFIRMED {action}",
+            f"  Entry  : {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  SL     : {fmt_price(getattr(a, 'stop_loss', 0.0))}",
+            f"  TP1/2  : {fmt_price(getattr(a, 'tp1', 0.0))} / "
+            f"{fmt_price(getattr(a, 'tp2', 0.0))}",
+            f"  TP3/RR : {fmt_price(getattr(a, 'tp3', 0.0))} / "
+            f"1:{getattr(a, 'rr_ratio', 0)}",
+            "  State  : active plan — confirmation passed",
+        ]
+    else:
+        wait_status, wait_detail = _wait_status(a)
+        indication = direction if direction in ("BUY", "SELL") else "WAIT"
+        setup_grade = getattr(a, "setup_quality", "WAIT") or getattr(
+            a, "setup_grade", "WAIT"
+        )
+        lines += [
+            f"  INDICATION: {indication} (not confirmed)",
+            "  Status    : Awaiting confirmation",
+            f"  Setup Grade: {setup_grade}",
+            f"  Confidence: {getattr(a, 'confidence', 0)}%",
+            f"  Blocked   : {wait_detail}",
+            f"  Reason    : {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or wait_status)[:90]}",
+        ]
+
+    lines += [
+        f"  Early watch: {direction if direction in ('BUY', 'SELL') else 'WAIT'}"
+        f"  | Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
+        f"  Watch zone : {zone_text}",
+        "  Early plan : provisional review only — never active",
+        "",
+        "3) WHY",
+        "──────────────────────────────────",
+        f"  Structure : {structure_trend} | BOS {structure.get('bos', bos)}",
+        f"  CHoCH     : {structure.get('choch', choch)}",
+        f"  Evidence  : {', '.join(evidence) if evidence else 'None yet'}",
+        f"  Framework : {framework_line_1}",
+        f"              {framework_line_2}",
+        f"  ADX/Votes: {adx:.1f}  |  B {buy_votes}/8  S {sell_votes}/8",
+        "",
+        "4) MARKET SNAPSHOT",
+        "──────────────────────────────────",
+        f"  RSI      : {float(getattr(a, 'rsi_value', 0.0) or 0.0):.1f}"
+        f"  | MACD {float(getattr(a, 'macd_hist', 0.0) or 0.0):+.2f}",
+        f"  Stoch    : {float(getattr(a, 'stoch_k_val', 0.0) or 0.0):.1f}/"
+        f"{float(getattr(a, 'stoch_d_val', 0.0) or 0.0):.1f}"
+        f"  | CCI {float(getattr(a, 'cci_value', 0.0) or 0.0):.0f}",
+        f"  VWAP     : {float(getattr(a, 'vwap', 0.0) or 0.0):,.2f}"
+        f"  | BB%B {float(getattr(a, 'bb_pct', 0.0) or 0.0):.1f}",
+        f"  Trend    : {'Bullish' if getattr(a, 'supertrend_direction', '') == 'BUY' else 'Bearish' if getattr(a, 'supertrend_direction', '') == 'SELL' else 'Neutral'}"
+        f"  | Regime {getattr(a, 'market_regime', 'NORMAL')}",
+        f"  Levels   : R2 {fmt_price(a.resistance2)}  R1 {fmt_price(a.resistance1)}",
+        f"             S1 {fmt_price(a.support1)}  S2 {fmt_price(a.support2)}",
+        f"  ATR      : {fmt_price(a.atr)}",
+        "",
+        "5) RISK / BLOCKERS",
+        "──────────────────────────────────",
+        f"  Risk     : {getattr(a, 'risk_level', 'HIGH')}",
+        f"  Macro    : {getattr(a, 'macro_status', 'UNAVAILABLE')}",
+        f"  Intermkt : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
+        f"  Waiting  : {', '.join(blockers[:5]) if blockers else 'None'}",
+    ]
+
+    invalidating = getattr(a, "invalidating_conditions", []) or []
+    if invalidating:
+        lines.append("  Invalid  : " + "; ".join(str(x) for x in invalidating[:2]))
+    if not ms["is_open"]:
+        lines.append(f"  Market   : {ms['status_text']} — {ms['note']}")
+    lines += ["", "  Not financial advice.", "</pre>"]
+
     escaped_lines = [
         lines[0],
         *(html.escape(str(line), quote=False) for line in lines[1:-1]),
