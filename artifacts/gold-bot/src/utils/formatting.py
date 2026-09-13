@@ -305,8 +305,8 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         "──────────────────────────────────",
         "  EARLY ENTRY CONFIRMATION BOARD",
         "──────────────────────────────────",
-        "  Watch is directional preparation only.",
-        "  It never opens a trade by itself.",
+        "  A provisional plan may be shown when the early",
+        "  watch criteria pass. It is not opened automatically.",
         f"  Status    : {'WATCH READY' if watch_ready else 'FORMING'}",
         f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
         f"  Watch gate: {score}/100  (needs 55 + evidence)",
@@ -432,7 +432,7 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         "  " + ("; ".join(missing[:7]) if missing else "No listed blocker"),
         f"  Strict result: {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
         f"  Reason       : {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Confirmation is still incomplete')[:140]}",
-        "  Decision     : Watch only — no trade is opened from this board.",
+        "  Decision     : Provisional alert only — no active trade is created.",
     ]
     invalidating = getattr(a, "invalidating_conditions", []) or []
     if invalidating:

@@ -1153,8 +1153,9 @@ async def _send_setup_forming_alert(
     early_warning: bool = False, early_entry_watch: bool = False,
 ) -> None:
     """
-    Lightweight pre-signal notice — gives the trader a heads-up to watch the
-    chart and prepare a limit order, without committing to an entry.
+    Pre-signal notice. Generic early-entry watches include a provisional plan
+    for manual review; warning-only paths remain informational and never
+    create an active trade.
     Fires once per direction per TF, then retries after a quiet period if the
     same setup remains active so a missed Telegram warning is not lost.
     """
@@ -1182,26 +1183,90 @@ async def _send_setup_forming_alert(
     early_entry = getattr(a, "early_entry", 0.0) or getattr(a, "limit_entry", 0.0)
     ote_high = getattr(a, "ote_high", 0.0)
     ote_low = getattr(a, "ote_low", 0.0)
-    if early_entry and early_entry != price:
-        watch_line = f"  Watch limit : {early_entry:,.2f}\n"
-    elif ote_low and ote_high:
-        watch_line = f"  Watch OTE    : {ote_low:,.2f} – {ote_high:,.2f}\n"
+    market_entry = _safe_float(getattr(a, "entry", 0.0), price) or price
+    provisional_entry = _safe_float(early_entry, 0.0)
+    if not provisional_entry or (
+        forming_dir == "BUY" and provisional_entry > price
+    ) or (
+        forming_dir == "SELL" and provisional_entry < price
+    ):
+        provisional_entry = market_entry
+
+    stop_loss = _safe_float(getattr(a, "stop_loss", 0.0), 0.0)
+    tp1 = _safe_float(getattr(a, "tp1", 0.0), 0.0)
+    tp2 = _safe_float(getattr(a, "tp2", 0.0), 0.0)
+    tp3 = _safe_float(getattr(a, "tp3", 0.0), 0.0)
+    valid_stop = (
+        stop_loss > 0
+        and ((forming_dir == "BUY" and stop_loss < provisional_entry)
+             or (forming_dir == "SELL" and stop_loss > provisional_entry))
+    )
+    if not valid_stop:
+        atr = _safe_float(getattr(a, "atr", 0.0), 0.0)
+        risk = max(atr * 2.0, abs(market_entry - stop_loss), 0.01)
+        stop_loss = provisional_entry - risk if forming_dir == "BUY" else provisional_entry + risk
+    base_risk = abs(market_entry - _safe_float(getattr(a, "stop_loss", 0.0), 0.0))
+    base_risk = max(base_risk, abs(provisional_entry - stop_loss), 0.01)
+
+    def _target_or_default(value: float, multiple: float) -> float:
+        valid = (
+            value > 0
+            and ((forming_dir == "BUY" and value > market_entry)
+                 or (forming_dir == "SELL" and value < market_entry))
+        )
+        distance = abs(value - market_entry) if valid else base_risk * multiple
+        return provisional_entry + distance if forming_dir == "BUY" else provisional_entry - distance
+
+    tp1 = _target_or_default(tp1, 1.5)
+    tp2 = _target_or_default(tp2, 2.5)
+    tp3 = _target_or_default(tp3, 3.5)
+
+    if early_entry_watch:
+        alert_title = "⚠️  PROVISIONAL EARLY ENTRY"
+        if early_entry and early_entry != price:
+            watch_line = f"  Entry zone : {provisional_entry:,.2f}  (limit)\n"
+        elif ote_low and ote_high:
+            watch_line = f"  Entry zone : {ote_low:,.2f} – {ote_high:,.2f}\n"
+        else:
+            watch_line = f"  Entry      : {provisional_entry:,.2f}\n"
+        plan_lines = (
+            f"  Entry      : {provisional_entry:,.2f}\n"
+            f"  Stop Loss  : {stop_loss:,.2f}\n"
+            f"  TP1        : {tp1:,.2f}\n"
+            f"  TP2        : {tp2:,.2f}\n"
+            f"  TP3        : {tp3:,.2f}\n"
+            "  Risk       : HIGH — provisional, manual review only\n"
+        )
+        status_line = (
+            "  Status     : EARLY CRITERIA MET — strict confirmation still running\n"
+        )
+        decision_lines = (
+            "  This is a provisional entry plan.\n"
+            "  It is not saved as an active trade.\n"
+            "  A confirmed alert will follow if the strict gate aligns.\n"
+        )
     else:
-        watch_line = ""
-    alert_title = (
-        "⚠️  EARLY ENTRY WATCH"
-        if early_entry_watch
-        else "⚠️  EARLY BEARISH WARNING"
-        if early_warning and forming_dir == "SELL"
-        else "⚠️  EARLY BULLISH WARNING"
-        if early_warning and forming_dir == "BUY"
-        else "⚠️  SETUP FORMING"
-    )
-    risk_line = (
-        "  Risk     : HIGH — early warning only\n"
-        if early_warning
-        else ""
-    )
+        alert_title = (
+            "⚠️  EARLY BEARISH WARNING"
+            if early_warning and forming_dir == "SELL"
+            else "⚠️  EARLY BULLISH WARNING"
+            if early_warning and forming_dir == "BUY"
+            else "⚠️  SETUP FORMING"
+        )
+        watch_line = (
+            f"  Watch limit : {early_entry:,.2f}\n"
+            if early_entry and early_entry != price
+            else f"  Watch OTE    : {ote_low:,.2f} – {ote_high:,.2f}\n"
+            if ote_low and ote_high
+            else ""
+        )
+        plan_lines = ""
+        status_line = "  Status     : UNCONFIRMED — strict confirmation still running\n"
+        decision_lines = (
+            "  This is an early warning only.\n"
+            "  A separate confirmed alert will follow\n"
+            "  if the strict timeframe gate aligns.\n"
+        )
     text = (
         f"<pre>{alert_title}  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
         f"{'─' * 34}\n"
@@ -1211,13 +1276,11 @@ async def _send_setup_forming_alert(
         f"   ADX      : {adx:.1f}   Legacy conf: {confidence}%\n"
         f"   Institutional score: {institutional_score}/100\n"
         f"   HTF      : {htf_bias}{kz_tag}\n"
-        f"  Status   : UNCONFIRMED — strict confirmation still running\n"
-        f"{risk_line}"
+        f"{status_line}"
         f"{watch_line}"
+        f"{plan_lines}"
         f"{'─' * 34}\n"
-        f"  This is an early-entry watch only.\n"
-        f"  A separate confirmed alert will follow\n"
-        f"  if the strict timeframe gate aligns.\n"
+        f"{decision_lines}"
         f"</pre>"
     )
     # Replace the previous warning for this timeframe/stream instead of
