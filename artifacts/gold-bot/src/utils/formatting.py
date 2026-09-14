@@ -1211,12 +1211,12 @@ def _reference_analysis_card(
 
     if direction not in ("BUY", "SELL"):
         early_status = "NO EARLY DIRECTION"
-        early_analysis = "Liquidity confirmation not confirmed."
-        early_decision = "No early watch; wait for directional evidence."
+        early_analysis = "Liquidity confirmation has not been established."
+        early_decision = "No early watch is active; await clear directional evidence."
     else:
         early_status = "WATCH READY" if watch_ready else "FORMING"
-        early_analysis = ", ".join(evidence) if evidence else "Directional evidence incomplete."
-        early_decision = "Manual review only; this is never an active trade."
+        early_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
+        early_decision = "For manual review only; this does not constitute an active trade."
 
     layer_1 = (
         f"T {framework.get('trend_alignment', 0)}/25 | "
@@ -1229,7 +1229,7 @@ def _reference_analysis_card(
         f"C {framework.get('candlestick_confirmation', 0)}/5"
     )
     strict_reason = (
-        "Daily → H4 → H1 → M15 alignment is still required."
+        "Daily → H4 → H1 → M15 alignment remains required."
         if not strict_ready
         else "All strict confirmation gates passed."
     )
@@ -1276,7 +1276,7 @@ def _reference_analysis_card(
         "──────────────────────────────────",
         "  EARLY ENTRY WATCH",
         "──────────────────────────────────",
-        "  Separate from strict confirmation.",
+        "  This section is separate from strict confirmation.",
         f"  Status      : {early_status}",
         f"  Direction   : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
         *(
@@ -1351,7 +1351,7 @@ def _reference_analysis_card(
         ]
     else:
         lines += [
-            "  Status      : WAITING — no confirmed entry",
+            "  Status      : WAITING — no confirmed entry is available",
             f"  Reason      : {engine_reason[:110]}",
             f"  Strict gate : {strict_reason}",
             "  Trade state : NO ACTIVE TRADE",
