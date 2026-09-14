@@ -1535,13 +1535,16 @@ async def _analyze_single(
         data = await fetch_ohlcv(timeframe)
         bias_by_tf = {}
 
-    htf_h4_bias = bias_by_tf.get("H4", "Neutral")
-    htf_d1_bias = bias_by_tf.get("D1", "Neutral")
-    ltf_h1_bias = bias_by_tf.get("H1", "Neutral")
-    ltf_m30_bias = bias_by_tf.get("M30", "Neutral")
-    ltf_m15_bias = bias_by_tf.get("M15", "Neutral")
+    context_unavailable = "Not used" if not use_higher_timeframe_context else "Neutral"
+    htf_h4_bias = bias_by_tf.get("H4", context_unavailable)
+    htf_d1_bias = bias_by_tf.get("D1", context_unavailable)
+    ltf_h1_bias = bias_by_tf.get("H1", context_unavailable)
+    ltf_m30_bias = bias_by_tf.get("M30", context_unavailable)
+    ltf_m15_bias = bias_by_tf.get("M15", context_unavailable)
     htf_bias = (
-        bias_by_tf.get(htf, "Neutral")
+        bias_by_tf.get(htf, context_unavailable)
+        if use_higher_timeframe_context
+        else context_unavailable
     )
     ltf_trends = {
         tf: bias_by_tf.get(tf, "Neutral")
@@ -2501,8 +2504,11 @@ async def _analyze_single(
         legacy_confirmation = "NEUTRAL"
 
     htf_matches = (
-        (institutional_direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
-        or (institutional_direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
+        not use_higher_timeframe_context
+        or (
+            (institutional_direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
+            or (institutional_direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
+        )
     )
     institutional_ready = (
         institutional_direction in ("BUY", "SELL")
@@ -2564,7 +2570,7 @@ async def _analyze_single(
                 f"Combined framework WAIT — institutional {institutional_direction} "
                 f"conflicts with legacy {legacy_direction}"
             )
-        elif not htf_matches:
+        elif use_higher_timeframe_context and not htf_matches:
             wait_reason = "Combined framework WAIT — higher-timeframe direction is not aligned"
         else:
             wait_reason = "Combined framework WAIT — required evidence is incomplete"
@@ -2729,10 +2735,16 @@ def _attach_multi_timeframe_context(
 async def analyze(
     timeframe: str = "H1",
     mode: str = None,
-    include_full_context: bool = True,
-    use_higher_timeframe_context: bool = True,
+    include_full_context: bool = False,
+    use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
-    """Return one complete analysis with optional higher-timeframe context."""
+    """Return one complete analysis for the selected mode/timeframe.
+
+    Mode analysis is local by default: it does not wait for another timeframe
+    to confirm or veto the selected setup.  The explicit context arguments
+    remain available for callers that intentionally request a separate
+    multi-timeframe report.
+    """
     if not include_full_context:
         return await _analyze_single(
             timeframe,

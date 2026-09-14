@@ -786,7 +786,7 @@ def build_context(data, timeframe: str, intermarket: Mapping[str, Any] | None = 
         [f"Close below {stop:.2f}" if direction == "BUY" else f"Close above {stop:.2f}",
          "Higher-timeframe structure changes"]
         if direction in ("BUY", "SELL")
-        else ["Wait for all four timeframes to align", "A confirmed BOS or CHoCH is required"]
+        else ["Wait for local timeframe structure to confirm", "A confirmed BOS or CHoCH is required"]
     )
     smc["order_block_direction"] = candidate_ob.get("direction", "NONE")
     smc["order_block_freshness"] = candidate_ob.get("freshness", "NONE")

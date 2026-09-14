@@ -10,27 +10,19 @@ from src.analysis import engine
 
 
 class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
-    async def test_lower_scalp_timeframe_keeps_local_report_under_strict_gate(self):
-        consensus = {
-            "analyses": {},
-            "final_direction": "WAIT",
-        }
+    async def test_selected_timeframe_does_not_request_full_consensus_by_default(self):
         local_analysis = object()
 
         with patch.object(
             engine,
-            "analyze_multi_timeframe",
-            new=AsyncMock(return_value=consensus),
-        ), patch.object(
-            engine,
             "_analyze_single",
             new=AsyncMock(return_value=local_analysis),
-        ), patch.object(
-            engine,
-            "_apply_multi_timeframe_consensus",
-            side_effect=lambda analysis, report: analysis,
-        ) as apply_gate:
+        ) as analyze_single:
             result = await engine.analyze("M5", mode="scalp")
 
         self.assertIs(result, local_analysis)
-        apply_gate.assert_called_once_with(local_analysis, consensus)
+        analyze_single.assert_awaited_once_with(
+            "M5",
+            mode="scalp",
+            use_higher_timeframe_context=False,
+        )

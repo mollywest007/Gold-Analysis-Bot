@@ -329,20 +329,31 @@ def _strict_confirmation_lines(
     legacy = report.get("legacy", {}) or {}
     htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
     htf_match = (
+        htf_bias == "Not used"
+        or
         direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
     ) or (
         direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
     )
     direction_text = direction if direction in ("BUY", "SELL") else "WAIT"
     final_direction = multi.get("final_direction", "WAIT")
-    all_data_real = all(
-        (multi.get("data_quality", {}) or {}).get(tf) == "REAL_OHLCV"
-        for tf in ("D1", "H4", "H1", "M15")
+    all_data_real = (
+        all(
+            (multi.get("data_quality", {}) or {}).get(tf) == "REAL_OHLCV"
+            for tf in ("D1", "H4", "H1", "M15")
+        )
+        if directions
+        else data_is_real
+    )
+    scope_check = (
+        f"all D1/H4/H1/M15 data real: {'PASS' if all_data_real else 'MISSING'} "
+        f"({multi.get('data_quality', 'NO DATA')})"
+        if directions
+        else f"selected timeframe data real: {'PASS' if data_is_real else 'MISSING'}"
     )
     checks = [
         f"real OHLCV: {'PASS' if data_is_real else 'MISSING'}",
-        f"all D1/H4/H1/M15 data real: {'PASS' if all_data_real else 'MISSING'} "
-        f"({multi.get('data_quality', 'NO DATA')})",
+        scope_check,
         f"direction: {'PASS' if direction in ('BUY', 'SELL') else 'MISSING'} ({direction_text})",
         f"active score >=60: {'PASS' if int(getattr(a, 'confidence_score', 0) or 0) >= 60 else 'MISSING'} "
         f"({int(getattr(a, 'confidence_score', 0) or 0)}/100)",
@@ -350,24 +361,31 @@ def _strict_confirmation_lines(
         f"legacy conflict cleared: {'PASS' if legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL')) != 'CONFLICT' else 'MISSING'} "
         f"({legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL'))})",
         f"final action: {'PASS' if strict_ready else 'MISSING'} "
-        f"({getattr(a, 'action', 'WAIT')} | MTF final {final_direction})",
+        f"({getattr(a, 'action', 'WAIT')} | "
+        f"{'MTF final ' + final_direction if directions else 'mode-local'})",
     ]
     rows = [
         "",
         "  STRICT CONFIRMED — EXACT CONFIRMATION",
         f"  Result             : {'CONFIRMED ' + getattr(a, 'action', direction) if strict_ready else 'REJECTED / WAITING'}",
-        "  Additional gate    : all real D1/H4/H1/M15 contexts must match direction "
-        "and each score must be >=60.",
+        (
+            "  Additional gate    : selected mode timeframe only; "
+            "local evidence and legacy conflict must pass."
+            if not directions
+            else "  Additional gate    : all real D1/H4/H1/M15 contexts must match direction "
+            "and each score must be >=60."
+        ),
         *[f"  Check              : {check}" for check in checks],
     ]
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = directions.get(tf, "NO DATA")
-        tf_score = int(scores.get(tf, 0) or 0)
-        passed = direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60
-        rows.append(
-            f"  {tf} confirmation    : {'PASS' if passed else 'MISSING'} "
-            f"({tf_direction} / {tf_score}/100)"
-        )
+    if directions:
+        for tf in ("D1", "H4", "H1", "M15"):
+            tf_direction = directions.get(tf, "NO DATA")
+            tf_score = int(scores.get(tf, 0) or 0)
+            passed = direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60
+            rows.append(
+                f"  {tf} confirmation    : {'PASS' if passed else 'MISSING'} "
+                f"({tf_direction} / {tf_score}/100)"
+            )
     confirmed = [
         check
         for check in checks
@@ -602,7 +620,7 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
         )
     return (
         f"{direction} FORMING",
-        "Monitoring: the required multi-timeframe evidence is not complete.",
+        "Monitoring: the selected mode's local evidence is not complete.",
     )
 
 
@@ -628,17 +646,18 @@ def _entry_criteria_reason(a: MarketAnalysis, data_is_real: bool) -> str:
         blockers.append(
             f"active timeframe score {int(getattr(a, 'confidence_score', 0) or 0)}/60"
         )
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = directions.get(tf, "NO DATA")
-        tf_score = int(scores.get(tf, 0) or 0)
-        if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
-            blockers.append(f"{tf} {tf_direction}/{tf_score}")
+    if directions:
+        for tf in ("D1", "H4", "H1", "M15"):
+            tf_direction = directions.get(tf, "NO DATA")
+            tf_score = int(scores.get(tf, 0) or 0)
+            if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
+                blockers.append(f"{tf} {tf_direction}/{tf_score}")
     htf_matches = (
         direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
     ) or (
         direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
     )
-    if not htf_matches:
+    if htf_bias != "Not used" and not htf_matches:
         blockers.append(f"HTF bias {htf_bias}")
     if legacy_confirmation == "CONFLICT":
         blockers.append("legacy conflict")
@@ -690,9 +709,13 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
     ) or (
         direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
     )
-    mtf_text = " | ".join(
-        f"{tf} {mtf_directions.get(tf, 'NO DATA')}/{int(mtf_scores.get(tf, 0) or 0)}"
-        for tf in ("D1", "H4", "H1", "M15")
+    mtf_text = (
+        " | ".join(
+            f"{tf} {mtf_directions.get(tf, 'NO DATA')}/{int(mtf_scores.get(tf, 0) or 0)}"
+            for tf in ("D1", "H4", "H1", "M15")
+        )
+        if mtf_directions
+        else f"{a.timeframe} local {direction}/{score}"
     )
     return [
         "",
@@ -704,8 +727,8 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
         f"  Setup state     : "
         f"{'READY ' + direction if setup_ready else 'FORMING'}",
         f"  Score           : {score}/100  (minimum 60 for entry)",
-        f"  MTF chain       : {mtf_text}",
-        f"  HTF bias        : {htf_bias}  {'✓' if htf_matches else '…'}",
+        f"  Mode scope      : {mtf_text}",
+        f"  HTF context     : {htf_bias}  {'✓' if htf_matches else '…'}",
         f"  Legacy layer    : {legacy_confirmation}  "
         f"(BUY {buy_votes} / SELL {sell_votes})",
         f"  Data            : {report.get('data_quality', 'REAL_OHLCV')}",
@@ -739,10 +762,11 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
         and data_quality == "REAL_OHLCV"
     )
     multi_timeframe = report.get("multi_timeframe", {}) or {}
+    mtf_directions = multi_timeframe.get("directions", {}) or {}
     entry_ready = (
         action in ("BUY", "SELL")
         and data_is_real
-        and multi_timeframe.get("aligned", False)
+        and (not mtf_directions or multi_timeframe.get("aligned", False))
     )
     consensus_score = int(multi_timeframe.get("consensus_score", 0) or 0)
     legacy = report.get("legacy", {}) or {}
@@ -763,12 +787,13 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
     missing = []
     if score < 60:
         missing.append(f"score 60 (now {score})")
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = mtf_directions.get(tf, "NO DATA")
-        tf_score = int(mtf_scores.get(tf, 0) or 0)
-        if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
-            missing.append(f"{tf} alignment")
-    if not htf_matches:
+    if mtf_directions:
+        for tf in ("D1", "H4", "H1", "M15"):
+            tf_direction = mtf_directions.get(tf, "NO DATA")
+            tf_score = int(mtf_scores.get(tf, 0) or 0)
+            if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
+                missing.append(f"{tf} alignment")
+    if htf_bias != "Not used" and not htf_matches:
         missing.append("HTF alignment")
     if legacy_confirmation == "CONFLICT":
         missing.append("legacy conflict clearance")
@@ -780,8 +805,16 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
         "──────────────────────────────────",
         f"  Status                : "
         f"{action if entry_ready else 'WAITING — MONITORING'}",
-        "  Criteria              : score 60+ | D1/H4/H1/M15 aligned",
-        "                          HTF aligned | no conflicting evidence",
+        (
+            "  Criteria              : score 60+ | selected mode timeframe"
+            if not mtf_directions
+            else "  Criteria              : score 60+ | D1/H4/H1/M15 aligned"
+        ),
+        (
+            "                          local evidence | no conflicting evidence"
+            if not mtf_directions
+            else "                          HTF aligned | no conflicting evidence"
+        ),
         *(
             [
                 f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
@@ -876,21 +909,26 @@ def _analysis_detail_lines(a: MarketAnalysis) -> list[str]:
     ]
 
     strict_mtf_rows = []
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = mtf_directions.get(tf, "NO DATA")
-        tf_score = int(mtf_scores.get(tf, 0) or 0)
-        passed = (
-            direction in ("BUY", "SELL")
-            and tf_direction == direction
-            and tf_score >= 60
-        )
-        strict_mtf_rows.append(
-            f"{tf} {tf_direction}/{tf_score}{'✓' if passed else '…'}"
-        )
+    if mtf_directions:
+        for tf in ("D1", "H4", "H1", "M15"):
+            tf_direction = mtf_directions.get(tf, "NO DATA")
+            tf_score = int(mtf_scores.get(tf, 0) or 0)
+            passed = (
+                direction in ("BUY", "SELL")
+                and tf_direction == direction
+                and tf_score >= 60
+            )
+            strict_mtf_rows.append(
+                f"{tf} {tf_direction}/{tf_score}{'✓' if passed else '…'}"
+            )
     lines += [
-        f"  MTF chain             : {' | '.join(strict_mtf_rows)}",
-        f"  HTF bias              : {htf_bias} "
-        f"{'✓ MATCH' if htf_matches else '… WAITING'}",
+        (
+            f"  MTF chain             : {' | '.join(strict_mtf_rows)}"
+            if strict_mtf_rows
+            else f"  Mode scope            : {a.timeframe} only"
+        ),
+        f"  HTF context           : {htf_bias} "
+        f"{'✓ MATCH' if htf_matches else '… NOT USED' if htf_bias == 'Not used' else '… WAITING'}",
         f"  Legacy layer          : {legacy_confirmation} "
         f"(BUY {buy_votes} / SELL {sell_votes})",
         f"  Data quality          : {report.get('data_quality', 'REAL_OHLCV')}",
@@ -900,8 +938,16 @@ def _analysis_detail_lines(a: MarketAnalysis) -> list[str]:
         "──────────────────────────────────",
         f"  Status                : "
         f"{action if entry_ready else 'WAITING — MONITORING'}",
-        "  Criteria              : score 60+ | all four timeframes 60+",
-        "                          HTF aligned | no conflicting evidence",
+        (
+            "  Criteria              : score 60+ | selected mode timeframe"
+            if not mtf_directions
+            else "  Criteria              : score 60+ | all four timeframes 60+"
+        ),
+        (
+            "                          local evidence | no conflicting evidence"
+            if not mtf_directions
+            else "                          HTF aligned | no conflicting evidence"
+        ),
     ]
     if entry_ready:
         lines += [
@@ -1249,13 +1295,16 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
     multi = report.get("multi_timeframe", {}) or {}
     directions = multi.get("directions", {}) or {}
     scores = multi.get("scores", {}) or {}
-    for tf in ("D1", "H4", "H1", "M15"):
-        tf_direction = directions.get(tf, "NO DATA")
-        tf_score = int(scores.get(tf, 0) or 0)
-        if direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60:
-            satisfied.append(f"{tf} evidence {tf_score}/100")
-        else:
-            waiting.append(f"{tf} evidence aligned at 60+")
+    if directions:
+        for tf in ("D1", "H4", "H1", "M15"):
+            tf_direction = directions.get(tf, "NO DATA")
+            tf_score = int(scores.get(tf, 0) or 0)
+            if direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60:
+                satisfied.append(f"{tf} evidence {tf_score}/100")
+            else:
+                waiting.append(f"{tf} evidence aligned at 60+")
+    else:
+        satisfied.append(f"{getattr(a, 'timeframe', 'selected')} mode timeframe")
     legacy = report.get("legacy", {}) or {}
     legacy_state = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
@@ -1689,7 +1738,7 @@ def _reference_analysis_card(
     strict_ready = (
         action in ("BUY", "SELL")
         and data_is_real
-        and bool(multi_timeframe.get("aligned", False))
+        and (not mtf_directions or bool(multi_timeframe.get("aligned", False)))
     )
 
     buy_votes = int(getattr(a, "buy_votes", 0) or 0)
@@ -1783,7 +1832,8 @@ def _reference_analysis_card(
         f"({legacy.get('confirmation', 'NEUTRAL')})",
         f"  Legacy Conf.: {legacy.get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined  : {combined.get('direction', 'WAIT')}",
-        f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
+        f"  Mode Scope: "
+        f"{_mtf_chain_text(multi_timeframe) if mtf_directions else f'{a.timeframe} only'}",
         f"  Layers    : {layer_1} |",
         f"              {layer_2}",
         "",
@@ -1795,7 +1845,11 @@ def _reference_analysis_card(
         f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
         f"  Analysis  : {early_analysis}",
         f"  Decision  : {early_decision}",
-        "  Strict    : WAITING for Daily → H4 → H1 → M15 alignment.",
+        (
+            "  Strict    : WAITING for Daily → H4 → H1 → M15 alignment."
+            if mtf_directions
+            else "  Strict    : WAITING for selected mode timeframe evidence."
+        ),
     ]
     if direction in ("BUY", "SELL") and not strict_ready:
         lines += [
@@ -1919,10 +1973,11 @@ def _transparent_entry_card(a: MarketAnalysis, path: str) -> str:
     direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
     action = getattr(a, "action", "WAIT") or "WAIT"
     score = int(getattr(a, "confidence_score", 0) or 0)
+    directions = multi.get("directions", {}) or {}
     strict_ready = (
         action in ("BUY", "SELL")
         and data_is_real
-        and bool(multi.get("aligned", False))
+        and (not directions or bool(multi.get("aligned", False)))
     )
     early_evidence = _early_evidence(a, direction)
     watch_ready = (
