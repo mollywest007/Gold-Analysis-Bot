@@ -1170,6 +1170,204 @@ def _legacy_compact_analysis_board(
     return safe_html("\n".join(escaped_lines))
 
 
+def _reference_analysis_card(
+    a: MarketAnalysis, account_id: int | None = None
+) -> str:
+    """Render the full analysis board in the reference screenshot's order."""
+    del account_id  # The card is informational; active trades use /active.
+
+    ms = market_status()
+    report = getattr(a, "institutional_report", {}) or {}
+    framework = report.get("score_breakdown", {}) or {}
+    multi_timeframe = report.get("multi_timeframe", {}) or {}
+    legacy = report.get("legacy", {}) or {}
+    combined = report.get("combined", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    action = getattr(a, "action", "WAIT") or "WAIT"
+    strict_ready = action in ("BUY", "SELL")
+
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    if getattr(a, "choch", "NONE") != "NONE":
+        evidence.append(str(a.choch).replace("_", " "))
+    if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(str(a.bos).replace("_", " "))
+
+    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    wait_status, wait_detail = _wait_status(a)
+    watch_entry = (
+        float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
+
+    if direction not in ("BUY", "SELL"):
+        early_status = "NO EARLY DIRECTION"
+        early_analysis = "Liquidity confirmation not confirmed."
+        early_decision = "No early watch; wait for directional evidence."
+    else:
+        early_status = "WATCH READY" if watch_ready else "FORMING"
+        early_analysis = ", ".join(evidence) if evidence else "Directional evidence incomplete."
+        early_decision = "Manual review only; this is never an active trade."
+
+    layer_1 = (
+        f"T {framework.get('trend_alignment', 0)}/25 | "
+        f"S {framework.get('market_structure', 0)}/25 | "
+        f"L {framework.get('liquidity_confirmation', 0)}/20"
+    )
+    layer_2 = (
+        f"OB {framework.get('order_block_reaction', 0)}/15 | "
+        f"FVG {framework.get('fair_value_gap_confirmation', 0)}/10 | "
+        f"C {framework.get('candlestick_confirmation', 0)}/5"
+    )
+    strict_reason = (
+        "Daily → H4 → H1 → M15 alignment is still required."
+        if not strict_ready
+        else "All strict confirmation gates passed."
+    )
+    engine_reason = (
+        getattr(a, "wait_reason", "")
+        or getattr(a, "verdict_reason", "")
+        or wait_detail
+    )
+
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║   XAU/USD  FULL ANALYSIS         ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Price     : {fmt_price(a.price)}",
+        f"  Timeframe : {a.timeframe}   {_mkt_line()}",
+        f"  Session   : {a.session or 'N/A'}",
+        "",
+        "──────────────────────────────────",
+        "  MARKET STRUCTURE",
+        "──────────────────────────────────",
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  CHoCH     : {_choch_label(a.choch)}",
+        f"  HTF Bias  : {a.htf_bias}",
+        f"  Trend     : {a.trend}",
+        f"  Momentum  : {a.momentum}",
+        f"  ADX       : {a.adx:.1f}",
+        "",
+        "──────────────────────────────────",
+        "  INSTITUTIONAL SCORE",
+        "──────────────────────────────────",
+        f"  Institutional: {score}/100",
+        "  Maximum     : 100/100",
+        f"  Bias        : {report.get('direction', 'WAIT')}",
+        f"  Legacy      : {legacy.get('direction', 'WAIT')} "
+        f"({legacy.get('confirmation', 'NEUTRAL')})",
+        f"  Legacy Conf.: {legacy.get('confidence', getattr(a, 'confidence', 0))}%",
+        f"  Combined    : {combined.get('direction', 'WAIT')}",
+        f"  MTF Chain   : {_mtf_chain_text(multi_timeframe)}",
+        f"  Layers      : {layer_1}",
+        f"                {layer_2}",
+        "",
+        "──────────────────────────────────",
+        "  EARLY ENTRY WATCH",
+        "──────────────────────────────────",
+        "  Separate from strict confirmation.",
+        f"  Status      : {early_status}",
+        f"  Direction   : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        *(
+            [
+                f"  INDICATION: {direction} (not confirmed)",
+                "  Status    : Awaiting confirmation",
+                f"  Setup Grade: {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
+                f"  Confidence: {getattr(a, 'confidence', 0)}%",
+            ]
+            if direction in ("BUY", "SELL") and not strict_ready
+            else []
+        ),
+        f"  Analysis    : {early_analysis}",
+        f"  Decision    : {early_decision}",
+    ]
+    if direction in ("BUY", "SELL"):
+        lines += [
+            f"  Watch Entry : {fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
+            f"  Entry Zone  : "
+            f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
+            if zone.get("low") and zone.get("high")
+            else "  Entry Zone  : Not formed",
+        ]
+    lines += [
+        "",
+        "──────────────────────────────────",
+        "  INDICATORS",
+        "──────────────────────────────────",
+    ]
+    indicator_text = _indicator_rows(a)
+    if indicator_text:
+        lines.extend(indicator_text.splitlines())
+    lines += [
+        f"  MACD Hist   : {a.macd_hist:+.3f}",
+        f"  +DI / -DI   : {a.plus_di:.1f} / {a.minus_di:.1f}",
+        f"  Stoch K/D   : {a.stoch_k_val:.1f} / {a.stoch_d_val:.1f}",
+        f"  BB%B        : {a.bb_pct:.1f}%",
+        f"  Williams%R  : {getattr(a, 'willr_value', -50):.1f}"
+        + (f"  ← {getattr(a, 'willr_caution')}" if getattr(a, "willr_caution", "") else ""),
+        f"  Supertrend  : {'BUY (▲ bullish)' if getattr(a, 'supertrend_direction', '') == 'BUY' else 'SELL (▼ bearish)' if getattr(a, 'supertrend_direction', '') == 'SELL' else 'neutral'}",
+        f"  CCI(20)     : {getattr(a, 'cci_value', 0.0):.0f}",
+        f"  VWAP        : {getattr(a, 'vwap', 0.0):,.2f}  "
+        f"Price {'>' if a.price > getattr(a, 'vwap', a.price) else '<'} VWAP",
+        f"  BB BW       : {getattr(a, 'bb_bandwidth', 0.0):.2f}%  "
+        f"Regime: {getattr(a, 'market_regime', 'NORMAL')}",
+        f"  Votes       : BUY {buy_votes}/8  SELL {sell_votes}/8",
+        "",
+        "──────────────────────────────────",
+        "  KEY LEVELS",
+        "──────────────────────────────────",
+        f"  R2          : {fmt_price(a.resistance2)}",
+        f"  R1          : {fmt_price(a.resistance1)}",
+        f"  BB Upper    : {fmt_price(a.bb_upper)}",
+        f"  -- Price    : {fmt_price(a.price)}",
+        f"  BB Lower    : {fmt_price(a.bb_lower)}",
+        f"  S1          : {fmt_price(a.support1)}",
+        f"  S2          : {fmt_price(a.support2)}",
+        f"  ATR(14)     : {fmt_price(a.atr)}",
+        "",
+        "──────────────────────────────────",
+        "  STRICT CONFIRMED ENTRY",
+        "──────────────────────────────────",
+    ]
+    if strict_ready:
+        lines += [
+            f"  Status      : CONFIRMED {action}",
+            f"  Entry       : {fmt_price(a.entry)}",
+            f"  Stop Loss   : {fmt_price(a.stop_loss)}",
+            f"  TP1 / TP2   : {fmt_price(a.tp1)} / {fmt_price(a.tp2)}",
+            f"  TP3 / R:R   : {fmt_price(a.tp3)} / 1:{a.rr_ratio}",
+            "  Trade state : ACTIVE PLAN",
+        ]
+    else:
+        lines += [
+            "  Status      : WAITING — no confirmed entry",
+            f"  Reason      : {engine_reason[:110]}",
+            f"  Strict gate : {strict_reason}",
+            "  Trade state : NO ACTIVE TRADE",
+        ]
+
+    if not ms["is_open"]:
+        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+    lines += ["", "  Not financial advice.", "</pre>"]
+    escaped_lines = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped_lines))
+
+
 def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     """Render one concise, scannable analysis board.
 
@@ -1181,7 +1379,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     # Keep the familiar board order used before the recent redesign.  The
     # legacy renderer below is the same information architecture, with only
     # the readability improvements applied above.
-    return _legacy_compact_analysis_board(a, account_id)
+    return _reference_analysis_card(a, account_id)
 
     ms = market_status()
     report = getattr(a, "institutional_report", {}) or {}
