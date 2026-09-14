@@ -602,7 +602,7 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
         )
     return (
         f"{direction} FORMING",
-        "Monitoring: Daily → H4 → H1 → M15 alignment is not complete.",
+        "Monitoring: the required multi-timeframe evidence is not complete.",
     )
 
 
@@ -1246,6 +1246,24 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
         satisfied.append(f"ADX {getattr(a, 'adx', 0.0):.1f}")
     else:
         waiting.append("directional momentum")
+    multi = report.get("multi_timeframe", {}) or {}
+    directions = multi.get("directions", {}) or {}
+    scores = multi.get("scores", {}) or {}
+    for tf in ("D1", "H4", "H1", "M15"):
+        tf_direction = directions.get(tf, "NO DATA")
+        tf_score = int(scores.get(tf, 0) or 0)
+        if direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60:
+            satisfied.append(f"{tf} evidence {tf_score}/100")
+        else:
+            waiting.append(f"{tf} evidence aligned at 60+")
+    legacy = report.get("legacy", {}) or {}
+    legacy_state = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    if legacy_state == "CONFLICT":
+        waiting.append("legacy indicators stop conflicting")
+    else:
+        satisfied.append(f"legacy evidence {legacy_state.lower()}")
     entry_state = (
         getattr(a, "action", "WAIT")
         if getattr(a, "action", "WAIT") in ("BUY", "SELL")
@@ -1284,9 +1302,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         evidence.append(str(a.choch).replace("_", " "))
     if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(str(a.bos).replace("_", " "))
-    setup_ready = (
-        direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
-    )
+    entry_issued = a.action in ("BUY", "SELL")
     setup_grade = (
         getattr(a, "setup_quality", "")
         or getattr(a, "setup_grade", "")
@@ -1294,12 +1310,12 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
     )
     entry_state, conditions_met, conditions_waiting = _normal_entry_conditions(a)
     if direction in ("BUY", "SELL"):
-        setup_status = "READY" if setup_ready else "FORMING"
+        setup_status = "ENTRY ISSUED" if entry_issued else "MONITORING"
         setup_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
         setup_decision = (
-            "Issue the direct entry when the complete criteria are satisfied."
-            if a.action not in ("BUY", "SELL")
-            else "Complete criteria satisfied; direct entry issued."
+            "Complete criteria satisfied; direct entry issued."
+            if entry_issued
+            else "Continue monitoring the missing analysis conditions before issuing an entry."
         )
     else:
         setup_status = "NO DIRECTION"
@@ -1336,6 +1352,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Legacy Conf.: {institutional_report.get('legacy', {}).get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
         f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
+         f"  Data      : {institutional_report.get('data_quality', 'UNKNOWN')}",
         f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
         f"S {framework_scores.get('market_structure', 0)}/25 | "
         f"L {framework_scores.get('liquidity_confirmation', 0)}/20",
@@ -1354,6 +1371,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Conditions met: {conditions_met}",
         f"  Monitoring: {conditions_waiting}",
         f"  Entry reason: {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Complete analysis supports the setup')[:120]}",
+         f"  Invalidation: {'; '.join(str(item) for item in (getattr(a, 'invalidating_conditions', []) or [])[:3]) or 'Direction, structure, liquidity, or data quality changes'}",
         *(
             [
                 f"  Setup     : {direction}",
@@ -1433,7 +1451,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
             lines.insert(
                 lines.index(f"  Win Rate  : {_win_bar(a.win_probability)}"),
-                f"  Local Grade: {local_grade} (before MTF gate)",
+                f"  Local Grade: {local_grade}",
             )
         if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
             lines.append(f"  Limit     : {fmt_price(a.limit_entry)}")
@@ -1471,7 +1489,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
                 "  Status    : Monitoring required conditions",
                 f"  Setup Grade: {setup_grade}",
                 *(
-                    [f"  Local Grade: {local_grade} (before MTF gate)"]
+                    [f"  Local Grade: {local_grade}"]
                     if has_final_gate and local_grade != setup_grade and local_grade != "WAIT"
                     else []
                 ),
@@ -1482,7 +1500,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         else:
             lines.append(f"  Setup Grade: {setup_grade}")
             if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
-                lines.append(f"  Local Grade: {local_grade} (before MTF gate)")
+                lines.append(f"  Local Grade: {local_grade}")
         lines += [
             f"  Reason    : {wait_detail[:72]}",
         ]
@@ -1514,7 +1532,7 @@ def _legacy_compact_analysis_board(
     direction = getattr(a, "directional_indication", "NEUTRAL")
     action = getattr(a, "action", "WAIT")
     score = int(getattr(a, "confidence_score", 0) or 0)
-    strict_ready = action in ("BUY", "SELL")
+    entry_issued = action in ("BUY", "SELL")
     buy_votes = int(getattr(a, "buy_votes", 0) or 0)
     sell_votes = int(getattr(a, "sell_votes", 0) or 0)
     legacy = report.get("legacy", {}) or {}
@@ -1538,19 +1556,6 @@ def _legacy_compact_analysis_board(
         evidence.append(str(a.choch).replace("_", " "))
     if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(str(a.bos).replace("_", " "))
-    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
-
-    watch_entry = (
-        float(getattr(a, "early_entry", 0.0) or 0.0)
-        or float(getattr(a, "limit_entry", 0.0) or 0.0)
-    )
-    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
-    zone_text = (
-        f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
-        if zone.get("low") and zone.get("high")
-        else "Not formed"
-    )
-
     blockers = []
     if score < 60:
         blockers.append(f"score {score}/60")
@@ -1563,8 +1568,6 @@ def _legacy_compact_analysis_board(
             blockers.append(f"{tf} alignment")
     if legacy_status == "CONFLICT":
         blockers.append("legacy conflict")
-    if not blockers and not strict_ready:
-        blockers.append("strict gate")
     blocker_text = ", ".join(blockers[:5]) if blockers else "None"
 
     structure = report.get("market_structure", {}) or {}
@@ -1595,41 +1598,28 @@ def _legacy_compact_analysis_board(
         f"  Market {_mkt_line()}",
         "",
         "── DECISION ───────────────────────",
-        f"  Strict : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        f"  Early  : {'WATCH READY ' + direction if watch_ready else 'FORMING'}",
-        f"  Score  : {score}/100  (watch 55 | strict 60)",
+         f"  Entry  : {action if entry_issued else 'WAITING'}",
+         f"  Score  : {score}/100",
         f"  MTF    : {mtf_text}",
         f"  HTF    : {htf_bias} | Legacy {legacy_status}",
         f"  Data   : {report.get('data_quality', 'REAL_OHLCV')}",
         "",
         "── ENTRY INFORMATION ──────────────",
-        f"  Strict gate : score 60+ | MTF 60+ | HTF aligned | no conflict",
+         "  Entry criteria: complete analysis, aligned evidence, usable data, no conflict",
     ]
-    if strict_ready:
+    if entry_issued:
         lines += [
-            f"  Confirmed   : {action} @ {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  Entry       : {action} @ {fmt_price(getattr(a, 'entry', 0.0))}",
             f"  SL / TP1    : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp1', 0.0))}",
             f"  TP2 / TP3   : {fmt_price(getattr(a, 'tp2', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp3', 0.0))} | R:R 1:{getattr(a, 'rr_ratio', 0)}",
         ]
     else:
-        lines.append("  Confirmed   : None — no active trade")
+        lines.append("  Entry       : None — required conditions are still being monitored")
     lines += [
-        f"  Early watch : {direction if direction in ('BUY', 'SELL') else 'WAIT'} | "
-        f"Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
-        *(
-            [
-                f"  INDICATION: {direction} (not confirmed)",
-                "  Status    : Awaiting confirmation",
-                f"  Setup Grade: {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
-                f"  Confidence: {getattr(a, 'confidence', 0)}%",
-            ]
-            if direction in ("BUY", "SELL") and not strict_ready
-            else []
-        ),
-        f"  Watch zone  : {zone_text}",
-        "  Early plan  : provisional manual review only; never active",
+         f"  Conditions met: {', '.join(evidence) if evidence else 'None yet'}",
+         f"  Waiting for   : {blocker_text}",
         "",
         "── WHY ────────────────────────────",
         f"  Evidence : {', '.join(evidence) if evidence else 'None yet'}",
@@ -1659,7 +1649,7 @@ def _legacy_compact_analysis_board(
         "",
         "── BLOCKERS ───────────────────────",
         f"  Waiting for: {blocker_text}",
-        f"  Reason     : "
+         f"  Reason     : "
         f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'No additional blocker')[:110]}",
     ]
     invalidating = getattr(a, "invalidating_conditions", []) or []

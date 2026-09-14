@@ -2078,7 +2078,7 @@ async def _analyze_single(
                 f"{mode_cfg.label} Mode requires minimum R:R 1:"
                 f"{mode_cfg.min_rr_ratio:g}"
             )
-        elif mode_cfg.htf_gate_strict and not htf_align:
+        elif mode_cfg.htf_gate_required and not htf_align:
             action = "WAIT"
             wait_reason = (
                 f"{mode_cfg.label} Mode requires higher-timeframe alignment"

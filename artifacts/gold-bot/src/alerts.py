@@ -201,18 +201,6 @@ TF_SIGNAL_COOLDOWNS: Dict[str, int] = {}
 # Prevents a missed TP/SL detection from permanently blocking future signals.
 SIGNAL_LOCK_MAX_AGE = 12 * 3600  # 12 hours
 
-# Tracks the last "setup forming" pre-alert sent per TF — avoids repeat spam
-# Structure: { "M15": "BUY", "H1": "SELL", ... }
-_forming_alert_sent: Dict[str, str] = {}
-_forming_alert_last_sent: Dict[str, float] = {}
-# Last Telegram message IDs for setup-forming alerts, grouped by alert key and
-# chat.  These let a new bullish/bearish warning replace the previous one.
-_forming_alert_message_ids: Dict[str, Dict[str, int]] = {}
-
-# Re-notify if the same setup remains active long enough for a trader to miss
-# the first warning.  The direction lock still prevents 15-second spam.
-FORMING_ALERT_RETRY_SECONDS = 30 * 60
-
 # Tracks the last momentum-shift direction warned per TF — avoids re-sending
 # the same warning every 15s while the opposing trade is still open.
 # Cleared when the open trade closes so the next shift warns fresh.
@@ -251,9 +239,6 @@ class AccountAlertState:
     tp_cooldown_until: Dict[str, float] = field(default_factory=dict)
     tp_reanalysis_until: Dict[str, float] = field(default_factory=dict)
     tp_reanalysis_start_sent: Dict[str, bool] = field(default_factory=dict)
-    forming_alert_sent: Dict[str, str] = field(default_factory=dict)
-    forming_alert_last_sent: Dict[str, float] = field(default_factory=dict)
-    forming_alert_message_ids: Dict[str, Dict[str, int]] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
     mode: str = ""
@@ -277,16 +262,6 @@ def _state_from_record(record: dict) -> AccountAlertState:
             str(key): bool(value)
             for key, value in (record.get("tp_reanalysis_start_sent") or {}).items()
         },
-        forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
-        forming_alert_last_sent=dict(record.get("forming_alert_last_sent") or {}),
-        forming_alert_message_ids={
-            str(key): {
-                str(chat_id): int(message_id)
-                for chat_id, message_id in (messages or {}).items()
-                if str(message_id).isdigit()
-            }
-            for key, messages in (record.get("forming_alert_message_ids") or {}).items()
-        },
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
         reminded_trade_ids={
             str(trade_id): set(milestones or [])
@@ -309,9 +284,6 @@ def _state_record(state: AccountAlertState) -> dict:
         "tp_cooldown_until": state.tp_cooldown_until,
         "tp_reanalysis_until": state.tp_reanalysis_until,
         "tp_reanalysis_start_sent": state.tp_reanalysis_start_sent,
-        "forming_alert_sent": state.forming_alert_sent,
-        "forming_alert_last_sent": state.forming_alert_last_sent,
-        "forming_alert_message_ids": state.forming_alert_message_ids,
         "momentum_shift_warned": state.momentum_shift_warned,
         "reminded_trade_ids": {
             trade_id: sorted(milestones)
@@ -499,7 +471,7 @@ def _sync_mode_state(
     """Clear signal locks when the strategy mode or timeframe changes.
 
     Open trades remain in the tracker and continue to receive TP/SL checks;
-    only entry locks and forming alerts are mode/timeframe-specific.
+    only entry locks and stream-specific alert state are mode/timeframe-specific.
     """
     global _signal_state_mode, _signal_state_timeframe
     if account_id is None or state is None:
@@ -512,8 +484,6 @@ def _sync_mode_state(
         active_signal = _active_signal
         closed_signal = _closed_signal
         tf_last_fired = _tf_last_fired
-        forming_alert_sent = _forming_alert_sent
-        forming_alert_message_ids = _forming_alert_message_ids
         momentum_shift_warned = _momentum_shift_warned
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
@@ -533,8 +503,6 @@ def _sync_mode_state(
         active_signal = state.active_signal
         closed_signal = state.closed_signal
         tf_last_fired = state.tf_last_fired
-        forming_alert_sent = state.forming_alert_sent
-        forming_alert_message_ids = state.forming_alert_message_ids
         momentum_shift_warned = state.momentum_shift_warned
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
@@ -572,8 +540,6 @@ def _sync_mode_state(
                 closed_signal,
                 tf_last_fired,
                 state.pending_signal if state is not None else _pending_signal,
-                forming_alert_sent,
-                forming_alert_message_ids,
                 momentum_shift_warned,
                 sl_cooldown_until,
                 tp_cooldown_until,
@@ -592,8 +558,6 @@ def _sync_mode_state(
             active_signal.clear()
             closed_signal.clear()
             tf_last_fired.clear()
-            forming_alert_sent.clear()
-            forming_alert_message_ids.clear()
             momentum_shift_warned.clear()
             sl_cooldown_until.clear()
             tp_cooldown_until.clear()
@@ -941,7 +905,6 @@ async def _advance_tp_reanalysis(
         (state.closed_signal if state else _closed_signal),
         (state.tf_last_fired if state else _tf_last_fired),
         (state.pending_signal if state else _pending_signal),
-        (state.forming_alert_sent if state else _forming_alert_sent),
         (state.momentum_shift_warned if state else _momentum_shift_warned),
         (state.sl_cooldown_until if state else _sl_cooldown_until),
         (state.tp_cooldown_until if state else _tp_cooldown_until),
@@ -1153,12 +1116,10 @@ async def _send_setup_forming_alert(
     early_warning: bool = False, early_entry_watch: bool = False,
 ) -> None:
     """
-    Pre-signal notice. Generic early-entry watches include a provisional plan
-    for manual review; warning-only paths remain informational and never
-    create an active trade.
-    Fires once per direction per TF, then retries after a quiet period if the
-    same setup remains active so a missed Telegram warning is not lost.
+    Retired compatibility hook. The bot has one actionable notification path:
+    a complete analysis produces BUY or SELL and the normal entry card is sent.
     """
+    return
     forming_alert_sent = state.forming_alert_sent if state else _forming_alert_sent
     forming_alert_last_sent = (
         state.forming_alert_last_sent if state else _forming_alert_last_sent
@@ -2040,8 +2001,6 @@ async def _check_and_alert_once(
         pending_signal = state.pending_signal
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
-        forming_alert_sent = state.forming_alert_sent
-        forming_alert_message_ids = state.forming_alert_message_ids
         momentum_shift_warned = state.momentum_shift_warned
         _clear_orphaned_pending_claims(
             pending_signal,
@@ -2060,8 +2019,6 @@ async def _check_and_alert_once(
         pending_signal = _pending_signal
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
-        forming_alert_sent = _forming_alert_sent
-        forming_alert_message_ids = _forming_alert_message_ids
         momentum_shift_warned = _momentum_shift_warned
 
     def _get_active_trades():
@@ -2899,14 +2856,6 @@ async def _check_and_alert_once(
             return
         sig_list = delivered_signals
 
-        # A confirmed alert supersedes any earlier setup-forming card for the
-        # same timeframe/stream. Keep the confirmed alert as the only current
-        # entry message in the chat.
-        for _, state_key, _, _, _ in sig_list:
-            previous_messages = forming_alert_message_ids.pop(state_key, {})
-            await _delete_messages(bot, previous_messages)
-            forming_alert_sent.pop(state_key, None)
-
         now_ts = time.time()
         for stream_label, state_key, tf, analysis_mode, a in sig_list:
             active_signal[state_key] = direction
@@ -3007,9 +2956,9 @@ def _determine_htf_bias(analyses: list, timeframes: list) -> str:
 
 async def _safe_analyze(tf: str, mode: str | None = None):
     try:
-        # Keep automatic entries consistent with /analyze. The strict
-        # Daily → H4 → H1 → M15 consensus gate must be the same source of
-        # truth for both manual reports and background notifications.
+        # Keep automatic entries consistent with /analyze. The complete
+        # Daily → H4 → H1 → M15 analysis must be the same source of truth
+        # for both manual reports and background notifications.
         return await analyze(tf, mode=mode)
     except Exception as e:
         logger.error(f"Alert scan — analysis failed for {tf}: {e}")

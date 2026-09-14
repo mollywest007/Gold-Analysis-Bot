@@ -5,7 +5,7 @@ Each mode completely changes how the engine analyses the market:
   - which timeframes are scanned for auto-alerts
   - how tight/wide stops and targets are
   - how many indicator votes are required before a signal fires
-  - how strict the HTF confirmation gate is
+  - how much higher-timeframe evidence is required
   - what confidence level is required
 
 Adding a new mode:  add an entry to MODES dict with a ModeConfig object.
@@ -63,10 +63,10 @@ class ModeConfig:
     # TP distances as SL multiples: (TP1, TP2, TP3)
     tp_mult: Tuple[float, float, float] = (2.0, 3.5, 4.5)
 
-    # ── HTF gate ───────────────────────────────────────────────────────────────
-    # True  = strong counter-trend HTF bias blocks the signal outright (swing/position)
-    # False = counter-trend only dents confidence (scalp/intraday, current behaviour)
-    htf_gate_strict: bool = False
+    # ── Higher-timeframe evidence ───────────────────────────────────────────────
+    # True  = strong counter-trend HTF bias blocks the signal outright
+    # False = counter-trend only dents confidence
+    htf_gate_required: bool = False
 
     # ── Trade type label injected into MarketAnalysis.trade_type ───────────────
     trade_type_label: str = "Intraday"
@@ -118,7 +118,7 @@ MODES: Dict[str, ModeConfig] = {
             "M15": 1.25,
         },
         tp_mult = (1.5, 2.5, 3.5),   # quick, realistic scalping targets
-        htf_gate_strict  = False,     # ignore macro trend; trade the micro move
+        htf_gate_required = False,     # ignore macro trend; trade the micro move
         trade_type_label = "Scalp",
         tip = (
             "⚡ <b>Scalp Mode active.</b>\n"
@@ -158,7 +158,7 @@ MODES: Dict[str, ModeConfig] = {
         },
         sl_mult_override = {"M15": 1.5, "M30": 1.6, "H1": 1.8},
         tp_mult = (2.0, 3.5, 4.5),
-        htf_gate_strict  = False,
+        htf_gate_required = False,
         trade_type_label = "Intraday",
         tip = (
             "📊 <b>Intraday Mode active.</b>\n"
@@ -202,7 +202,7 @@ MODES: Dict[str, ModeConfig] = {
             "W1": 2.4,
         },
         tp_mult = (3.0, 5.0, 7.0),   # hold for the full move
-        htf_gate_strict  = True,      # strong counter-trend D1 blocks H4 signals
+        htf_gate_required = True,      # strong counter-trend D1 blocks H4 signals
         trade_type_label = "Swing",
         tip = (
             "🌊 <b>Swing Mode active.</b>\n"
@@ -246,7 +246,7 @@ MODES: Dict[str, ModeConfig] = {
             "MN1": 2.4,
         },
         tp_mult = (5.0, 8.0, 12.0),  # hold weeks/months
-        htf_gate_strict  = True,
+        htf_gate_required = True,
         trade_type_label = "Position",
         tip = (
             "🏛️ <b>Position Mode active.</b>\n"
@@ -282,7 +282,7 @@ MODES: Dict[str, ModeConfig] = {
         indicator_weights = {},
         sl_mult_override = {},
         tp_mult = (2.0, 3.5, 4.5),
-        htf_gate_strict  = False,
+        htf_gate_required = False,
         trade_type_label = "Scalp / Intra-hour",
         tip = (
             "⚡📊 <b>Scalp / Intra-hour Mode active.</b>\n"
