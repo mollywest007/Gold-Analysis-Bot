@@ -1587,6 +1587,11 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     Shows everything the engine computed so the user understands
     the market before seeing any entry.
     """
+    # The full-analysis command is the primary Telegram analysis surface.
+    # Keep it on the same screenshot-based board as /analyze so the two
+    # commands cannot drift into different layouts.
+    return _reference_analysis_card(a)
+
     ms  = market_status()
     mkt = "LIVE" if ms["is_open"] else ms["status_text"]
 
