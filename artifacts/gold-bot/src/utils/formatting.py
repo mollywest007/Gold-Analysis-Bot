@@ -1866,17 +1866,13 @@ def _escape_analysis_lines(lines: list[str]) -> str:
 def transparent_analysis_cards(
     a: MarketAnalysis, account_id: int | None = None
 ) -> list[str]:
-    """Return separate, self-contained strict and early evidence cards.
+    """Return the full analysis board used by the Telegram /analyze command.
 
-    Keeping the cards independent is intentional: Telegram can truncate a
-    single long message, which used to hide the end of the strict gate or the
-    early-entry invalidation section.
+    The board intentionally stays as one screenshot-style card.  Early Entry
+    Watch is already a separate section inside that card; splitting strict and
+    early paths into different cards changes the user-facing arrangement.
     """
-    del account_id
-    return [
-        _transparent_entry_card(a, "strict"),
-        _transparent_entry_card(a, "early"),
-    ]
+    return [_legacy_analysis_card(a, account_id)]
 
 
 def _transparent_entry_card(a: MarketAnalysis, path: str) -> str:
