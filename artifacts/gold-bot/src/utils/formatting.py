@@ -1073,6 +1073,7 @@ def _legacy_compact_analysis_board(
         f"FVG {framework.get('fair_value_gap_confirmation', 0)}/10  "
         f"C {framework.get('candlestick_confirmation', 0)}/5"
     )
+    layers = f"{layers_1} | {layers_2}"
     supertrend = getattr(a, "supertrend_direction", "NEUTRAL")
     supertrend_text = (
         "Bullish" if supertrend == "BUY"
@@ -1090,56 +1091,51 @@ def _legacy_compact_analysis_board(
         "── DECISION ───────────────────────",
         f"  Strict : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
         f"  Early  : {'WATCH READY ' + direction if watch_ready else 'FORMING'}",
-        f"  Score  : {score}/100  |  HTF {htf_bias}",
-        f"  MTF    : {' | '.join(mtf_parts[:2])}",
-        f"           {' | '.join(mtf_parts[2:])}",
-        f"  Legacy : {legacy_status}  |  Data {report.get('data_quality', 'REAL_OHLCV')}",
+        f"  Score  : {score}/100  (watch 55 | strict 60)",
+        f"  MTF    : {mtf_text}",
+        f"  HTF    : {htf_bias} | Legacy {legacy_status}",
+        f"  Data   : {report.get('data_quality', 'REAL_OHLCV')}",
         "",
-        "── STRICT CONFIRMED ENTRY ─────────",
+        "── ENTRY INFORMATION ──────────────",
+        f"  Strict gate : score 60+ | MTF 60+ | HTF aligned | no conflict",
     ]
     if strict_ready:
         lines += [
-            f"  Status    : CONFIRMED {action}",
-            f"  Entry     : {fmt_price(getattr(a, 'entry', 0.0))}",
-            f"  SL / TP1  : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
+            f"  Confirmed   : {action} @ {fmt_price(getattr(a, 'entry', 0.0))}",
+            f"  SL / TP1    : {fmt_price(getattr(a, 'stop_loss', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp1', 0.0))}",
-            f"  TP2 / TP3 : {fmt_price(getattr(a, 'tp2', 0.0))} / "
+            f"  TP2 / TP3   : {fmt_price(getattr(a, 'tp2', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp3', 0.0))} | R:R 1:{getattr(a, 'rr_ratio', 0)}",
-            "  State     : ACTIVE PLAN",
         ]
     else:
-        lines += [
-            "  Status    : Awaiting confirmation",
-            "  Trade plan: NO ACTIVE TRADE",
-            f"  Missing   : {blocker_text}",
-        ]
+        lines.append("  Confirmed   : None — no active trade")
     lines += [
-        "",
-        "── EARLY WATCH ENTRY ──────────────",
-        f"  Status    : {'READY' if watch_ready else 'FORMING'}",
-        f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        f"  Early watch : {direction if direction in ('BUY', 'SELL') else 'WAIT'} | "
+        f"Entry {fmt_price(watch_entry) if watch_entry > 0 else 'N/A'}",
         *(
             [
                 f"  INDICATION: {direction} (not confirmed)",
+                "  Status    : Awaiting confirmation",
                 f"  Setup Grade: {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
                 f"  Confidence: {getattr(a, 'confidence', 0)}%",
             ]
             if direction in ("BUY", "SELL") and not strict_ready
             else []
         ),
-        f"  Entry     : {fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
-        f"  Zone      : {zone_text}",
-        f"  Evidence  : {', '.join(evidence) if evidence else 'None yet'}",
-        "  State     : MANUAL REVIEW ONLY — NEVER ACTIVE",
+        f"  Watch zone  : {zone_text}",
+        "  Early plan  : provisional manual review only; never active",
         "",
         "── WHY ────────────────────────────",
+        f"  Evidence : {', '.join(evidence) if evidence else 'None yet'}",
         f"  Structure: {structure.get('trend', getattr(a, 'trend', 'N/A'))} | "
         f"BOS {structure.get('bos', getattr(a, 'bos', 'NONE'))} | "
         f"CHoCH {structure.get('choch', getattr(a, 'choch', 'NONE'))}",
-        f"  Layers   : {layers_1}",
-        f"             {layers_2}",
-        f"  ADX/Votes: {float(getattr(a, 'adx', 0.0) or 0.0):.1f} | "
+        f"  Layers   : {layers}",
+        f"  ADX      : {float(getattr(a, 'adx', 0.0) or 0.0):.1f} | "
         f"Votes BUY {buy_votes}/8 SELL {sell_votes}/8",
+        f"  Risk     : {getattr(a, 'risk_level', 'HIGH')} | "
+        f"Macro {getattr(a, 'macro_status', 'UNAVAILABLE')}",
+        f"  Intermkt : {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
         "",
         "── MARKET SNAPSHOT ────────────────",
         f"  RSI {float(getattr(a, 'rsi_value', 0.0) or 0.0):.1f} | "
@@ -1149,19 +1145,16 @@ def _legacy_compact_analysis_board(
         f"  CCI {float(getattr(a, 'cci_value', 0.0) or 0.0):.0f} | "
         f"VWAP {float(getattr(a, 'vwap', 0.0) or 0.0):,.2f} | "
         f"BB%B {float(getattr(a, 'bb_pct', 0.0) or 0.0):.1f}",
-        f"  Trend {supertrend_text} | Regime {getattr(a, 'market_regime', 'NORMAL')}",
-        f"  R2/R1 {fmt_price(a.resistance2)} / {fmt_price(a.resistance1)} | "
+        f"  Supertrend {supertrend_text} | Regime {getattr(a, 'market_regime', 'NORMAL')}",
+        f"  Levels R2 {fmt_price(a.resistance2)} | R1 {fmt_price(a.resistance1)} | "
         f"Price {fmt_price(a.price)}",
-        f"  S1/S2 {fmt_price(a.support1)} / {fmt_price(a.support2)} | "
+        f"  Levels S1 {fmt_price(a.support1)} | S2 {fmt_price(a.support2)} | "
         f"ATR {fmt_price(a.atr)}",
         "",
         "── BLOCKERS ───────────────────────",
-        f"  Waiting : {blocker_text}",
-        f"  Reason  : "
+        f"  Waiting for: {blocker_text}",
+        f"  Reason     : "
         f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'No additional blocker')[:110]}",
-        f"  Risk    : {getattr(a, 'risk_level', 'HIGH')} | "
-        f"Macro {getattr(a, 'macro_status', 'UNAVAILABLE')}",
-        f"  Intermkt: {getattr(a, 'intermarket_status', 'UNAVAILABLE')}",
     ]
     invalidating = getattr(a, "invalidating_conditions", []) or []
     if invalidating:
