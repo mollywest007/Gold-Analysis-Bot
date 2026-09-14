@@ -371,11 +371,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                             reply_markup=kb,
                         )
                         return
+                    from src.utils.formatting import transparent_analysis_cards
+                    cards = transparent_analysis_cards(a, account_id=chat_id)
                     await query.edit_message_text(
-                        analysis_card(a, account_id=chat_id),
-                        parse_mode="HTML",
-                        reply_markup=kb,
+                        cards[0], parse_mode="HTML", reply_markup=kb
                     )
+                    for continuation in cards[1:]:
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=continuation, parse_mode="HTML"
+                        )
 
                 elif command == "signal":
                     await query.edit_message_text("Scanning for a trade setup...", reply_markup=kb)

@@ -10,7 +10,7 @@ from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card, news_card,
     pro_analysis_card, early_entry_card,
-    no_early_entry_card,
+    no_early_entry_card, transparent_analysis_cards,
 )
 from src.utils.keyboards import (
     alerts_keyboard, main_menu_keyboard, settings_keyboard, refresh_keyboard,
@@ -270,10 +270,11 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 parse_mode="HTML",
             )
             return
-        await msg.edit_text(
-            analysis_card(a, account_id=chat_id), parse_mode="HTML",
-            reply_markup=refresh_keyboard("analyze", tf),
-        )
+        cards = transparent_analysis_cards(a, account_id=chat_id)
+        await msg.edit_text(cards[0], parse_mode="HTML",
+                            reply_markup=refresh_keyboard("analyze", tf))
+        for continuation in cards[1:]:
+            await update.message.reply_text(continuation, parse_mode="HTML")
     except Exception as e:
         logger.error(f"analyze error: {e}")
         await msg.edit_text("Analysis failed. Please try again.")
