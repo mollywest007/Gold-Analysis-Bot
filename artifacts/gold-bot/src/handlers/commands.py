@@ -261,6 +261,15 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
+        if getattr(a, "is_simulated", False):
+            await msg.edit_text(
+                "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                "Market data could not be fetched. This analysis is based on "
+                "simulated prices and is <b>not reliable</b>.\n\n"
+                "Please try again in a few minutes.",
+                parse_mode="HTML",
+            )
+            return
         await msg.edit_text(
             analysis_card(a, account_id=chat_id), parse_mode="HTML",
             reply_markup=refresh_keyboard("analyze", tf),

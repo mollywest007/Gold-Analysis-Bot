@@ -352,6 +352,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     a = await analyze(
                         tf, mode=_analysis_mode_for_timeframe(chat_id, tf)
                     )
+                    if getattr(a, "is_simulated", False):
+                        await query.edit_message_text(
+                            "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                            "Market data could not be fetched. This analysis is "
+                            "based on simulated prices and is <b>not reliable</b>.\n\n"
+                            "Please try again in a few minutes.",
+                            parse_mode="HTML",
+                            reply_markup=kb,
+                        )
+                        return
                     await query.edit_message_text(
                         analysis_card(a, account_id=chat_id),
                         parse_mode="HTML",

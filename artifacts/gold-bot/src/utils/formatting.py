@@ -263,6 +263,46 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
     )
 
 
+def _strict_gate_reason(a: MarketAnalysis, data_is_real: bool) -> str:
+    """Return the actual strict-entry blockers shown on the analysis board."""
+    report = getattr(a, "institutional_report", {}) or {}
+    multi = report.get("multi_timeframe", {}) or {}
+    directions = multi.get("directions", {}) or {}
+    scores = multi.get("scores", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL")
+    legacy = report.get("legacy", {}) or {}
+    legacy_confirmation = legacy.get(
+        "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
+    )
+    htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
+    blockers = []
+
+    if not data_is_real:
+        blockers.append("real OHLCV data unavailable")
+    if direction not in ("BUY", "SELL"):
+        blockers.append("no confirmed BUY/SELL direction")
+    if int(getattr(a, "confidence_score", 0) or 0) < 60:
+        blockers.append(
+            f"active timeframe score {int(getattr(a, 'confidence_score', 0) or 0)}/60"
+        )
+    for tf in ("D1", "H4", "H1", "M15"):
+        tf_direction = directions.get(tf, "NO DATA")
+        tf_score = int(scores.get(tf, 0) or 0)
+        if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
+            blockers.append(f"{tf} {tf_direction}/{tf_score}")
+    htf_matches = (
+        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
+    ) or (
+        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
+    )
+    if not htf_matches:
+        blockers.append(f"HTF bias {htf_bias}")
+    if legacy_confirmation == "CONFLICT":
+        blockers.append("legacy conflict")
+
+    return "; ".join(blockers[:6]) if blockers else "all strict gates passed"
+
+
 def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
     """Keep the most important decision state near the top of the full card."""
     report = getattr(a, "institutional_report", {}) or {}
@@ -284,7 +324,16 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
         evidence.append(choch.replace("_", " "))
     if bos in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(bos.replace("_", " "))
-    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
+    )
+    watch_ready = (
+        data_is_real
+        and direction in ("BUY", "SELL")
+        and score >= 55
+        and bool(evidence)
+    )
     legacy = report.get("legacy", {}) or {}
     legacy_confirmation = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
@@ -342,8 +391,27 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
     if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(str(a.bos).replace("_", " "))
 
-    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
-    strict_ready = action in ("BUY", "SELL")
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
+    )
+    watch_ready = (
+        data_is_real
+        and direction in ("BUY", "SELL")
+        and score >= 55
+        and bool(evidence)
+    )
+    data_quality = report.get("data_quality", "REAL_OHLCV")
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and data_quality == "REAL_OHLCV"
+    )
+    strict_ready = (
+        action in ("BUY", "SELL")
+        and data_is_real
+        and multi_timeframe.get("aligned", False)
+    )
+    consensus_score = int(multi_timeframe.get("consensus_score", 0) or 0)
     legacy = report.get("legacy", {}) or {}
     legacy_confirmation = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
@@ -464,7 +532,12 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     if bos in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(bos.replace("_", " "))
 
-    watch_ready = direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    watch_ready = (
+        data_is_real
+        and direction in ("BUY", "SELL")
+        and score >= 55
+        and bool(evidence)
+    )
     strict_ready = action in ("BUY", "SELL")
     lines = [
         "",
@@ -1209,7 +1282,11 @@ def _reference_analysis_card(
     )
     zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
 
-    if direction not in ("BUY", "SELL"):
+    if not data_is_real:
+        early_status = "DATA UNAVAILABLE"
+        early_analysis = "Real OHLCV data is unavailable; no setup can be validated."
+        early_decision = "Do not use this board for an entry until live data returns."
+    elif direction not in ("BUY", "SELL"):
         early_status = "NO EARLY DIRECTION"
         early_analysis = "Liquidity confirmation has not been established."
         early_decision = "No early watch is active; await clear directional evidence."
@@ -1228,11 +1305,7 @@ def _reference_analysis_card(
         f"FVG {framework.get('fair_value_gap_confirmation', 0)}/10 | "
         f"C {framework.get('candlestick_confirmation', 0)}/5"
     )
-    strict_reason = (
-        "Daily → H4 → H1 → M15 alignment remains required."
-        if not strict_ready
-        else "All strict confirmation gates passed."
-    )
+    strict_reason = _strict_gate_reason(a, data_is_real)
     engine_reason = (
         getattr(a, "wait_reason", "")
         or getattr(a, "verdict_reason", "")
@@ -1262,14 +1335,17 @@ def _reference_analysis_card(
         "──────────────────────────────────",
         "  INSTITUTIONAL SCORE",
         "──────────────────────────────────",
-        f"  Institutional: {score}/100",
+         f"  Institutional: {score}/100 ({a.timeframe})",
         "  Maximum     : 100/100",
+         f"  MTF consensus: {consensus_score}/100 "
+         f"({'ALIGNED' if multi_timeframe.get('aligned', False) else 'WAITING'})",
         f"  Bias        : {report.get('direction', 'WAIT')}",
         f"  Legacy      : {legacy.get('direction', 'WAIT')} "
         f"({legacy.get('confirmation', 'NEUTRAL')})",
         f"  Legacy Conf.: {legacy.get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined    : {combined.get('direction', 'WAIT')}",
         f"  MTF Chain   : {_mtf_chain_text(multi_timeframe)}",
+         f"  Data quality: {data_quality}",
         f"  Layers      : {layer_1}",
         f"                {layer_2}",
         "",
@@ -1280,7 +1356,7 @@ def _reference_analysis_card(
     if strict_ready:
         lines += [
             f"  Status      : CONFIRMED {action}",
-            "  Gate        : PASSED — strict confirmation complete",
+             "  Gate        : PASSED — strict confirmation complete",
             f"  Entry       : {fmt_price(a.entry)}",
             f"  Stop Loss   : {fmt_price(a.stop_loss)}",
             f"  TP1 / TP2   : {fmt_price(a.tp1)} / {fmt_price(a.tp2)}",
@@ -1290,7 +1366,7 @@ def _reference_analysis_card(
     else:
         lines += [
             "  Status      : WAITING — no confirmed entry",
-            f"  Gate        : {strict_reason}",
+             f"  Gate        : BLOCKED — {strict_reason}",
             f"  Reason      : {engine_reason[:110]}",
             "  Trade state : NO ACTIVE TRADE",
         ]
@@ -1316,7 +1392,7 @@ def _reference_analysis_card(
         f"  Analysis    : {early_analysis}",
         f"  Decision    : {early_decision}",
     ]
-    if direction in ("BUY", "SELL"):
+    if data_is_real and direction in ("BUY", "SELL"):
         lines += [
             f"  Watch Entry : {fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
             f"  Entry Zone  : "

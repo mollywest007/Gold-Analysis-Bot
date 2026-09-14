@@ -2699,6 +2699,14 @@ def _apply_multi_timeframe_consensus(
         "scores": dict(zip(framework_order, scores)),
         "aligned": aligned,
         "final_direction": final_direction if aligned else "WAIT",
+        "consensus_score": int(multi_timeframe.get("confidence_score", 0) or 0),
+        "data_quality": {
+            tf: (analyses[tf].institutional_report or {}).get(
+                "data_quality", "UNKNOWN"
+            )
+            for tf in framework_order
+            if tf in analyses
+        },
     }
     analysis.institutional_report = report
 
