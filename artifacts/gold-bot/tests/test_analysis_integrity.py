@@ -190,11 +190,12 @@ class AnalysisIntegrityTests(unittest.TestCase):
         ):
             card = formatting.analysis_card(analysis)
 
-        self.assertIn("INDICATION: SELL (not confirmed)", card)
-        self.assertIn("Setup Grade: B", card)
-        self.assertIn("Confidence: 75%", card)
-        self.assertIn("Status    : Awaiting confirmation", card)
-        self.assertIn("&lt;confirmation&gt; required", card)
+        self.assertIn("WHAT TO DO", card)
+        self.assertIn("Direction : SELL", card)
+        self.assertIn("Action    : WAIT", card)
+        self.assertIn("Conflict  : None — all clear", card)
+        self.assertNotIn("Awaiting confirmation", card)
+        self.assertNotIn("Engine note", card)
 
     def test_analysis_card_uses_selected_timeframe_only(self):
         analysis = MarketAnalysis(
@@ -212,6 +213,14 @@ class AnalysisIntegrityTests(unittest.TestCase):
             tp3=4420.0,
             rr_ratio=2.0,
             action="BUY",
+            wait_reason="",
+            resistance1=4360.0,
+            resistance2=4380.0,
+            support1=4335.0,
+            support2=4310.0,
+            breakout=False,
+            reversal=False,
+            liquidity_zone="4335.0 — 4345.0",
             directional_indication="BUY",
             confidence_score=80,
             institutional_report={
@@ -232,9 +241,13 @@ class AnalysisIntegrityTests(unittest.TestCase):
         ):
             card = formatting.analysis_card(analysis)
 
-        self.assertIn("Timeframe : M15", card)
-        self.assertIn("Mode scope: M15 only", card)
-        self.assertIn("HTF Bias  : Not used (selected timeframe only)", card)
+        self.assertIn("WHAT TO DO", card)
+        self.assertIn("Entry :", card)
+        self.assertIn("Alert :", card)
+        self.assertNotIn("Timeframe", card)
+        self.assertNotIn("Mode scope", card)
+        self.assertNotIn("HTF Bias", card)
+        self.assertNotIn("M15 analysis", card)
         self.assertNotIn("D1", card)
         self.assertNotIn("H4", card)
         self.assertNotIn("MTF", card)

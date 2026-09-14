@@ -1215,7 +1215,171 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
     )
 
 
+def _reference_style_analysis_card(
+    a: MarketAnalysis, account_id: int | None = None
+) -> str:
+    """Render the user-facing market card in a compact Telegram layout.
+
+    This card intentionally contains outcomes and useful market values only.
+    The selected timeframe and mode still drive the analysis internally, but
+    neither the selection nor the engine's intermediate reasoning belongs in
+    the user-facing presentation.
+    """
+    del account_id
+    report = getattr(a, "institutional_report", {}) or {}
+    legacy = report.get("legacy", {}) or {}
+    legacy_state = str(
+        legacy.get("confirmation", getattr(a, "legacy_confirmation", "NEUTRAL"))
+        or "NEUTRAL"
+    ).upper()
+    conflict = (
+        f"{legacy.get('direction', 'Indicators')} — conflict detected"
+        if legacy_state == "CONFLICT"
+        else "None — all clear"
+    )
+
+    action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+    indication = str(
+        getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    ).upper()
+    direction = action if action in ("BUY", "SELL") else (
+        indication if indication in ("BUY", "SELL") else "WAIT"
+    )
+    what_to_do = action if action in ("BUY", "SELL") else "WAIT"
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
+    )
+    alert = (
+        "✅ Signal active"
+        if action in ("BUY", "SELL") and data_is_real
+        else "⚠ Live data unavailable"
+        if not data_is_real
+        else "⏳ No active signal"
+    )
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    win_probability = int(getattr(a, "win_probability", 0) or 0)
+    if action not in ("BUY", "SELL"):
+        win_probability = 0
+    rr_ratio = float(getattr(a, "rr_ratio", 0.0) or 0.0)
+
+    def _value(value, fallback="—"):
+        return fallback if value is None or value == "" else str(value)
+
+    def _price(value):
+        value = float(value or 0.0)
+        return fmt_price(value) if value > 0 else "—"
+
+    structure = _struct_label(getattr(a, "market_structure", "") or "—")
+    trend = _value(getattr(a, "trend", "—"))
+    bias = _value(getattr(a, "bias", "—"))
+    strength = _value(getattr(a, "strength", "—"))
+    regime = _value(getattr(a, "market_regime", "—"))
+    session = _value(getattr(a, "session", "—"))
+    candle = _value(getattr(a, "candle_pattern", "None"))
+    chart_pattern = _value(getattr(a, "chart_pattern", "None"))
+    hidden_divergence = _value(getattr(a, "hidden_divergence", "NONE"))
+
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        "║       XAU/USD  MARKET CARD       ║",
+        "╚══════════════════════════════════╝",
+        f"  Price : {_price(getattr(a, 'price', 0))}  |  {_mkt_line()}",
+        "",
+        "──────────────────────────────────",
+        "  WHAT TO DO",
+        "──────────────────────────────────",
+        f"  Direction : {direction}",
+        f"  Action    : {what_to_do}",
+        f"  Conflict  : {conflict}",
+        f"  Bias      : {bias} ({strength})",
+        f"  Trend     : {trend}  |  ADX {float(getattr(a, 'adx', 0.0) or 0.0):.0f}",
+        f"  Confidence: {int(getattr(a, 'confidence', 0) or 0)}%",
+        "",
+        "──────────────────────────────────",
+        "  TRADE PLAN",
+        "──────────────────────────────────",
+        f"  Entry : {_price(getattr(a, 'entry', 0))}",
+        f"  SL    : {_price(getattr(a, 'stop_loss', 0))}",
+        f"  TP1   : {_price(getattr(a, 'tp1', 0))}",
+        f"  TP2   : {_price(getattr(a, 'tp2', 0))}",
+        f"  TP3   : {_price(getattr(a, 'tp3', 0))}",
+        f"  R:R   : {f'1:{rr_ratio:g}' if rr_ratio > 0 else '—'}",
+        f"  Win % : {_win_bar(win_probability) if win_probability else '—'}",
+        f"  Grade : {_value(getattr(a, 'setup_quality', '') or getattr(a, 'setup_grade', '—'))}",
+        f"  Alert : {alert}",
+        "",
+        "──────────────────────────────────",
+        "  INDICATORS",
+        "──────────────────────────────────",
+        f"  RSI       : {float(getattr(a, 'rsi_value', 0.0) or 0.0):.0f}",
+        f"  Stoch     : {float(getattr(a, 'stoch_k_val', 0.0) or 0.0):.0f}"
+        f" | {float(getattr(a, 'stoch_d_val', 0.0) or 0.0):.0f}",
+        f"  MACD Hist : {float(getattr(a, 'macd_hist', 0.0) or 0.0):+.2f}",
+        f"  CCI       : {float(getattr(a, 'cci_value', 0.0) or 0.0):.0f}",
+        f"  VWAP      : {_price(getattr(a, 'vwap', 0))}",
+        f"  BB %B     : {float(getattr(a, 'bb_pct', 0.0) or 0.0):.0f}%"
+        f"  | BW {float(getattr(a, 'bb_bandwidth', 0.0) or 0.0):.2f}%",
+        f"  Supertrend: {_value(getattr(a, 'supertrend_direction', 'NEUTRAL'))}",
+        f"  Structure : {structure}",
+        "",
+        "──────────────────────────────────",
+        "  MARKET DETAILS",
+        "──────────────────────────────────",
+        f"  Session   : {session}",
+        f"  Regime    : {regime}",
+        f"  Momentum  : {_value(getattr(a, 'momentum', '—'))}",
+        f"  Kill zone : {_value(getattr(a, 'kill_zone', '—'))}",
+        f"  Price zone: {_value(getattr(a, 'premium_discount', '—'))}",
+        f"  ATR       : {_price(getattr(a, 'atr', 0))}",
+        f"  R1 / R2   : {_price(getattr(a, 'resistance1', 0))}"
+        f" / {_price(getattr(a, 'resistance2', 0))}",
+        f"  S1 / S2   : {_price(getattr(a, 'support1', 0))}"
+        f" / {_price(getattr(a, 'support2', 0))}",
+        f"  Liquidity : {_value(getattr(a, 'liquidity_zone', '—'))}",
+        f"  Score     : {score}/100",
+    ]
+    limit_entry = float(getattr(a, "limit_entry", 0.0) or 0.0)
+    if limit_entry > 0 and abs(limit_entry - float(getattr(a, "entry", 0.0) or 0.0)) > 0.01:
+        lines.insert(
+            lines.index(f"  R:R   : {f'1:{rr_ratio:g}' if rr_ratio > 0 else '—'}"),
+            f"  Limit : {_price(limit_entry)}",
+        )
+    if getattr(a, "pdh", 0.0) and getattr(a, "pdl", 0.0):
+        lines.append(
+            f"  PDH / PDL: {_price(getattr(a, 'pdh', 0))}"
+            f" / {_price(getattr(a, 'pdl', 0))}"
+        )
+    if candle not in ("None", "—"):
+        lines.append(f"  Candle    : {candle}")
+    if chart_pattern not in ("None", "—"):
+        lines.append(
+            f"  Pattern   : {chart_pattern} → "
+            f"{_value(getattr(a, 'chart_pattern_signal', 'NEUTRAL'))}"
+        )
+    if hidden_divergence not in ("NONE", "—"):
+        lines.append(f"  Divergence: {hidden_divergence.replace('_', ' ').title()}")
+
+    ms = market_status()
+    if not ms["is_open"]:
+        lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
+    lines += ["", "  Not financial advice.", "</pre>"]
+    return safe_html(
+        "\n".join(
+            [
+                lines[0],
+                *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+                lines[-1],
+            ]
+        )
+    )
+
+
 def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
+    return _reference_style_analysis_card(a, account_id)
+
+    # Kept below as a reference for older layout experiments.
     ms = market_status()
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
