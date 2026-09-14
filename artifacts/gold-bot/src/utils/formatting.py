@@ -566,7 +566,7 @@ def _pd_line(a: MarketAnalysis) -> str:
 
 
 def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
-    """Explain why a directional setup is not yet a confirmed entry."""
+    """Explain why the complete setup is not yet valid for an entry."""
     direction = getattr(a, "directional_indication", "NEUTRAL")
     score = getattr(a, "confidence_score", 0)
     htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
@@ -593,21 +593,21 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
     if score < 60:
         return (
             f"{direction} FORMING",
-            f"Blocked: institutional evidence is {score}/100; 60/100 is required.",
+            f"Monitoring: institutional evidence is {score}/100; 60/100 is required.",
         )
     if legacy_confirmation == "CONFLICT":
         return (
             f"{direction} FORMING",
-            f"Blocked: institutional {direction} conflicts with legacy indicators.",
+            f"Monitoring: institutional {direction} conflicts with legacy indicators.",
         )
     return (
         f"{direction} FORMING",
-        "Blocked: Daily → H4 → H1 → M15 confirmation is not complete.",
+        "Monitoring: Daily → H4 → H1 → M15 alignment is not complete.",
     )
 
 
-def _strict_gate_reason(a: MarketAnalysis, data_is_real: bool) -> str:
-    """Return the actual strict-entry blockers shown on the analysis board."""
+def _entry_criteria_reason(a: MarketAnalysis, data_is_real: bool) -> str:
+    """Return the active criteria that still prevent a valid entry."""
     report = getattr(a, "institutional_report", {}) or {}
     multi = report.get("multi_timeframe", {}) or {}
     directions = multi.get("directions", {}) or {}
@@ -623,7 +623,7 @@ def _strict_gate_reason(a: MarketAnalysis, data_is_real: bool) -> str:
     if not data_is_real:
         blockers.append("real OHLCV data unavailable")
     if direction not in ("BUY", "SELL"):
-        blockers.append("no confirmed BUY/SELL direction")
+        blockers.append("no valid BUY/SELL direction")
     if int(getattr(a, "confidence_score", 0) or 0) < 60:
         blockers.append(
             f"active timeframe score {int(getattr(a, 'confidence_score', 0) or 0)}/60"
@@ -643,7 +643,7 @@ def _strict_gate_reason(a: MarketAnalysis, data_is_real: bool) -> str:
     if legacy_confirmation == "CONFLICT":
         blockers.append("legacy conflict")
 
-    return "; ".join(blockers[:6]) if blockers else "all strict gates passed"
+    return "; ".join(blockers[:6]) if blockers else "all entry criteria passed"
 
 
 def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
@@ -671,7 +671,7 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
         not getattr(a, "is_simulated", False)
         and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
     )
-    watch_ready = (
+    setup_ready = (
         data_is_real
         and direction in ("BUY", "SELL")
         and score >= 55
@@ -699,12 +699,11 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
         "──────────────────────────────────",
         "  DECISION SUMMARY",
         "──────────────────────────────────",
-        f"  Strict confirmed: "
-        f"{'CONFIRMED ' + action if action in ('BUY', 'SELL') else 'WAITING'}",
-        f"  Early watch     : "
-        f"{'READY ' + direction if watch_ready else 'FORMING'}",
-        f"  Score           : {score}/100  "
-        f"(watch 55 + evidence | strict 60)",
+        f"  Entry decision  : "
+        f"{action if action in ('BUY', 'SELL') else 'WAITING'}",
+        f"  Setup state     : "
+        f"{'READY ' + direction if setup_ready else 'FORMING'}",
+        f"  Score           : {score}/100  (minimum 60 for entry)",
         f"  MTF chain       : {mtf_text}",
         f"  HTF bias        : {htf_bias}  {'✓' if htf_matches else '…'}",
         f"  Legacy layer    : {legacy_confirmation}  "
@@ -714,8 +713,8 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
     ]
 
 
-def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
-    """Show both entry paths together without creating a second Telegram card."""
+def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
+    """Show one entry decision and the complete criteria behind it."""
     report = getattr(a, "institutional_report", {}) or {}
     direction = getattr(a, "directional_indication", "NEUTRAL")
     action = getattr(a, "action", "WAIT")
@@ -734,22 +733,13 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
     if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(str(a.bos).replace("_", " "))
 
-    data_is_real = (
-        not getattr(a, "is_simulated", False)
-        and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
-    )
-    watch_ready = (
-        data_is_real
-        and direction in ("BUY", "SELL")
-        and score >= 55
-        and bool(evidence)
-    )
     data_quality = report.get("data_quality", "REAL_OHLCV")
     data_is_real = (
         not getattr(a, "is_simulated", False)
         and data_quality == "REAL_OHLCV"
     )
-    strict_ready = (
+    multi_timeframe = report.get("multi_timeframe", {}) or {}
+    entry_ready = (
         action in ("BUY", "SELL")
         and data_is_real
         and multi_timeframe.get("aligned", False)
@@ -767,10 +757,6 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
         direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
     ) or (
         direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
-    watch_entry = (
-        float(getattr(a, "early_entry", 0.0) or 0.0)
-        or float(getattr(a, "limit_entry", 0.0) or 0.0)
     )
     zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
 
@@ -790,12 +776,12 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
     return [
         "",
         "──────────────────────────────────",
-        "  STRICT CONFIRMED ENTRY",
+        "  ENTRY DECISION",
         "──────────────────────────────────",
         f"  Status                : "
-        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        "  Gate                  : score 60+ | D1/H4/H1/M15 60+",
-        "                          HTF aligned | no conflict",
+        f"{action if entry_ready else 'WAITING — MONITORING'}",
+        "  Criteria              : score 60+ | D1/H4/H1/M15 aligned",
+        "                          HTF aligned | no conflicting evidence",
         *(
             [
                 f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
@@ -806,33 +792,28 @@ def _entry_paths_lines(a: MarketAnalysis) -> list[str]:
                 f"  R:R                   : 1:{getattr(a, 'rr_ratio', 0)}",
                 "  Trade state           : ACTIVE PLAN",
             ]
-            if strict_ready
+            if entry_ready
             else [
-                "  Trade plan            : NO ACTIVE TRADE",
+                "  Trade plan            : NOT VALID YET",
                 f"  Still missing         : "
-                f"{'; '.join(missing[:6]) if missing else 'confirmation'}",
+                f"{'; '.join(missing[:6]) if missing else 'entry criteria'}",
             ]
         ),
         "",
-        "──────────────────────────────────",
-        "  EARLY WATCH ENTRY",
-        "──────────────────────────────────",
-        f"  Status                : {'READY' if watch_ready else 'FORMING'}",
+        "  ANALYSIS CURRENTLY MONITORING",
         f"  Direction             : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
-        f"  Entry                 : "
-        f"{fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
         f"  Entry zone            : "
         f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
         if zone.get("low") and zone.get("high")
         else "  Entry zone            : Not formed",
         f"  Evidence              : {', '.join(evidence) if evidence else 'None yet'}",
-        f"  HTF / legacy           : {htf_bias} / {legacy_confirmation}",
-        "  Trade state           : MANUAL REVIEW ONLY — NEVER ACTIVE",
+        f"  HTF / legacy         : {htf_bias} / {legacy_confirmation}",
+        f"  Conditions            : {', '.join(missing[:5]) if missing else 'All required conditions met'}",
     ]
 
 
-def _early_watch_lines(a: MarketAnalysis) -> list[str]:
-    """Explain the strict and early-entry paths in a fixed reading order."""
+def _analysis_detail_lines(a: MarketAnalysis) -> list[str]:
+    """Render the complete evidence and entry criteria in reading order."""
     report = getattr(a, "institutional_report", {}) or {}
     direction = getattr(a, "directional_indication", "NEUTRAL")
     action = getattr(a, "action", "WAIT")
@@ -875,24 +856,23 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     if bos in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(bos.replace("_", " "))
 
-    watch_ready = (
+    setup_ready = (
         data_is_real
         and direction in ("BUY", "SELL")
         and score >= 55
         and bool(evidence)
     )
-    strict_ready = action in ("BUY", "SELL")
+    entry_ready = action in ("BUY", "SELL")
     lines = [
         "",
         "──────────────────────────────────",
         "  1) DECISION SUMMARY",
         "──────────────────────────────────",
-        f"  STRICT CONFIRMED ENTRY: "
-        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        f"  EARLY WATCH           : "
-        f"{'READY ' + direction if watch_ready else 'FORMING'}",
-        f"  Score                 : {score}/100 "
-        f"(watch 55 + evidence | strict 60)",
+        f"  ENTRY DECISION        : "
+        f"{action if entry_ready else 'WAITING'}",
+        f"  SETUP STATE           : "
+        f"{'READY ' + direction if setup_ready else 'FORMING'}",
+        f"  Score                 : {score}/100 (minimum 60 for entry)",
     ]
 
     strict_mtf_rows = []
@@ -916,37 +896,37 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         f"  Data quality          : {report.get('data_quality', 'REAL_OHLCV')}",
         "",
         "──────────────────────────────────",
-        "  2) STRICT CONFIRMED ENTRY",
+        "  2) ENTRY CRITERIA",
         "──────────────────────────────────",
         f"  Status                : "
-        f"{'CONFIRMED ' + action if strict_ready else 'WAITING'}",
-        "  Gate                  : score 60+ | all four timeframes 60+",
-        "                          HTF aligned | no legacy conflict",
+        f"{action if entry_ready else 'WAITING — MONITORING'}",
+        "  Criteria              : score 60+ | all four timeframes 60+",
+        "                          HTF aligned | no conflicting evidence",
     ]
-    if strict_ready:
+    if entry_ready:
         lines += [
             f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
             f"  Stop Loss             : {fmt_price(getattr(a, 'stop_loss', 0.0))}",
             f"  TP1 / TP2 / TP3       : {fmt_price(getattr(a, 'tp1', 0.0))} / "
             f"{fmt_price(getattr(a, 'tp2', 0.0))} / {fmt_price(getattr(a, 'tp3', 0.0))}",
             f"  R:R                   : 1:{getattr(a, 'rr_ratio', 0)}",
-            "  Trade state           : ACTIVE PLAN — confirmed gate passed",
+            "  Trade state           : ACTIVE PLAN — all criteria passed",
         ]
     else:
         lines += [
-            "  Trade plan            : NO ACTIVE TRADE",
-            "  Meaning               : strict confirmation is incomplete",
+            "  Trade plan            : NOT VALID YET",
+            "  Meaning               : required market conditions are still being monitored",
         ]
 
     lines += [
         "",
         "──────────────────────────────────",
-        "  3) EARLY WATCH / PROVISIONAL ENTRY",
+        "  3) CURRENT SETUP",
         "──────────────────────────────────",
-        f"  Status                : {'WATCH READY' if watch_ready else 'FORMING'}",
+        f"  Status                : {'READY' if setup_ready else 'FORMING'}",
         f"  Direction             : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
         f"  Evidence              : {', '.join(evidence) if evidence else 'None yet'}",
-        "  Meaning               : manual review only; never an active trade",
+        "  Meaning               : the same criteria drive the entry decision",
     ]
 
     layer_rows = [
@@ -973,31 +953,31 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         ),
         "Candle confirmation": ", ".join(report.get("candlesticks", []) or []) or "None",
     }
-    watch_entry = (
-        float(getattr(a, "early_entry", 0.0) or 0.0)
+    entry_zone_price = (
+        float(getattr(a, "entry_zone_price", 0.0) or 0.0)
         or float(getattr(a, "limit_entry", 0.0) or 0.0)
     )
-    watch_reason = getattr(a, "early_entry_reason", "") or ""
+    entry_reason = getattr(a, "entry_reason", "") or ""
     zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
     lines += [
         "",
-        "  EARLY WATCH LOCATION",
-        f"  Watch entry           : "
-        f"{fmt_price(watch_entry) if watch_entry > 0 else 'Not formed'}",
+        "  ENTRY LOCATION",
+        f"  Reference price       : "
+        f"{fmt_price(entry_zone_price) if entry_zone_price > 0 else 'Not formed'}",
         f"  Entry zone            : "
         f"{fmt_price(zone.get('low', 0))} – {fmt_price(zone.get('high', 0))}"
         if zone.get("low") and zone.get("high")
         else "  Entry zone            : Not formed",
     ]
-    if watch_reason:
-        lines.append(f"  Method                : {watch_reason[:100]}")
+    if entry_reason:
+        lines.append(f"  Entry method          : {entry_reason[:100]}")
 
     lines += [
         "",
         "──────────────────────────────────",
         "  4) INSTITUTIONAL EVIDENCE",
         "──────────────────────────────────",
-        "  Strict score gate: 60/100",
+        "  Entry score criterion: 60/100",
     ]
     for label, key, maximum in layer_rows:
         points = int(framework.get(key, 0) or 0)
@@ -1023,12 +1003,12 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     missing = []
     if direction not in ("BUY", "SELL"):
         missing.append("clear BUY/SELL direction")
-    if score < 55:
-        missing.append(f"watch score 55 (now {score})")
+    if score < 60:
+        missing.append(f"score 60 (now {score})")
     if not evidence:
         missing.append("directional evidence")
     if score < 60:
-        missing.append("strict score 60")
+        missing.append("score 60")
     for tf in ("D1", "H4", "H1", "M15"):
         tf_direction = mtf_directions.get(tf, "NO DATA")
         tf_score = int(mtf_scores.get(tf, 0) or 0)
@@ -1047,9 +1027,9 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
         "  6) BLOCKERS & INVALIDATION",
         "──────────────────────────────────",
         "  Still missing          : " + ("; ".join(missing[:8]) if missing else "None"),
-        f"  Strict result          : {'CONFIRMED ' + action if strict_ready else 'WAITING'}",
+        f"  Entry result           : {action if entry_ready else 'WAITING'}",
         f"  Reason                : "
-        f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Confirmation is still incomplete')[:120]}",
+        f"{(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Required conditions are still being monitored')[:120]}",
     ]
     invalidating = getattr(a, "invalidating_conditions", []) or []
     if invalidating:
@@ -1057,16 +1037,16 @@ def _early_watch_lines(a: MarketAnalysis) -> list[str]:
     return lines
 
 
-def early_confirmation_card(a: MarketAnalysis) -> str:
-    """Standalone board for the full early-entry confirmation state."""
+def entry_analysis_card(a: MarketAnalysis) -> str:
+    """Standalone board for the complete single-entry analysis state."""
     lines = [
         "<pre>",
         "╔══════════════════════════════════╗",
-        "║ EARLY ENTRY ANALYSIS BOARD       ║",
+        "║ SINGLE ENTRY ANALYSIS BOARD      ║",
         "╚══════════════════════════════════╝",
         f"  XAU/USD  {a.timeframe}  |  Price {fmt_price(a.price)}",
         f"  Scan mode: {_mode_config_for_analysis(a).label}",
-        *_early_watch_lines(a),
+        *_analysis_detail_lines(a),
         "",
         "  Not financial advice.",
         "</pre>",
@@ -1252,22 +1232,22 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         evidence.append(str(a.choch).replace("_", " "))
     if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
         evidence.append(str(a.bos).replace("_", " "))
-    early_watch_ready = (
+    setup_ready = (
         direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
     )
-    early_grade = (
+    setup_grade = (
         getattr(a, "setup_quality", "")
         or getattr(a, "setup_grade", "")
         or "WAIT"
     )
     if direction in ("BUY", "SELL"):
-        early_status = "WATCH READY" if early_watch_ready else "Awaiting confirmation"
-        early_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
-        early_decision = "For manual review only; this does not constitute an active trade."
+        setup_status = "READY" if setup_ready else "FORMING"
+        setup_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
+        setup_decision = "Monitoring the remaining entry criteria."
     else:
-        early_status = "NO EARLY DIRECTION"
-        early_analysis = "Liquidity confirmation not confirmed."
-        early_decision = "No early watch; wait for directional evidence."
+        setup_status = "NO DIRECTION"
+        setup_analysis = "Liquidity and directional evidence are not aligned."
+        setup_decision = "No entry; continue monitoring the analysis inputs."
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  FULL ANALYSIS         ║",
@@ -1307,17 +1287,17 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"C {framework_scores.get('candlestick_confirmation', 0)}/5",
         "",
         "──────────────────────────────────",
-        "  EARLY ENTRY WATCH",
+        "  SETUP ANALYSIS",
         "──────────────────────────────────",
-        "  Separate from strict confirmation.",
-        f"  Status    : {early_status}",
+        "  One entry system uses the complete analysis below.",
+        f"  Status    : {setup_status}",
         f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
-        f"  Analysis  : {early_analysis}",
-        f"  Decision  : {early_decision}",
+        f"  Analysis  : {setup_analysis}",
+        f"  Decision  : {setup_decision}",
         *(
             [
-                f"  INDICATION: {direction} (not confirmed)",
-                f"  Setup Grade: {early_grade}",
+                f"  Setup     : {direction}",
+                f"  Setup Grade: {setup_grade}",
                 f"  Confidence: {getattr(a, 'confidence', 0)}%",
             ]
             if direction in ("BUY", "SELL")
@@ -1364,7 +1344,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  ATR(14)   : {fmt_price(a.atr)}",
         "",
         "──────────────────────────────────",
-        "  STRICT CONFIRMED ENTRY",
+        "  ENTRY DECISION",
         "──────────────────────────────────",
     ]
 
@@ -1409,7 +1389,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
                 lines.append(f"    + {cf}")
     else:
         lines += [
-            f"  STATUS    : WAITING — no confirmed entry",
+            f"  STATUS    : WAITING — entry criteria not met",
         ]
         indication = getattr(a, "directional_indication", "NEUTRAL")
         wait_status, wait_detail = _wait_status(a)
@@ -1424,9 +1404,9 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         local_grade = getattr(a, "setup_grade", "") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
-                f"  INDICATION: {indication} (not confirmed)",
+                f"  Direction : {indication}",
                 f"  Wait state : {wait_status}",
-                "  Status    : Awaiting confirmation",
+                "  Status    : Monitoring required conditions",
                 f"  Setup Grade: {setup_grade}",
                 *(
                     [f"  Local Grade: {local_grade} (before MTF gate)"]
@@ -2490,8 +2470,8 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
 
 # ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
 
-def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
-    """Alert card — compact layout, all data preserved."""
+def entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
+    """Single direct-entry alert card — compact layout, all data preserved."""
     ms     = market_status()
     sl_dist = abs(a.entry - a.stop_loss)
     rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
@@ -2544,13 +2524,10 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
         ]
     lines += [sep, "ENTRY"]
 
-    if a.early_entry and a.early_entry != a.entry:
+    if a.entry:
         lines += [
-            f"  Limit : {fmt_price(a.early_entry)}  ({a.early_entry_reason[:30]})",
-            f"  Mkt   : {fmt_price(a.entry)}  (if the limit entry is missed)",
+            f"  Entry : {fmt_price(a.entry)}",
         ]
-    else:
-        lines.append(f"  Mkt   : {fmt_price(a.entry)}")
 
     lines += [
         f"  SL    : {fmt_price(a.stop_loss)}",
@@ -2588,8 +2565,8 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
     return safe_html("\n".join(lines))
 
 
-def no_early_entry_card(a: MarketAnalysis) -> str:
-    """Shown when analysis finds a direction but grade is B/C — not 80%+ confident."""
+def no_entry_card(a: MarketAnalysis) -> str:
+    """Shown when the complete analysis has not produced a valid setup."""
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  NO ENTRY  Pt.2        ║",
@@ -2598,8 +2575,8 @@ def no_early_entry_card(a: MarketAnalysis) -> str:
         f"  Direction : {a.action}  (grade {a.setup_quality})",
         f"  Win Rate  : {_win_bar(a.win_probability) if a.win_probability else 'N/A'}",
         "",
-                "  Grade below A — the 80% threshold has not been met.",
-                "  No early entry has been issued.",
+        "  The complete entry criteria have not been met.",
+        "  No entry has been issued.",
         "",
         "  What needs to improve:",
         "──────────────────────────────────",
@@ -2625,9 +2602,9 @@ def no_early_entry_card(a: MarketAnalysis) -> str:
 
     lines += [
         "",
-        "  Continue monitoring for setup improvement.",
+        "  Continue monitoring the conditions listed above.",
         "  Use /alerts to receive notifications",
-        "  when an A/A+ grade setup is detected.",
+        "  when a valid setup is detected.",
         "",
         "  Not financial advice.", "</pre>",
     ]

@@ -22,7 +22,7 @@ from src.user_preferences import (
     get_mode_config as get_user_mode_config,
     get_timeframe as get_user_timeframe,
 )
-from src.utils.formatting import early_entry_card
+from src.utils.formatting import entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
 
@@ -1822,7 +1822,7 @@ async def _fire_signal(
 ) -> bool:
     """Broadcast a single-TF entry signal: entry card + live chart."""
     # 1. Send the entry card (same format as /recommend Part 2)
-    text = early_entry_card(a, alert_label=alert_label)
+    text = entry_card(a, alert_label=alert_label)
     dead, delivered = await _broadcast_text(
         bot, subs, text, return_result=True
     )
@@ -1837,7 +1837,7 @@ async def _fire_signal(
         # useful context, but labeling it as the chart's sole "Entry" made
         # /active appear inconsistent with the alert.
         market_entry = a.entry
-        limit_entry = getattr(a, "early_entry", 0.0) or getattr(a, "limit_entry", 0.0)
+        limit_entry = getattr(a, "limit_entry", 0.0)
         img_bytes = await generate_chart_image(
             timeframe=tf,
             entry=market_entry,
@@ -2454,11 +2454,17 @@ async def _check_and_alert_once(
                 )
                 continue
 
-            # Pre-signal: 3 indicators agree but full signal not confirmed yet.
-            # Warn the trader to watch the chart and prepare — early enough to
-            # place a limit order in the OTE zone before the move starts.
-            # Only fires when there is no active lock on this TF.
+            # A WAIT result is informational only. There is one actionable
+            # notification path: the complete analysis must produce BUY/SELL.
+            # Do not emit a separate pre-entry notification or create a second
+            # waiting state.
             if not active_signal.get(state_key):
+                logger.info(
+                    f"[{tf}] No valid entry yet — complete analysis remains "
+                    "visible through the command cards."
+                )
+            continue
+            if False:  # legacy block retained only until the next cleanup pass
                 forming_dir = None
                 early_warning = False
                 early_entry = False

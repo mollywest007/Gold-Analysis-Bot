@@ -104,22 +104,21 @@ class MarketAnalysis:
     market_structure: str = "RANGING"   # HH_HL | LH_LL | RANGING | TRANSITION
     choch:          str = "NONE"        # BULLISH_CHOCH | BEARISH_CHOCH | NONE — early reversal signal
     win_probability:  int = 0
-    # Direction selected by the evidence before confirmation gates are applied.
-    # This remains visible when action is WAIT, so users can distinguish an
-    # early directional indication from a confirmed trade signal.
+    # Direction selected by the complete evidence set before the final entry
+    # decision is applied. This remains visible while criteria are incomplete.
     directional_indication: str = "NEUTRAL"
     confluence_list: List[str] = field(default_factory=list)
     tp3:            float = 0.0
-    # Early entry / Fibonacci fields
+    # Entry-zone / Fibonacci fields. The zone remains part of the complete
+    # analysis; it is not a separate entry stage.
     fib_382:        float = 0.0
     fib_500:        float = 0.0
     fib_618:        float = 0.0
-    early_entry:    float = 0.0   # best pullback entry price
-    early_entry_reason: str = ""  # description of the early entry zone
+    entry_zone_price: float = 0.0  # best structural entry-zone reference
+    entry_reason: str = ""          # description of the structural entry zone
     setup_quality:  str = ""      # "A+" | "A" | "B" | "WAIT"
-    # Preliminary grade for the directional setup before confidence, HTF, or
-    # institutional confirmation gates. This remains visible when action is
-    # WAIT, so a forming setup is not mistaken for a directionless market.
+    # Preliminary grade for the directional setup before the complete entry
+    # criteria are applied. This remains visible while action is WAIT.
     setup_grade:    str = "WAIT"
     # ── Evidence-first market report fields ────────────────────────────────────
     htf_h4_bias: str = "Neutral"
@@ -2335,11 +2334,11 @@ async def _analyze_single(
         if action in ("BUY", "SELL"):
             confluence_list.append(f"Round lvl: {near_round}")
 
-    # ── Fibonacci retracement & early entry ──────────────────────────────────
+    # ── Fibonacci retracement and structural entry zone ──────────────────────
     eff_dir = direction if direction in ("BUY", "SELL") else "BUY"
     fib_382, fib_500, fib_618 = compute_fibonacci_levels(highs, lows, eff_dir, lookback=50)
 
-    # ── Pro early entry: OB → FVG → OTE/Fib priority waterfall ─────────────
+    # ── Structural entry-zone priority: OB → FVG → OTE/Fib ──────────────────
     # Institutions enter at specific structural confluences, not at arbitrary
     # ATR multiples. We look for the highest-probability zone in this order:
     #   1. Order Block (OB) — demand/supply zone institutions defend
@@ -2348,56 +2347,56 @@ async def _analyze_single(
     #   4. Fib 50% — equilibrium, balanced risk/reward
     #   5. Fib 38.2% — shallow pullback, safer but lower R:R
     #   6. EMA pullback — generic retrace to moving average
-    early_entry = 0.0
-    early_entry_reason = ""
+    entry_zone_price = 0.0
+    entry_reason = ""
     if action == "BUY":
         # 1. Order Block: price has returned to or is near the demand OB zone
         if ob_at and ob_high > stop_loss and ob_low < price + atr * 0.5:
             _ob_entry = round(ob_low + (ob_high - ob_low) * 0.3, 2)   # lower 30% of OB = best fill
-            early_entry = max(_ob_entry, stop_loss + atr * 0.15)
-            early_entry_reason = (
+            entry_zone_price = max(_ob_entry, stop_loss + atr * 0.15)
+            entry_reason = (
                 f"📦 Order Block demand {ob_low:,.2f}–{ob_high:,.2f} — "
-                f"institutional re-accumulation zone, limit buy @ {early_entry:,.2f}"
+                f"institutional re-accumulation zone, limit buy @ {entry_zone_price:,.2f}"
             )
         # 2. VWAP pullback — institutional benchmark, high-prob limit-buy zone
         elif (vwap > stop_loss and vwap < price and abs(price - vwap) < atr * 1.5):
-            early_entry = round(max(vwap - atr * 0.05, stop_loss + atr * 0.15), 2)
-            early_entry_reason = (
+            entry_zone_price = round(max(vwap - atr * 0.05, stop_loss + atr * 0.15), 2)
+            entry_reason = (
                 f"📊 VWAP pullback @ {vwap:,.2f} — institutions anchor to VWAP; "
                 f"price retracing to VWAP = prime limit-buy zone, set @ {early_entry:,.2f}"
             )
         # 3. FVG: unfilled bullish imbalance below current price
         elif fvg_dir == "BULLISH" and fvg_bot > stop_loss and fvg_bot < price:
-            early_entry = round(fvg_bot + atr * 0.05, 2)
-            early_entry_reason = (
+            entry_zone_price = round(fvg_bot + atr * 0.05, 2)
+            entry_reason = (
                 f"⚡ Bullish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
                 f"institutions fill gaps, limit buy at FVG base @ {early_entry:,.2f}"
             )
         # 3. OTE zone (61.8% Fibonacci) — deepest pullback, optimal R:R
         elif fib_618 > stop_loss and fib_618 < price:
-            early_entry = fib_618
-            early_entry_reason = (
+            entry_zone_price = fib_618
+            entry_reason = (
                 f"🎯 OTE zone (Fib 61.8%) @ {fib_618:,.2f} — "
                 f"deepest structured pullback, highest R:R, set limit order here"
             )
         # 4. Fib 50% — equilibrium retrace
         elif fib_500 > stop_loss and fib_500 < price:
-            early_entry = fib_500
-            early_entry_reason = (
+            entry_zone_price = fib_500
+            entry_reason = (
                 f"📐 Fib 50% equilibrium @ {fib_500:,.2f} — "
                 f"mid-range pullback, balanced R:R, solid limit entry zone"
             )
         # 5. Fib 38.2% — shallow pullback
         elif fib_382 > stop_loss and fib_382 < price:
-            early_entry = fib_382
-            early_entry_reason = (
+            entry_zone_price = fib_382
+            entry_reason = (
                 f"📐 Fib 38.2% retrace @ {fib_382:,.2f} — "
                 f"shallow pullback, safer entry, lower R:R — confirm with candle close"
             )
         # 6. EMA/ATR pullback zone
         else:
-            early_entry = limit_entry if limit_entry and limit_entry < price else price
-            early_entry_reason = (
+            entry_zone_price = limit_entry if limit_entry and limit_entry < price else price
+            entry_reason = (
                 "📊 Wait for EMA20/50 retrace — do not chase at market; "
                 "patience for a pullback to the moving average zone improves R:R"
             )
@@ -2405,50 +2404,50 @@ async def _analyze_single(
         # 1. Order Block: supply zone overhead
         if ob_at and ob_low < stop_loss and ob_high > price - atr * 0.5:
             _ob_entry = round(ob_high - (ob_high - ob_low) * 0.3, 2)  # upper 30% of OB = best fill
-            early_entry = min(_ob_entry, stop_loss - atr * 0.15)
-            early_entry_reason = (
+            entry_zone_price = min(_ob_entry, stop_loss - atr * 0.15)
+            entry_reason = (
                 f"📦 Order Block supply {ob_low:,.2f}–{ob_high:,.2f} — "
                 f"institutional distribution zone, limit sell @ {early_entry:,.2f}"
             )
         # 2. VWAP rally rejection — institutional benchmark, high-prob limit-sell zone
         elif (vwap < stop_loss and vwap > price and abs(price - vwap) < atr * 1.5):
-            early_entry = round(min(vwap + atr * 0.05, stop_loss - atr * 0.15), 2)
-            early_entry_reason = (
+            entry_zone_price = round(min(vwap + atr * 0.05, stop_loss - atr * 0.15), 2)
+            entry_reason = (
                 f"📊 VWAP rally to {vwap:,.2f} — price rallying back to VWAP from below; "
                 f"VWAP is institutional resistance here, set limit-sell @ {early_entry:,.2f}"
             )
         # 3. FVG: unfilled bearish imbalance above current price
         elif fvg_dir == "BEARISH" and fvg_top < stop_loss and fvg_top > price:
-            early_entry = round(fvg_top - atr * 0.05, 2)
-            early_entry_reason = (
+            entry_zone_price = round(fvg_top - atr * 0.05, 2)
+            entry_reason = (
                 f"⚡ Bearish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
                 f"institutions distribute into gaps, limit sell at FVG top @ {early_entry:,.2f}"
             )
         # 3. OTE zone (61.8% Fibonacci)
         elif fib_618 < stop_loss and fib_618 > price:
-            early_entry = fib_618
-            early_entry_reason = (
+            entry_zone_price = fib_618
+            entry_reason = (
                 f"🎯 OTE zone (Fib 61.8%) @ {fib_618:,.2f} — "
                 f"deepest structured retrace, highest R:R, set limit sell here"
             )
         # 4. Fib 50%
         elif fib_500 < stop_loss and fib_500 > price:
-            early_entry = fib_500
-            early_entry_reason = (
+            entry_zone_price = fib_500
+            entry_reason = (
                 f"📐 Fib 50% equilibrium @ {fib_500:,.2f} — "
                 f"mid-range retrace, balanced R:R, solid limit sell zone"
             )
         # 5. Fib 38.2%
         elif fib_382 < stop_loss and fib_382 > price:
-            early_entry = fib_382
-            early_entry_reason = (
+            entry_zone_price = fib_382
+            entry_reason = (
                 f"📐 Fib 38.2% retrace @ {fib_382:,.2f} — "
                 f"shallow retrace, safer sell, lower R:R — confirm with candle close"
             )
         # 6. EMA/ATR retrace zone
         else:
-            early_entry = limit_entry if limit_entry and limit_entry > price else price
-            early_entry_reason = (
+            entry_zone_price = limit_entry if limit_entry and limit_entry > price else price
+            entry_reason = (
                 "📊 Wait for EMA20/50 retrace — do not sell the bottom; "
                 "wait for a bounce to the moving average zone for better R:R"
             )
@@ -2609,7 +2608,7 @@ async def _analyze_single(
         confluence_list=confluence_list,
         tp3=tp3,
         fib_382=fib_382, fib_500=fib_500, fib_618=fib_618,
-        early_entry=early_entry, early_entry_reason=early_entry_reason,
+        entry_zone_price=entry_zone_price, entry_reason=entry_reason,
         setup_quality=setup_quality,
         setup_grade=setup_grade,
         is_simulated=data.is_simulated,

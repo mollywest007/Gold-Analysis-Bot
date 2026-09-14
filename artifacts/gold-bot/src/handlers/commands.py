@@ -9,8 +9,8 @@ from src.market_hours import market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card, news_card,
-    pro_analysis_card, early_entry_card,
-    no_early_entry_card, transparent_analysis_cards,
+    pro_analysis_card, entry_card,
+    no_entry_card, transparent_analysis_cards,
 )
 from src.utils.keyboards import (
     alerts_keyboard, main_menu_keyboard, settings_keyboard, refresh_keyboard,
@@ -208,7 +208,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
                 return
 
-            await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
+            await update.message.reply_text(entry_card(a), parse_mode="HTML")
 
             # Always attach the live chart for every BUY/SELL signal
             try:
@@ -224,7 +224,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     sl_dist = abs(a.entry - a.stop_loss)
                     rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
                     rr3 = round(abs(a.tp3 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0
-                    entry_display = a.early_entry if a.early_entry and a.early_entry != a.entry else a.entry
+                    entry_display = a.entry
                     caption = (
                         f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                         f"Limit Entry : {entry_display:,.2f}  |  SL: {a.stop_loss:,.2f}\n"
@@ -241,7 +241,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         else:
             # Genuinely no direction — engine gated it (ranging, Asian session, HTF block, etc.)
-            await update.message.reply_text(no_early_entry_card(a), parse_mode="HTML")
+            await update.message.reply_text(no_entry_card(a), parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"recommend error: {e}")
@@ -594,12 +594,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Engine fallback — same cards as /recommend
         try:
             from src.analysis import analyze
-            from src.utils.formatting import pro_analysis_card, early_entry_card
+            from src.utils.formatting import pro_analysis_card, entry_card
             analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
                                             reply_markup=refresh_keyboard("chart", tf))
-            await update.message.reply_text(early_entry_card(a), parse_mode="HTML")
+            await update.message.reply_text(entry_card(a), parse_mode="HTML")
             await msg.delete()
         except Exception as e:
             logger.error(f"cmd_chart — engine fallback failed: {e}")
