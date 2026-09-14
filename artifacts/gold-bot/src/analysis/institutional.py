@@ -365,6 +365,9 @@ def _volume(opens, highs, lows, closes, volumes, atr) -> dict[str, Any]:
     poc = max(bins, key=bins.get) if bins else 0
     nodes = sorted(bins, key=bins.get, reverse=True)
     return {
+        "current": round(recent, 2),
+        "average_prior_20": round(avg, 2),
+        "current_vs_average": round(recent / avg, 2) if avg else 0.0,
         "spike": bool(avg and recent > avg * 1.8), "climax": bool(avg and recent > avg * 2.5),
         "low_volume_pullback": bool(avg and recent < avg * .65), "high_volume_breakout": bool(avg and recent > avg * 1.5),
         "volume_divergence": "BEARISH" if _pct_change(closes, 5) > 0 and _pct_change(volumes, 5) < 0 else "BULLISH" if _pct_change(closes, 5) < 0 and _pct_change(volumes, 5) > 0 else "NONE",

@@ -148,8 +148,12 @@ def _path_market_data_lines(
         f"  Trend indicators    : EMA20 {moving.get('ema20', 'Not used')} "
         f"EMA50 {moving.get('ema50', 'Not used')} VWAP {_detail_price(a.vwap)} "
         f"Supertrend {_detail_value(a.supertrend_direction)}",
-        f"  Volume / profile    : delta {_detail_value(volume.get('delta'))} "
-        f"spike {volume.get('spike', 'Not used')} breakout {volume.get('high_volume_breakout', 'Not used')} "
+        f"  Volume / profile    : current {_detail_value(volume.get('current'))} "
+        f"avg20 {_detail_value(volume.get('average_prior_20'))} "
+        f"ratio {_detail_value(volume.get('current_vs_average'))}x "
+        f"delta {_detail_value(volume.get('delta'))}",
+        f"  Volume conditions   : spike {volume.get('spike', 'Not used')} "
+        f"breakout {volume.get('high_volume_breakout', 'Not used')} "
         f"divergence {_detail_value(volume.get('volume_divergence'))} "
         f"POC {_detail_value((volume.get('profile', {}) or {}).get('poc'))}",
         f"  Liquidity / SMC     : sweep {_detail_value(smc.get('liquidity_sweep'))} "
@@ -163,6 +167,39 @@ def _path_market_data_lines(
         f"intermarket {_detail_value(report.get('intermarket', {}).get('status', a.intermarket_status))} "
         f"| {report.get('data_quality', 'UNKNOWN')}",
     ]
+
+
+def _indicator_transparency_lines(a: MarketAnalysis, direction: str) -> list[str]:
+    """Show the indicator values and whether each one actually voted.
+
+    A neutral indicator is still displayed because it is evidence that did not
+    contribute to the directional decision, not a missing value.
+    """
+    rows = [
+        "",
+        "  INDICATORS — VALUE / SIGNAL / WEIGHT",
+    ]
+    indicators = list(getattr(a, "indicators", []) or [])
+    if not indicators:
+        return rows + ["  Not used            : no indicator snapshot returned"]
+    for indicator in indicators:
+        signal = str(getattr(indicator, "signal", "") or "Not used")
+        value = getattr(indicator, "value", "Not used")
+        if isinstance(value, (int, float)):
+            value_text = f"{value:+.4f}" if "MACD" in indicator.name else f"{value:.4f}"
+        else:
+            value_text = _detail_value(value)
+        weight = getattr(indicator, "weight", "Not used")
+        contribution = (
+            "USED"
+            if direction in ("BUY", "SELL") and signal == direction
+            else "Not used"
+        )
+        rows.append(
+            f"  {indicator.name:<18}: {value_text} / {signal} / "
+            f"wt {_detail_value(weight)} / {contribution}"
+        )
+    return rows
 
 
 def _path_plan_lines(
@@ -213,15 +250,7 @@ def _early_trigger_lines(
     matching_votes = buy_votes if direction == "BUY" else sell_votes
     score = int(getattr(a, "confidence_score", 0) or 0)
     adx = float(getattr(a, "adx", 0.0) or 0.0)
-    evidence = []
-    if matching_votes >= 2:
-        evidence.append(f"{direction} votes {matching_votes}")
-    if adx >= 18:
-        evidence.append(f"ADX {adx:.1f}")
-    if getattr(a, "choch", "NONE") != "NONE":
-        evidence.append(str(a.choch).replace("_", " "))
-    if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
-        evidence.append(str(a.bos).replace("_", " "))
+    evidence = _early_evidence(a, direction)
     structure = report.get("market_structure", {}) or {}
     smc = report.get("smc", {}) or {}
     return [
@@ -235,14 +264,54 @@ def _early_trigger_lines(
         f"  Score >= 55        : {'PASS' if score >= 55 else 'MISSING'} ({score}/100)",
         f"  Directional votes  : {'PASS' if matching_votes >= 2 else 'MISSING'} "
         f"({direction} {matching_votes} | BUY {buy_votes} / SELL {sell_votes})",
-        f"  ADX >= 18          : {'PASS' if adx >= 18 else 'not used'} ({adx:.1f})",
-        f"  Structure evidence : {_detail_value(structure.get('bos'))} / "
-        f"{_detail_value(structure.get('choch'))}",
+        f"  ADX >= 18          : {'PASS' if adx >= 18 else 'MISSING'} ({adx:.1f})",
+        f"  Structure evidence : {direction} BOS "
+        f"{'PASS' if _aligned_bos(a, direction) else 'MISSING'} "
+        f"({_detail_value(structure.get('bos', getattr(a, 'bos', 'NONE')))})",
+        f"  Reversal evidence  : {direction} CHoCH "
+        f"{'PASS' if _aligned_choch(a, direction) else 'MISSING'} "
+        f"({_detail_value(structure.get('choch', getattr(a, 'choch', 'NONE')))})",
         f"  Liquidity evidence : {_detail_value(smc.get('liquidity_sweep'))}",
         f"  Triggered factors  : {', '.join(evidence) if evidence else 'None'}",
         "  Rule               : real data + BUY/SELL + score >=55 + at least one "
-        "directional evidence factor",
+        "directional evidence factor (votes, ADX, BOS, or CHoCH)",
     ]
+
+
+def _aligned_bos(a: MarketAnalysis, direction: str) -> bool:
+    return (
+        direction == "BUY" and getattr(a, "bos", "NONE") == "BULLISH_BOS"
+    ) or (
+        direction == "SELL" and getattr(a, "bos", "NONE") == "BEARISH_BOS"
+    )
+
+
+def _aligned_choch(a: MarketAnalysis, direction: str) -> bool:
+    return (
+        direction == "BUY" and getattr(a, "choch", "NONE") == "BULLISH_CHOCH"
+    ) or (
+        direction == "SELL" and getattr(a, "choch", "NONE") == "BEARISH_CHOCH"
+    )
+
+
+def _early_evidence(a: MarketAnalysis, direction: str) -> list[str]:
+    """Return only direction-aligned factors used by the early-watch gate."""
+    if direction not in ("BUY", "SELL"):
+        return []
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    if adx >= 18:
+        evidence.append(f"ADX {adx:.1f}")
+    if _aligned_choch(a, direction):
+        evidence.append(f"{direction} CHoCH")
+    if _aligned_bos(a, direction):
+        evidence.append(f"{direction} BOS")
+    return evidence
 
 
 def _strict_confirmation_lines(
@@ -264,14 +333,24 @@ def _strict_confirmation_lines(
     ) or (
         direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
     )
+    direction_text = direction if direction in ("BUY", "SELL") else "WAIT"
+    final_direction = multi.get("final_direction", "WAIT")
+    all_data_real = all(
+        (multi.get("data_quality", {}) or {}).get(tf) == "REAL_OHLCV"
+        for tf in ("D1", "H4", "H1", "M15")
+    )
     checks = [
         f"real OHLCV: {'PASS' if data_is_real else 'MISSING'}",
-        f"direction: {'PASS' if direction in ('BUY', 'SELL') else 'MISSING'} ({direction})",
+        f"all D1/H4/H1/M15 data real: {'PASS' if all_data_real else 'MISSING'} "
+        f"({multi.get('data_quality', 'NO DATA')})",
+        f"direction: {'PASS' if direction in ('BUY', 'SELL') else 'MISSING'} ({direction_text})",
         f"active score >=60: {'PASS' if int(getattr(a, 'confidence_score', 0) or 0) >= 60 else 'MISSING'} "
         f"({int(getattr(a, 'confidence_score', 0) or 0)}/100)",
         f"HTF bias: {'PASS' if htf_match else 'MISSING'} ({htf_bias})",
         f"legacy conflict cleared: {'PASS' if legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL')) != 'CONFLICT' else 'MISSING'} "
         f"({legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL'))})",
+        f"final action: {'PASS' if strict_ready else 'MISSING'} "
+        f"({getattr(a, 'action', 'WAIT')} | MTF final {final_direction})",
     ]
     rows = [
         "",
@@ -289,7 +368,11 @@ def _strict_confirmation_lines(
             f"  {tf} confirmation    : {'PASS' if passed else 'MISSING'} "
             f"({tf_direction} / {tf_score}/100)"
         )
-    confirmed = checks + [
+    confirmed = [
+        check
+        for check in checks
+        if ": PASS" in check or "PASS" in check
+    ] + [
         f"{tf}={directions.get(tf, 'NO DATA')}/{int(scores.get(tf, 0) or 0)}"
         for tf in ("D1", "H4", "H1", "M15")
         if direction in ("BUY", "SELL")
@@ -298,7 +381,22 @@ def _strict_confirmation_lines(
     ]
     rows += [
         f"  MTF aligned flag    : {multi.get('aligned', 'Not used')}",
-        f"  Confirmed conditions: {', '.join(confirmed)}",
+        f"  Confirmed conditions: {', '.join(confirmed) if confirmed else 'None'}",
+        "  Still missing       : " + (
+            "; ".join(
+                [check for check in checks if "MISSING" in check]
+                + [
+                    f"{tf}={directions.get(tf, 'NO DATA')}/{int(scores.get(tf, 0) or 0)}"
+                    for tf in ("D1", "H4", "H1", "M15")
+                    if not (
+                        direction in ("BUY", "SELL")
+                        and directions.get(tf) == direction
+                        and int(scores.get(tf, 0) or 0) >= 60
+                    )
+                ]
+            )
+            or "None"
+        ),
     ]
     return rows
 
@@ -1682,9 +1780,160 @@ def _escape_analysis_lines(lines: list[str]) -> str:
 def transparent_analysis_cards(
     a: MarketAnalysis, account_id: int | None = None
 ) -> list[str]:
-    """Return separate strict and early cards so Telegram cannot truncate evidence."""
-    result = _reference_analysis_card(a, account_id, split=True)
-    return result if isinstance(result, list) else [result]
+    """Return separate, self-contained strict and early evidence cards.
+
+    Keeping the cards independent is intentional: Telegram can truncate a
+    single long message, which used to hide the end of the strict gate or the
+    early-entry invalidation section.
+    """
+    del account_id
+    return [
+        _transparent_entry_card(a, "strict"),
+        _transparent_entry_card(a, "early"),
+    ]
+
+
+def _transparent_entry_card(a: MarketAnalysis, path: str) -> str:
+    """Render one complete entry path with the values behind its decision."""
+    report = getattr(a, "institutional_report", {}) or {}
+    multi = report.get("multi_timeframe", {}) or {}
+    data_quality = report.get("data_quality", "UNKNOWN")
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and data_quality == "REAL_OHLCV"
+    )
+    direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    action = getattr(a, "action", "WAIT") or "WAIT"
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    strict_ready = (
+        action in ("BUY", "SELL")
+        and data_is_real
+        and bool(multi.get("aligned", False))
+    )
+    early_evidence = _early_evidence(a, direction)
+    watch_ready = (
+        direction in ("BUY", "SELL")
+        and score >= 55
+        and bool(early_evidence)
+        and data_is_real
+    )
+    zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
+    zone_low, zone_high = zone.get("low"), zone.get("high")
+    zone_text = (
+        f"{_detail_price(zone_low)} – {_detail_price(zone_high)}"
+        if zone_low and zone_high
+        else "Not formed"
+    )
+    is_strict = path == "strict"
+    status = (
+        ("CONFIRMED " + action) if strict_ready else "WAITING / REJECTED"
+        if is_strict else
+        "WATCH READY " + direction if watch_ready else "FORMING / NOT READY"
+    )
+    reason = (
+        getattr(a, "wait_reason", "")
+        or getattr(a, "verdict_reason", "")
+        or _strict_gate_reason(a, data_is_real)
+        if is_strict else
+        ", ".join(early_evidence)
+        or "No direction-aligned early evidence factor is active"
+    )
+    entry = (
+        float(getattr(a, "entry", 0.0) or 0.0)
+        if is_strict
+        else float(getattr(a, "early_entry", 0.0) or 0.0)
+        or float(getattr(a, "limit_entry", 0.0) or 0.0)
+    )
+    title = "STRICT CONFIRMED ENTRY" if is_strict else "EARLY WATCH ENTRY"
+    lines = [
+        "<pre>",
+        "╔══════════════════════════════════╗",
+        f"║ {title:<32} ║",
+        "╚══════════════════════════════════╝",
+        "",
+        f"  Status              : {status}",
+        f"  Current price       : {_detail_price(a.price)}",
+        f"  Timeframe / session : {a.timeframe} / {a.session or 'Not used'}",
+        f"  Market              : {_mkt_line()}",
+        f"  Data source         : {data_quality} "
+        f"({'usable' if data_is_real else 'NOT USABLE FOR ENTRY'})",
+        f"  Directional bias    : {direction}",
+        f"  Decision reason     : {str(reason)[:240]}",
+        "",
+        "──────────────────────────────────",
+        "  ACTUAL MARKET DATA USED",
+        "──────────────────────────────────",
+        *_path_market_data_lines(a, report, direction, section=title),
+        *_indicator_transparency_lines(a, direction),
+    ]
+    if is_strict:
+        lines += [
+            "",
+            "──────────────────────────────────",
+            "  STRICT CONFIRMATION GATE",
+            "──────────────────────────────────",
+            "  Additional confirmation required:",
+            "  D1 → H4 → H1 → M15 must all show the same",
+            "  direction at >=60/100 with real OHLCV data.",
+            *_strict_confirmation_lines(
+                a,
+                report,
+                direction,
+                data_is_real=data_is_real,
+                strict_ready=strict_ready,
+            ),
+            *_path_plan_lines(
+                a,
+                entry=float(getattr(a, "entry", 0.0) or 0.0),
+                label="STRICT PLAN (active only if confirmed)",
+            ),
+            f"  Entry zone          : {zone_text}",
+            f"  Conditions used     : MTF alignment, institutional score, "
+            f"HTF bias, legacy conflict check",
+            f"  Conditions not used : No external order-book or dealer-positioning "
+            f"feed is available; macro is {_detail_value(getattr(a, 'macro_status', 'Not used'))}",
+        ]
+    else:
+        lines += [
+            "",
+            "──────────────────────────────────",
+            "  EARLY WATCH TRIGGER GATE",
+            "──────────────────────────────────",
+            "  Early Watch is a provisional review signal.",
+            "  It never opens or activates a trade.",
+            *_early_trigger_lines(
+                a,
+                report,
+                direction,
+                data_is_real=data_is_real,
+                watch_ready=watch_ready,
+            ),
+            *_path_plan_lines(
+                a,
+                entry=entry,
+                label="EARLY PLAN (provisional)",
+            ),
+            f"  Entry zone          : {zone_text}",
+            f"  Entry method        : {_detail_value(getattr(a, 'early_entry_reason', ''))}",
+            f"  Conditions used     : real data, directional bias, score >=55, "
+            f"one direction-aligned evidence factor",
+            f"  Conditions not used : MTF alignment is not an Early Watch gate; "
+            f"liquidity sweep is context only",
+        ]
+    lines += [
+        *_path_invalidation_lines(
+            a, strict_ready=strict_ready, watch_ready=watch_ready
+        ),
+        "",
+        "  Not financial advice.",
+        "</pre>",
+    ]
+    escaped = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped))
 
 
 def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
