@@ -10,7 +10,7 @@ Improvements over v2:
   - Entry zone: shows market vs limit order suggestion per trade type
   - Market-closed flag propagated into the analysis object
   - Volume-weighted S/R with increased lookback
-  - HTF confirmation gate + session filter
+  - HTF context + session filter
   - Confluence gate: >= 3/5 (or 2/5 in strong trend) indicators agree
 """
 
@@ -110,7 +110,7 @@ class MarketAnalysis:
     confluence_list: List[str] = field(default_factory=list)
     tp3:            float = 0.0
     # Entry-zone / Fibonacci fields. The zone remains part of the complete
-    # analysis; it is not a separate entry stage.
+    # analysis and direct entry plan.
     fib_382:        float = 0.0
     fib_500:        float = 0.0
     fib_618:        float = 0.0
@@ -1505,14 +1505,14 @@ def _select_direction(
 async def _analyze_single(
     timeframe: str = "H1",
     mode: str = None,
-    use_higher_timeframe_confirmation: bool = True,
+    use_higher_timeframe_context: bool = True,
 ) -> MarketAnalysis:
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode) if mode else get_mode_config()
 
-    if use_higher_timeframe_confirmation:
-        # The active mode owns the confirmation hierarchy.  The legacy map remains
+    if use_higher_timeframe_context:
+        # The active mode owns the context hierarchy. The legacy map remains
         # a safe fallback for callers that introduce a timeframe before adding it
         # to a mode profile.
         htf = mode_cfg.confirmation_map.get(timeframe, HTF_MAP.get(timeframe, "H4"))
@@ -1781,9 +1781,9 @@ async def _analyze_single(
         else "NEUTRAL"
     ) if market_regime_v in ("TRENDING", "SQUEEZE") else "NEUTRAL"
     macro_direction = (
-        "BUY" if use_higher_timeframe_confirmation
+        "BUY" if use_higher_timeframe_context
         and htf_bias in ("Bullish", "Slightly Bullish")
-        else "SELL" if use_higher_timeframe_confirmation
+        else "SELL" if use_higher_timeframe_context
         and htf_bias in ("Bearish", "Slightly Bearish")
         else "NEUTRAL"
     )
@@ -1836,7 +1836,7 @@ async def _analyze_single(
     # ── HTF gate (hard block for strong misalignment, penalty for slight) ──────
     htf_align  = True
     htf_reason = ""
-    if use_higher_timeframe_confirmation and direction in ("BUY", "SELL"):
+    if use_higher_timeframe_context and direction in ("BUY", "SELL"):
         htf_strongly_bullish = htf_bias == "Bullish"
         htf_slightly_bullish = htf_bias == "Slightly Bullish"
         htf_strongly_bearish = htf_bias == "Bearish"
@@ -2024,8 +2024,8 @@ async def _analyze_single(
         direction, price, atr, ema20, ema50, s1, r1, trade_type
     )
 
-    # ── Signal gating ─────────────────────────────────────────────────────────
-    # The mode controls how much confirmation is required. Scalp/Intraday can
+    # ── Entry decision ─────────────────────────────────────────────────────────
+    # The mode controls how much evidence is required. Scalp/Intraday can
     # trade responsive moves, while Swing/Position require confidence, R:R and
     # higher-timeframe alignment before exposing an actionable signal.
     wait_reason  = ""
@@ -2363,14 +2363,14 @@ async def _analyze_single(
             entry_zone_price = round(max(vwap - atr * 0.05, stop_loss + atr * 0.15), 2)
             entry_reason = (
                 f"📊 VWAP pullback @ {vwap:,.2f} — institutions anchor to VWAP; "
-                f"price retracing to VWAP = prime limit-buy zone, set @ {early_entry:,.2f}"
+                f"price retracing to VWAP = prime limit-buy zone, set @ {entry_zone_price:,.2f}"
             )
         # 3. FVG: unfilled bullish imbalance below current price
         elif fvg_dir == "BULLISH" and fvg_bot > stop_loss and fvg_bot < price:
             entry_zone_price = round(fvg_bot + atr * 0.05, 2)
             entry_reason = (
                 f"⚡ Bullish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
-                f"institutions fill gaps, limit buy at FVG base @ {early_entry:,.2f}"
+                f"institutions fill gaps, limit buy at FVG base @ {entry_zone_price:,.2f}"
             )
         # 3. OTE zone (61.8% Fibonacci) — deepest pullback, optimal R:R
         elif fib_618 > stop_loss and fib_618 < price:
@@ -2407,21 +2407,21 @@ async def _analyze_single(
             entry_zone_price = min(_ob_entry, stop_loss - atr * 0.15)
             entry_reason = (
                 f"📦 Order Block supply {ob_low:,.2f}–{ob_high:,.2f} — "
-                f"institutional distribution zone, limit sell @ {early_entry:,.2f}"
+                f"institutional distribution zone, limit sell @ {entry_zone_price:,.2f}"
             )
         # 2. VWAP rally rejection — institutional benchmark, high-prob limit-sell zone
         elif (vwap < stop_loss and vwap > price and abs(price - vwap) < atr * 1.5):
             entry_zone_price = round(min(vwap + atr * 0.05, stop_loss - atr * 0.15), 2)
             entry_reason = (
                 f"📊 VWAP rally to {vwap:,.2f} — price rallying back to VWAP from below; "
-                f"VWAP is institutional resistance here, set limit-sell @ {early_entry:,.2f}"
+                f"VWAP is institutional resistance here, set limit-sell @ {entry_zone_price:,.2f}"
             )
         # 3. FVG: unfilled bearish imbalance above current price
         elif fvg_dir == "BEARISH" and fvg_top < stop_loss and fvg_top > price:
             entry_zone_price = round(fvg_top - atr * 0.05, 2)
             entry_reason = (
                 f"⚡ Bearish FVG imbalance {fvg_bot:,.2f}–{fvg_top:,.2f} — "
-                f"institutions distribute into gaps, limit sell at FVG top @ {early_entry:,.2f}"
+                f"institutions distribute into gaps, limit sell at FVG top @ {entry_zone_price:,.2f}"
             )
         # 3. OTE zone (61.8% Fibonacci)
         elif fib_618 < stop_loss and fib_618 > price:
@@ -2453,9 +2453,9 @@ async def _analyze_single(
             )
 
     # ── Setup quality grade ───────────────────────────────────────────────────
-    # Graded on indicator votes + structural confirmation (ChoCH).
+    # Graded on indicator votes + structural evidence (ChoCH).
     # A+ = 5 core indicators + trending market
-    # A  = 4 core indicators OR 3 core + ChoCH (structural confirmation)
+    # A  = 4 core indicators OR 3 core + ChoCH (structural evidence)
     # B  = 3 core indicators, win >= 55%
     setup_grade = "WAIT"
     if direction in ("BUY", "SELL"):
@@ -2464,7 +2464,7 @@ async def _analyze_single(
             if i.name in ("RSI(14)", "MACD", "EMA Stack", "ADX DI", "CCI(20)", "BB %B")
             and i.signal == direction
         )
-        # ChoCH aligned with direction counts as structural confirmation —
+        # ChoCH aligned with direction counts as structural evidence —
         # equivalent to one extra core indicator vote for grading purposes.
         # A 3-vote setup with confirmed market structure break = grade A.
         choch_confirmed = (
@@ -2487,7 +2487,7 @@ async def _analyze_single(
 
     # Merge the legacy indicators and institutional price-action framework into
     # one decision.  The institutional score is the canonical evidence score;
-    # legacy direction is supporting confirmation, not a second independent
+    # legacy direction is supporting evidence, not a second independent
     # trade engine.  A tied/neutral legacy result cannot veto valid institutional
     # evidence, while a direct legacy conflict remains a hard safety stop.
     legacy_confidence = confidence
@@ -2567,7 +2567,7 @@ async def _analyze_single(
         elif not htf_matches:
             wait_reason = "Combined framework WAIT — higher-timeframe direction is not aligned"
         else:
-            wait_reason = "Combined framework WAIT — confirmation is incomplete"
+            wait_reason = "Combined framework WAIT — required evidence is incomplete"
 
     combined_report = institutional_as_dict(institutional_context)
     combined_report["legacy"] = {
@@ -2666,11 +2666,11 @@ async def _analyze_single(
     )
 
 
-def _apply_multi_timeframe_consensus(
+def _attach_multi_timeframe_context(
     analysis: MarketAnalysis,
     multi_timeframe: dict,
 ) -> MarketAnalysis:
-    """Apply the strict Daily → H4 → H1 → M15 rule to one report."""
+    """Attach the full timeframe context without creating another entry stage."""
     analyses = multi_timeframe.get("analyses", {})
     framework_order = ("D1", "H4", "H1", "M15")
     directions_by_tf = {
@@ -2711,35 +2711,17 @@ def _apply_multi_timeframe_consensus(
     }
     analysis.institutional_report = report
 
-    if not aligned:
-        analysis.action = "WAIT"
-        analysis.setup_quality = "WAIT"
-        analysis.combined_direction = "WAIT"
-        analysis.win_probability = 0
-        direction_text = ", ".join(
-            f"{tf}={directions_by_tf.get(tf, 'NO DATA')}"
-            for tf in framework_order
+    # The selected timeframe's complete analysis owns the one entry decision.
+    # The other timeframes remain visible as context and can explain why the
+    # setup is stronger, weaker, or still being monitored.
+    analysis.combined_direction = analysis.action if analysis.action in ("BUY", "SELL") else "WAIT"
+    if not analysis.wait_reason:
+        context_state = (
+            f"Full timeframe context aligned {final_direction}"
+            if aligned
+            else "Full timeframe context remains mixed; monitoring the selected setup"
         )
-        analysis.wait_reason = (
-            "Multi-timeframe consensus WAIT — "
-            f"{direction_text}. All Daily, H4, H1 and M15 contexts must align "
-            "at 60/100 or higher; a bullish local move alone is not yet an "
-            "entry confirmation."
-        )
-    elif analysis.action != final_direction:
-        analysis.action = "WAIT"
-        analysis.setup_quality = "WAIT"
-        analysis.combined_direction = "WAIT"
-        analysis.win_probability = 0
-        analysis.wait_reason = (
-            f"Multi-timeframe consensus is {final_direction}, but the active "
-            f"{analysis.timeframe} entry is not confirmed."
-        )
-    else:
-        analysis.combined_direction = final_direction
-        analysis.wait_reason = analysis.wait_reason or (
-            f"Daily → H4 → H1 → M15 aligned {final_direction}"
-        )
+        analysis.wait_reason = context_state
 
     return analysis
 
@@ -2747,29 +2729,27 @@ def _apply_multi_timeframe_consensus(
 async def analyze(
     timeframe: str = "H1",
     mode: str = None,
-    strict_timeframes: bool = True,
-    use_higher_timeframe_confirmation: bool = True,
+    include_full_context: bool = True,
+    use_higher_timeframe_context: bool = True,
 ) -> MarketAnalysis:
-    """Return analysis with optional strict and higher-timeframe confirmation."""
-    if not strict_timeframes:
+    """Return one complete analysis with optional higher-timeframe context."""
+    if not include_full_context:
         return await _analyze_single(
             timeframe,
             mode=mode,
-            use_higher_timeframe_confirmation=use_higher_timeframe_confirmation,
+            use_higher_timeframe_context=use_higher_timeframe_context,
         )
     multi_timeframe = await analyze_multi_timeframe(mode=mode)
     analysis = multi_timeframe["analyses"].get(timeframe)
     if analysis is None:
-        # The institutional consensus framework is anchored to D1/H4/H1/M15,
-        # but Scalp Mode also exposes M1/M3/M5. Preserve the strict consensus
-        # gate for those lower-timeframe reports while keeping their local
-        # indicator values and trade-plan calculations.
+        # The full context set is anchored to D1/H4/H1/M15, but Scalp Mode
+        # also exposes M1/M3/M5. Keep local analysis for those charts.
         analysis = await _analyze_single(
             timeframe,
             mode=mode,
-            use_higher_timeframe_confirmation=False,
+            use_higher_timeframe_context=use_higher_timeframe_context,
         )
-    return _apply_multi_timeframe_consensus(analysis, multi_timeframe)
+    return _attach_multi_timeframe_context(analysis, multi_timeframe)
 
 
 async def analyze_multi_timeframe(
@@ -2778,9 +2758,8 @@ async def analyze_multi_timeframe(
 ) -> dict:
     """Analyze Daily → 4H → 1H → 15M in institutional order.
 
-    A final bias is emitted only when every required timeframe has real data,
-    the same directional framework result, and a score of at least 60/100.
-    Lower-timeframe evidence cannot override a higher-timeframe conflict.
+    The full timeframe snapshot is emitted for context. The selected timeframe's
+    complete analysis remains the single source of the entry decision.
     """
     framework_order = ("D1", "H4", "H1", "M15")
     requested_input = list(timeframes or framework_order)
@@ -2842,7 +2821,7 @@ async def analyze_multi_timeframe(
         "confidence_score": final_score,
         "reversal_timeframes": sorted(reversal_tfs),
         "framework_order": list(framework_order),
-        "lower_timeframe_rule": "Daily → H4 → H1 → M15 must align; mixed evidence remains Neutral / No Trade.",
+        "lower_timeframe_rule": "Daily → H4 → H1 → M15 are shown as context; mixed evidence is reported on the single entry card.",
     }
 
 

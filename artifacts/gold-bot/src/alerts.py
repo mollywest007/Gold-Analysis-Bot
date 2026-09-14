@@ -2456,8 +2456,7 @@ async def _check_and_alert_once(
 
             # A WAIT result is informational only. There is one actionable
             # notification path: the complete analysis must produce BUY/SELL.
-            # Do not emit a separate pre-entry notification or create a second
-            # waiting state.
+            # Do not emit a separate notification or create a second waiting state.
             if not active_signal.get(state_key):
                 logger.info(
                     f"[{tf}] No valid entry yet — complete analysis remains "
@@ -2802,7 +2801,7 @@ async def _check_and_alert_once(
                     atr=getattr(a, "atr", 0.0),
                     mode=analysis_mode,
                     limit_entry=(
-                        getattr(a, "early_entry", 0.0)
+                        getattr(a, "entry_zone_price", 0.0)
                         or getattr(a, "limit_entry", 0.0)
                     ),
                     account_id=account_id,

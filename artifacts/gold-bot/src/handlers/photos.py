@@ -166,16 +166,16 @@ def _result_card(r: ChartAnalysisResult) -> str:
             lines.append(f"  TP3      : {r.take_profit_3:,.2f}")
         if r.invalidation:
             lines.append(f"  Invalidat: {r.invalidation:,.2f}")
-        if r.early_entry_reason:
+        if r.entry_reason:
             lines += ["", "  Entry logic:"]
-            lines += _wrap(r.early_entry_reason, width=32, indent="    ")
+            lines += _wrap(r.entry_reason, width=32, indent="    ")
     else:
         lines += [
             "  WAIT — No high-probability setup",
             "  at current price action.",
         ]
-        if r.early_entry_reason:
-            lines += _wrap(r.early_entry_reason, width=34, indent="  ")
+        if r.entry_reason:
+            lines += _wrap(r.entry_reason, width=34, indent="  ")
 
     # Confluence
     if r.confluence_factors:

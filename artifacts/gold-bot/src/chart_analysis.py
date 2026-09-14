@@ -87,7 +87,7 @@ class ChartAnalysisResult:
     pressure_advantage: str             # "BUYERS" | "SELLERS" | "NEUTRAL"
 
     # Trade setup
-    entry_type: str                     # "EARLY_ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT"
+    entry_type: str                     # "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT"
     entry: Optional[float]
     stop_loss: Optional[float]
     take_profit_1: Optional[float]
@@ -103,7 +103,7 @@ class ChartAnalysisResult:
     reasons: list[str]                  # reasons supporting the bias
     bullish_scenario: str
     bearish_scenario: str
-    early_entry_reason: str
+    entry_reason: str                   # why the direct entry is valid, or what remains
     summary: str                        # 3–4 sentence professional assessment
 
     # Open trade assessment (populated when trade context was passed)
@@ -209,13 +209,13 @@ List every factor supporting the trade direction. High-probability setups requir
 - Volume spike or momentum divergence (if visible)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 7 — TRADE LEVELS & EARLY ENTRY
+STEP 7 — TRADE LEVELS & DIRECT ENTRY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Only suggest a trade if win_probability >= 65.
 If the setup is unclear or insufficient, set entry_type to WAIT.
 
-EARLY ENTRY — highest priority, use whenever a structural confluence zone is available.
-These give the best R:R because you enter before the crowd confirms the move.
+DIRECT ENTRY — use the strongest structural confluence zone available.
+This gives the best R:R while keeping the decision tied to the complete analysis.
 Use this waterfall in order (pick the FIRST one that applies):
 
   1. Order Block (OB): enter at the OB zone LOW (buy) or HIGH (sell)
@@ -228,7 +228,7 @@ Use this waterfall in order (pick the FIRST one that applies):
   5. Fib 38.2%: shallow pullback — safer entry, lower R:R, use only with strong candle confirmation
 
 The entry price must be INSIDE the identified zone, not at market.
-Set entry_type = "EARLY_ENTRY" and explain the specific zone in early_entry_reason.
+Set entry_type = "ENTRY" and explain the specific zone in entry_reason.
 
 • Entry: precise price inside the best available confluence zone (OB / FVG / OTE / Fib)
 • Stop Loss: BELOW the structural low of the entry zone (BUY) or ABOVE the structural high (SELL)
@@ -240,12 +240,12 @@ Set entry_type = "EARLY_ENTRY" and explain the specific zone in early_entry_reas
 • TP3: measured move / key HTF level / Previous Day High or Low (minimum 1:3.5 R:R)
 • Invalidation: the specific candle CLOSE that definitively cancels the setup thesis
 • Trade Quality:
-    Excellent — 4+ confluences, A+ structure, early entry at OB/FVG/OTE
+     Excellent — 4+ confluences, A+ structure, entry at OB/FVG/OTE
     Good      — 3 confluences, clean S/R, structural entry
     Average   — 2 confluences, some ambiguity
     Poor      — fewer than 2 confluences, or choppy/ranging structure
 • Risk Level:
-    Low    — OB/FVG early entry + HTF aligned + SL at confirmed structural level
+     Low    — OB/FVG direct entry + HTF aligned + SL at confirmed structural level
     Medium — 2 of 3 above conditions met
     High   — choppy structure, counter-trend trade, or SL placement is ambiguous
 
@@ -307,7 +307,7 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "buying_pressure":      "<evidence of buying pressure — probabilistic language>",
   "selling_pressure":     "<evidence of selling pressure — probabilistic language>",
   "pressure_advantage":   "BUYERS" | "SELLERS" | "NEUTRAL",
-  "entry_type":           "EARLY_ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT",
+  "entry_type":           "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT",
   "entry":                <float or null>,
   "stop_loss":            <float or null>,
   "take_profit_1":        <float or null>,
@@ -321,7 +321,7 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "reasons":              ["<reason 1>", "<reason 2>", "<reason 3>"],
   "bullish_scenario":     "<what specifically needs to happen for bulls to win>",
   "bearish_scenario":     "<what specifically needs to happen for bears to win>",
-  "early_entry_reason":   "<specific zone and reason for early entry, or why to wait>",
+  "entry_reason":         "<specific zone and reason for the direct entry, or why to wait>",
   "summary":              "<3-4 sentence professional assessment — end with the risk warning>",
   "open_trade_valid":     true | false | null,
   "open_trade_notes":     "<trade validity analysis, or '' if no trade was provided>"
@@ -535,7 +535,7 @@ async def analyse_chart_bytes(
         reasons=_sl("reasons"),
         bullish_scenario=str(parsed.get("bullish_scenario", "")),
         bearish_scenario=str(parsed.get("bearish_scenario", "")),
-        early_entry_reason=str(parsed.get("early_entry_reason", "")),
+         entry_reason=str(parsed.get("entry_reason", "")),
         summary=str(parsed.get("summary", "")),
         open_trade_valid=ot_valid,
         open_trade_notes=str(parsed.get("open_trade_notes", "")),

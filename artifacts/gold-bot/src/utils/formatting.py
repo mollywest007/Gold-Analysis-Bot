@@ -1161,8 +1161,8 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
             f"  Legacy conf.: {a.confidence}% (supporting only)",
             "",
-            "  No confirmed entry yet.",
-            "  A moving chart is not confirmation by itself.",
+            "  No valid entry yet.",
+            "  A moving chart is not enough by itself.",
             "",
             f"  ADX       : {a.adx:.1f}",
             f"  Structure : {_struct_label(a.market_structure)}",
@@ -1211,6 +1211,58 @@ def signal_card(a: MarketAnalysis) -> str:
 
 # ─── ANALYSIS CARD ────────────────────────────────────────────────────────────
 
+def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
+    """Summarize the one entry decision without introducing entry stages."""
+    report = getattr(a, "institutional_report", {}) or {}
+    data_quality = report.get("data_quality", "UNKNOWN")
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and data_quality == "REAL_OHLCV"
+    )
+    direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    matching_votes = buy_votes if direction == "BUY" else sell_votes
+    satisfied = []
+    waiting = []
+    if data_is_real:
+        satisfied.append("real OHLCV data")
+    else:
+        waiting.append("real OHLCV data")
+    if direction in ("BUY", "SELL"):
+        satisfied.append(f"{direction} directional bias")
+    else:
+        waiting.append("clear BUY/SELL direction")
+    if score >= 60:
+        satisfied.append(f"institutional score {score}/100")
+    else:
+        waiting.append(f"institutional score 60+ (now {score})")
+    if matching_votes >= 2:
+        satisfied.append(f"{direction} votes {matching_votes}")
+    else:
+        waiting.append("direction-aligned indicator votes")
+    if getattr(a, "adx", 0.0) >= 18:
+        satisfied.append(f"ADX {getattr(a, 'adx', 0.0):.1f}")
+    else:
+        waiting.append("directional momentum")
+    entry_state = (
+        getattr(a, "action", "WAIT")
+        if getattr(a, "action", "WAIT") in ("BUY", "SELL")
+        else "WAITING"
+    )
+    reason = (
+        getattr(a, "wait_reason", "")
+        or getattr(a, "verdict_reason", "")
+        or "All required conditions are satisfied"
+    )
+    return (
+        entry_state,
+        ", ".join(satisfied) if satisfied else "None yet",
+        "; ".join(waiting) if waiting else "None — valid setup can issue a direct entry",
+    )
+
+
 def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     ms = market_status()
     institutional_report = getattr(a, "institutional_report", {}) or {}
@@ -1240,10 +1292,15 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         or getattr(a, "setup_grade", "")
         or "WAIT"
     )
+    entry_state, conditions_met, conditions_waiting = _normal_entry_conditions(a)
     if direction in ("BUY", "SELL"):
         setup_status = "READY" if setup_ready else "FORMING"
         setup_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
-        setup_decision = "Monitoring the remaining entry criteria."
+        setup_decision = (
+            "Issue the direct entry when the complete criteria are satisfied."
+            if a.action not in ("BUY", "SELL")
+            else "Complete criteria satisfied; direct entry issued."
+        )
     else:
         setup_status = "NO DIRECTION"
         setup_analysis = "Liquidity and directional evidence are not aligned."
@@ -1275,7 +1332,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Maximum   : 100/100",
         f"  Bias      : {institutional_report.get('direction', 'WAIT')}",
         f"  Legacy    : {institutional_report.get('legacy', {}).get('direction', 'WAIT')} "
-        f"({institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
+        f"(evidence {institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
         f"  Legacy Conf.: {institutional_report.get('legacy', {}).get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
         f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
@@ -1294,6 +1351,9 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
         f"  Analysis  : {setup_analysis}",
         f"  Decision  : {setup_decision}",
+        f"  Conditions met: {conditions_met}",
+        f"  Monitoring: {conditions_waiting}",
+        f"  Entry reason: {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'Complete analysis supports the setup')[:120]}",
         *(
             [
                 f"  Setup     : {direction}",
@@ -1346,6 +1406,8 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         "──────────────────────────────────",
         "  ENTRY DECISION",
         "──────────────────────────────────",
+        "  Entry system: ONE DIRECT ENTRY from the complete analysis",
+        f"  Current state: {entry_state}",
     ]
 
     if a.action in ("BUY", "SELL"):
@@ -1405,7 +1467,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         if indication in ("BUY", "SELL"):
             lines += [
                 f"  Direction : {indication}",
-                f"  Wait state : {wait_status}",
+                f"  Monitoring: {wait_status}",
                 "  Status    : Monitoring required conditions",
                 f"  Setup Grade: {setup_grade}",
                 *(
@@ -1414,7 +1476,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
                     else []
                 ),
                 f"  Confidence: {a.confidence}%",
-                f"  Blocked   : {wait_detail}",
+                f"  Needs     : {conditions_waiting}",
                 f"  Engine note: {(a.wait_reason or a.verdict_reason or wait_detail)[:72]}",
             ]
         else:
@@ -2585,7 +2647,7 @@ def no_entry_card(a: MarketAnalysis) -> str:
     # Tell the user what is missing
     missing = []
     if a.confidence < 80:
-        missing.append(f"Confidence {a.confidence}% &lt; 80% (additional confirmation required)")
+        missing.append(f"Confidence {a.confidence}% &lt; 80% (more evidence required)")
     if len(a.confluence_list) < 4:
         missing.append(f"Confluence {len(a.confluence_list)}/4+ factors required")
     if a.adx < 20:
