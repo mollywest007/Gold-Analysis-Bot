@@ -1218,12 +1218,11 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
 def _reference_style_analysis_card(
     a: MarketAnalysis, account_id: int | None = None
 ) -> str:
-    """Render the user-facing market card in a compact Telegram layout.
+    """Render the compact, reference-style Telegram analysis card.
 
-    This card intentionally contains outcomes and useful market values only.
-    The selected timeframe and mode still drive the analysis internally, but
-    neither the selection nor the engine's intermediate reasoning belongs in
-    the user-facing presentation.
+    The card is deliberately outcome-first: it shows the decision, plan,
+    indicators, and market context, but not the engine's internal workflow,
+    mode scope, or confirmation process.
     """
     del account_id
     report = getattr(a, "institutional_report", {}) or {}
@@ -1280,26 +1279,49 @@ def _reference_style_analysis_card(
     chart_pattern = _value(getattr(a, "chart_pattern", "None"))
     hidden_divergence = _value(getattr(a, "hidden_divergence", "NONE"))
 
+    grade = _value(
+        getattr(a, "setup_quality", "") or getattr(a, "setup_grade", "—")
+    )
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
+    stoch_k = float(getattr(a, "stoch_k_val", 0.0) or 0.0)
+    stoch_d = float(getattr(a, "stoch_d_val", 0.0) or 0.0)
+    macd_hist = float(getattr(a, "macd_hist", 0.0) or 0.0)
+    cci = float(getattr(a, "cci_value", 0.0) or 0.0)
+    bb_pct = float(getattr(a, "bb_pct", 0.0) or 0.0)
+    bb_bandwidth = float(getattr(a, "bb_bandwidth", 0.0) or 0.0)
+    plus_di = float(getattr(a, "plus_di", 0.0) or 0.0)
+    minus_di = float(getattr(a, "minus_di", 0.0) or 0.0)
+    willr = float(getattr(a, "willr_value", -50.0) or -50.0)
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    supertrend = _value(
+        getattr(a, "supertrend_direction", "NEUTRAL")
+    ).replace("_", " ")
+
+    sep = "─" * 34
+    wide = "═" * 34
     lines = [
         "<pre>",
         "╔══════════════════════════════════╗",
-        "║       XAU/USD  MARKET CARD       ║",
+        "║       XAU/USD  ANALYSIS CARD     ║",
         "╚══════════════════════════════════╝",
-        f"  Price : {_price(getattr(a, 'price', 0))}  |  {_mkt_line()}",
+        f"  Price     : {_price(getattr(a, 'price', 0))}",
+        f"  Market    : {_mkt_line()}",
         "",
-        "──────────────────────────────────",
+        sep,
         "  WHAT TO DO",
-        "──────────────────────────────────",
+        sep,
         f"  Direction : {direction}",
         f"  Action    : {what_to_do}",
         f"  Conflict  : {conflict}",
         f"  Bias      : {bias} ({strength})",
-        f"  Trend     : {trend}  |  ADX {float(getattr(a, 'adx', 0.0) or 0.0):.0f}",
+        f"  Trend     : {trend}  |  ADX {adx:.0f}",
         f"  Confidence: {int(getattr(a, 'confidence', 0) or 0)}%",
         "",
-        "──────────────────────────────────",
+        sep,
         "  TRADE PLAN",
-        "──────────────────────────────────",
+        sep,
         f"  Entry : {_price(getattr(a, 'entry', 0))}",
         f"  SL    : {_price(getattr(a, 'stop_loss', 0))}",
         f"  TP1   : {_price(getattr(a, 'tp1', 0))}",
@@ -1307,38 +1329,45 @@ def _reference_style_analysis_card(
         f"  TP3   : {_price(getattr(a, 'tp3', 0))}",
         f"  R:R   : {f'1:{rr_ratio:g}' if rr_ratio > 0 else '—'}",
         f"  Win % : {_win_bar(win_probability) if win_probability else '—'}",
-        f"  Grade : {_value(getattr(a, 'setup_quality', '') or getattr(a, 'setup_grade', '—'))}",
+        f"  Grade : {grade}",
         f"  Alert : {alert}",
         "",
-        "──────────────────────────────────",
+        sep,
         "  INDICATORS",
-        "──────────────────────────────────",
-        f"  RSI       : {float(getattr(a, 'rsi_value', 0.0) or 0.0):.0f}",
-        f"  Stoch     : {float(getattr(a, 'stoch_k_val', 0.0) or 0.0):.0f}"
-        f" | {float(getattr(a, 'stoch_d_val', 0.0) or 0.0):.0f}",
-        f"  MACD Hist : {float(getattr(a, 'macd_hist', 0.0) or 0.0):+.2f}",
-        f"  CCI       : {float(getattr(a, 'cci_value', 0.0) or 0.0):.0f}",
+        sep,
+        f"  RSI       : {rsi:.0f}",
+        f"  Stoch     : {stoch_k:.0f} | {stoch_d:.0f}",
+        f"  MACD Hist : {macd_hist:+.2f}",
+        f"  CCI       : {cci:.0f}",
         f"  VWAP      : {_price(getattr(a, 'vwap', 0))}",
-        f"  BB %B     : {float(getattr(a, 'bb_pct', 0.0) or 0.0):.0f}%"
-        f"  | BW {float(getattr(a, 'bb_bandwidth', 0.0) or 0.0):.2f}%",
-        f"  Supertrend: {_value(getattr(a, 'supertrend_direction', 'NEUTRAL'))}",
+        f"  BB %B     : {bb_pct:.0f}% | BW {bb_bandwidth:.2f}%",
+        f"  +DI/-DI   : {plus_di:.0f} / {minus_di:.0f}",
+        f"  WilliamsR : {willr:.0f}",
+        f"  Supertrend: {supertrend}",
         f"  Structure : {structure}",
+        f"  Votes     : BUY {buy_votes} | SELL {sell_votes}",
         "",
-        "──────────────────────────────────",
-        "  MARKET DETAILS",
-        "──────────────────────────────────",
+        sep,
+        "  MARKET CONTEXT",
+        sep,
         f"  Session   : {session}",
         f"  Regime    : {regime}",
         f"  Momentum  : {_value(getattr(a, 'momentum', '—'))}",
         f"  Kill zone : {_value(getattr(a, 'kill_zone', '—'))}",
         f"  Price zone: {_value(getattr(a, 'premium_discount', '—'))}",
         f"  ATR       : {_price(getattr(a, 'atr', 0))}",
+        f"  Score     : {score}/100",
+        f"  Liquidity : {_value(getattr(a, 'liquidity_zone', '—'))}",
+        "",
+        sep,
+        "  KEY LEVELS",
+        sep,
+        f"  BB Upper  : {_price(getattr(a, 'bb_upper', 0))}",
+        f"  BB Lower  : {_price(getattr(a, 'bb_lower', 0))}",
         f"  R1 / R2   : {_price(getattr(a, 'resistance1', 0))}"
         f" / {_price(getattr(a, 'resistance2', 0))}",
         f"  S1 / S2   : {_price(getattr(a, 'support1', 0))}"
         f" / {_price(getattr(a, 'support2', 0))}",
-        f"  Liquidity : {_value(getattr(a, 'liquidity_zone', '—'))}",
-        f"  Score     : {score}/100",
     ]
     limit_entry = float(getattr(a, "limit_entry", 0.0) or 0.0)
     if limit_entry > 0 and abs(limit_entry - float(getattr(a, "entry", 0.0) or 0.0)) > 0.01:
@@ -1348,7 +1377,7 @@ def _reference_style_analysis_card(
         )
     if getattr(a, "pdh", 0.0) and getattr(a, "pdl", 0.0):
         lines.append(
-            f"  PDH / PDL: {_price(getattr(a, 'pdh', 0))}"
+            f"  PDH / PDL : {_price(getattr(a, 'pdh', 0))}"
             f" / {_price(getattr(a, 'pdl', 0))}"
         )
     if candle not in ("None", "—"):
@@ -1364,7 +1393,7 @@ def _reference_style_analysis_card(
     ms = market_status()
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
-    lines += ["", "  Not financial advice.", "</pre>"]
+    lines += ["", wide, "  Not financial advice.", "</pre>"]
     return safe_html(
         "\n".join(
             [
@@ -2746,81 +2775,13 @@ def recommend_card(a: MarketAnalysis) -> str:
 
 def recommend_multi_card(analyses: list) -> str:
     """
-    All-timeframe recommendation card.
-    Shows a quick signal matrix for all TFs, then full trade plans for
-    any TF that has an actionable BUY or SELL.
+    All-timeframe recommendation card in the same scan-friendly layout as the
+    reference analysis card.
+
+    Keep this as a thin wrapper so refreshes and combined recommendations do
+    not drift into a second presentation format.
     """
-    if not analyses:
-        return "<pre>No analysis data is currently available. Please try again.</pre>"
-
-    price  = analyses[0].price if analyses else 0.0
-    ms     = market_status()
-    mkt    = ms["note"]
-
-    TF_ORDER = sorted(
-        {a.timeframe for a in analyses},
-        key=timeframe_rank,
-    )
-    tf_map   = {a.timeframe: a for a in analyses}
-
-    lines = [
-        "<pre>",
-        "╔══════════════════════════════════╗",
-        "║   XAU/USD  ALL TIMEFRAMES        ║",
-        "╚══════════════════════════════════╝",
-        "",
-        f"  Price : {fmt_price(price)}    {mkt}",
-        "",
-        "──────────────────────────────────",
-        "  TF    SIGNAL  CONF  GRADE  BIAS",
-        "──────────────────────────────────",
-    ]
-
-    active_tfs = []
-    for tf in TF_ORDER:
-        a = tf_map.get(tf)
-        if a is None:
-            lines.append(f"  {tf:<4}  ------  ---   ----")
-            continue
-        action = a.action if a.action in ("BUY", "SELL") else "WAIT"
-        grade  = a.setup_quality or "-"
-        bias   = _esc(a.bias)[:7] if a.bias else "Neutral"
-        marker = "  &lt;--" if action in ("BUY", "SELL") else ""
-        lines.append(
-            f"  {tf:<4}  {action:<6}  {a.confidence}%  {grade:<5} {bias}{marker}"
-        )
-        if action in ("BUY", "SELL"):
-            active_tfs.append(a)
-
-    lines.append("──────────────────────────────────")
-
-    if not active_tfs:
-        lines += [
-            "",
-            "  No actionable signals across",
-            "  any timeframe right now.",
-            "  Market is ranging — wait for",
-            "  a clean directional setup.",
-        ]
-    else:
-        lines += ["", "  ACTIVE SIGNALS", "──────────────────────────────────"]
-        for a in active_tfs:
-            sl_dist  = abs(a.entry - a.stop_loss)
-            rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 and a.tp1 else 0
-            rr2 = round(abs(a.tp2 - a.entry) / sl_dist, 1) if sl_dist > 0 and a.tp2 else 0
-            lines += [
-                f"  {a.timeframe}  {a.action}  {a.confidence}%  Grade: {a.setup_quality or '-'}",
-                f"  Entry   : {fmt_price(a.entry)}",
-                f"  SL      : {fmt_price(a.stop_loss)}",
-                f"  TP1     : {fmt_price(a.tp1 or 0)}  (1:{rr1})",
-                f"  TP2     : {fmt_price(a.tp2 or 0)}  (1:{rr2})",
-            ]
-            if a.verdict_reason:
-                lines.append(f"  Reason  : {_esc(a.verdict_reason[:34])}")
-            lines.append("  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·")
-
-    lines += ["", "  Not financial advice.", "</pre>"]
-    return safe_html("\n".join(lines))
+    return multi_timeframe_card(analyses)
 
 
 # ─── TREND CARD ───────────────────────────────────────────────────────────────
@@ -3376,14 +3337,13 @@ def multi_timeframe_card(analyses: list) -> str:
 
     resolved = _resolve_direction(analyses)
     master    = resolved["master"]
-    anchor_tf = resolved["anchor_tf"]
     conflict  = resolved["conflict"]
     advice    = resolved["advice"]
     counter   = resolved["counter_tfs"]
 
     lines = [
         "<pre>",
-        "XAU/USD  MULTI-TIMEFRAME ANALYSIS",
+        "XAU/USD  ANALYSIS CARD",
         WIDE,
         f"Price   : {fmt_price(first.price)}  |  {mkt_line}",
         f"Session : {session}",
@@ -3394,7 +3354,7 @@ def multi_timeframe_card(analyses: list) -> str:
 
     if master in ("BUY", "SELL"):
         lines += [
-            f"Direction : {master}  (set by {anchor_tf})",
+            f"Direction : {master}",
             f"Conflict  : {'YES — see below' if conflict else 'None — all clear'}",
             "",
         ]
@@ -3420,7 +3380,8 @@ def multi_timeframe_card(analyses: list) -> str:
             SEP,
             f"Bias    : {a.bias}  ({a.strength})",
             f"Trend   : {a.trend}  |  ADX {a.adx:.0f}",
-            f"RSI     : {a.rsi_value:.0f}  |  Stoch {a.stoch_k_val:.0f}",
+            f"RSI     : {a.rsi_value:.0f}  |  "
+            f"Stoch {a.stoch_k_val:.0f}/{a.stoch_d_val:.0f}",
         ]
         if action in ("BUY", "SELL"):
             lines += [
@@ -3445,6 +3406,7 @@ def multi_timeframe_card(analyses: list) -> str:
             lines.append(f"Alert   : {gate_icon}{gate_note}")
         else:
             lines.append(f"Win %   : —")
+            lines.append("Alert   : ⏳ no active signal")
         lines.append(WIDE)
 
     # ── Alert cooldown summary ─────────────────────────────────────────────────
