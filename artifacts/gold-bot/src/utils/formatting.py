@@ -137,7 +137,7 @@ def _path_market_data_lines(
         f"CHoCH {_detail_value(structure.get('choch'))} MSS {_detail_value(structure.get('mss'))}",
         f"  Structure flags     : HH {structure.get('higher_high', False)} "
         f"HL {structure.get('higher_low', False)} | LH {structure.get('lower_high', False)} "
-        f"LL {structure.get('lower_low', False)} | HTF {a.htf_bias} Daily {a.daily_bias or 'Not used'}",
+        f"LL {structure.get('lower_low', False)}",
         f"  Support / resistance: S2 {_detail_price(a.support2)} S1 {_detail_price(a.support1)} "
         f"R1 {_detail_price(a.resistance1)} R2 {_detail_price(a.resistance2)} "
         f"| range {range_boundaries.get('low', 'Not used')}–{range_boundaries.get('high', 'Not used')} "
@@ -323,69 +323,34 @@ def _strict_confirmation_lines(
     strict_ready: bool,
 ) -> list[str]:
     """Show strict confirmation as pass/missing checks with actual values."""
-    multi = report.get("multi_timeframe", {}) or {}
-    directions = multi.get("directions", {}) or {}
-    scores = multi.get("scores", {}) or {}
+    # Ignore diagnostic multi-timeframe payloads here.  The user-facing
+    # confirmation card must always describe only the selected timeframe.
+    directions = {}
+    scores = {}
     legacy = report.get("legacy", {}) or {}
     htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
-    htf_match = (
-        htf_bias == "Not used"
-        or
-        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
-    ) or (
-        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
     direction_text = direction if direction in ("BUY", "SELL") else "WAIT"
-    final_direction = multi.get("final_direction", "WAIT")
-    all_data_real = (
-        all(
-            (multi.get("data_quality", {}) or {}).get(tf) == "REAL_OHLCV"
-            for tf in ("D1", "H4", "H1", "M15")
-        )
-        if directions
-        else data_is_real
-    )
-    scope_check = (
-        f"all D1/H4/H1/M15 data real: {'PASS' if all_data_real else 'MISSING'} "
-        f"({multi.get('data_quality', 'NO DATA')})"
-        if directions
-        else f"selected timeframe data real: {'PASS' if data_is_real else 'MISSING'}"
-    )
+    scope_check = f"selected timeframe data real: {'PASS' if data_is_real else 'MISSING'}"
     checks = [
         f"real OHLCV: {'PASS' if data_is_real else 'MISSING'}",
         scope_check,
         f"direction: {'PASS' if direction in ('BUY', 'SELL') else 'MISSING'} ({direction_text})",
         f"active score >=60: {'PASS' if int(getattr(a, 'confidence_score', 0) or 0) >= 60 else 'MISSING'} "
         f"({int(getattr(a, 'confidence_score', 0) or 0)}/100)",
-        f"HTF bias: {'PASS' if htf_match else 'MISSING'} ({htf_bias})",
+        "HTF bias: NOT USED (selected timeframe only)",
         f"legacy conflict cleared: {'PASS' if legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL')) != 'CONFLICT' else 'MISSING'} "
         f"({legacy.get('confirmation', getattr(a, 'legacy_confirmation', 'NEUTRAL'))})",
         f"final action: {'PASS' if strict_ready else 'MISSING'} "
-        f"({getattr(a, 'action', 'WAIT')} | "
-        f"{'MTF final ' + final_direction if directions else 'mode-local'})",
+        f"({getattr(a, 'action', 'WAIT')} | mode-local)",
     ]
     rows = [
         "",
         "  STRICT CONFIRMED — EXACT CONFIRMATION",
         f"  Result             : {'CONFIRMED ' + getattr(a, 'action', direction) if strict_ready else 'REJECTED / WAITING'}",
-        (
-            "  Additional gate    : selected mode timeframe only; "
-            "local evidence and legacy conflict must pass."
-            if not directions
-            else "  Additional gate    : all real D1/H4/H1/M15 contexts must match direction "
-            "and each score must be >=60."
-        ),
+        "  Additional gate    : selected mode timeframe only; "
+        "local evidence and legacy conflict must pass.",
         *[f"  Check              : {check}" for check in checks],
     ]
-    if directions:
-        for tf in ("D1", "H4", "H1", "M15"):
-            tf_direction = directions.get(tf, "NO DATA")
-            tf_score = int(scores.get(tf, 0) or 0)
-            passed = direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60
-            rows.append(
-                f"  {tf} confirmation    : {'PASS' if passed else 'MISSING'} "
-                f"({tf_direction} / {tf_score}/100)"
-            )
     confirmed = [
         check
         for check in checks
@@ -1292,19 +1257,7 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
         satisfied.append(f"ADX {getattr(a, 'adx', 0.0):.1f}")
     else:
         waiting.append("directional momentum")
-    multi = report.get("multi_timeframe", {}) or {}
-    directions = multi.get("directions", {}) or {}
-    scores = multi.get("scores", {}) or {}
-    if directions:
-        for tf in ("D1", "H4", "H1", "M15"):
-            tf_direction = directions.get(tf, "NO DATA")
-            tf_score = int(scores.get(tf, 0) or 0)
-            if direction in ("BUY", "SELL") and tf_direction == direction and tf_score >= 60:
-                satisfied.append(f"{tf} evidence {tf_score}/100")
-            else:
-                waiting.append(f"{tf} evidence aligned at 60+")
-    else:
-        satisfied.append(f"{getattr(a, 'timeframe', 'selected')} mode timeframe")
+    satisfied.append(f"{getattr(a, 'timeframe', 'selected')} mode timeframe only")
     legacy = report.get("legacy", {}) or {}
     legacy_state = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
@@ -1334,7 +1287,6 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
     ms = market_status()
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
-    multi_timeframe = institutional_report.get("multi_timeframe", {}) or {}
     direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
     score = int(getattr(a, "confidence_score", 0) or 0)
     matching_votes = (
@@ -1385,7 +1337,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Structure : {_struct_label(a.market_structure)}",
         f"  CHoCH     : {_choch_label(a.choch)}",
         f"  Bias      : {a.bias}   ({a.strength})",
-        f"  HTF Bias  : {a.htf_bias}",
+        "  HTF Bias  : Not used (selected timeframe only)",
         f"  Trend     : {a.trend}",
         f"  Momentum  : {a.momentum}",
         f"  ADX       : {a.adx:.1f}",
@@ -1400,7 +1352,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"(evidence {institutional_report.get('legacy', {}).get('confirmation', 'NEUTRAL')})",
         f"  Legacy Conf.: {institutional_report.get('legacy', {}).get('confidence', getattr(a, 'confidence', 0))}%",
         f"  Combined  : {institutional_report.get('combined', {}).get('direction', 'WAIT')}",
-        f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
+        f"  Mode scope: {a.timeframe} only",
          f"  Data      : {institutional_report.get('data_quality', 'UNKNOWN')}",
         f"  Layers    : T {framework_scores.get('trend_alignment', 0)}/25 | "
         f"S {framework_scores.get('market_structure', 0)}/25 | "
@@ -1480,15 +1432,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
     if a.action in ("BUY", "SELL"):
         t1 = _estimate_time(a, a.tp1)
         t2 = _estimate_time(a, a.tp2)
-        has_final_gate = bool(
-            (getattr(a, "institutional_report", {}) or {}).get("multi_timeframe")
-        )
-        setup_grade = (
-            getattr(a, "setup_quality", "WAIT")
-            if has_final_gate
-            else getattr(a, "setup_grade", "")
-        ) or "WAIT"
-        local_grade = getattr(a, "setup_grade", "") or "WAIT"
+        setup_grade = getattr(a, "setup_grade", "") or "WAIT"
         lines += [
             f"  SIGNAL    : {a.action}   {_trade_type_label(a)}",
             f"  Setup Grade: {setup_grade}",
@@ -1497,11 +1441,6 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
             "",
             f"  Entry     : {fmt_price(a.entry)}",
         ]
-        if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
-            lines.insert(
-                lines.index(f"  Win Rate  : {_win_bar(a.win_probability)}"),
-                f"  Local Grade: {local_grade}",
-            )
         if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
             lines.append(f"  Limit     : {fmt_price(a.limit_entry)}")
         lines += [
@@ -1517,39 +1456,25 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
             for cf in a.confluence_list:
                 lines.append(f"    + {cf}")
     else:
+        indication = getattr(a, "directional_indication", "NEUTRAL")
         lines += [
             f"  STATUS    : WAITING — entry criteria not met",
+            f"  INDICATION: {indication if indication in ('BUY', 'SELL') else 'WAIT'} (not confirmed)",
         ]
-        indication = getattr(a, "directional_indication", "NEUTRAL")
         wait_status, wait_detail = _wait_status(a)
-        has_final_gate = bool(
-            (getattr(a, "institutional_report", {}) or {}).get("multi_timeframe")
-        )
-        setup_grade = (
-            getattr(a, "setup_quality", "WAIT")
-            if has_final_gate
-            else getattr(a, "setup_grade", "")
-        ) or "WAIT"
-        local_grade = getattr(a, "setup_grade", "") or "WAIT"
+        setup_grade = getattr(a, "setup_grade", "") or "WAIT"
         if indication in ("BUY", "SELL"):
             lines += [
                 f"  Direction : {indication}",
                 f"  Monitoring: {wait_status}",
-                "  Status    : Monitoring required conditions",
+                "  Status    : Awaiting confirmation",
                 f"  Setup Grade: {setup_grade}",
-                *(
-                    [f"  Local Grade: {local_grade}"]
-                    if has_final_gate and local_grade != setup_grade and local_grade != "WAIT"
-                    else []
-                ),
                 f"  Confidence: {a.confidence}%",
                 f"  Needs     : {conditions_waiting}",
                 f"  Engine note: {(a.wait_reason or a.verdict_reason or wait_detail)[:72]}",
             ]
         else:
             lines.append(f"  Setup Grade: {setup_grade}")
-            if has_final_gate and local_grade != setup_grade and local_grade != "WAIT":
-                lines.append(f"  Local Grade: {local_grade}")
         lines += [
             f"  Reason    : {wait_detail[:72]}",
         ]

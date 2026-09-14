@@ -1505,7 +1505,7 @@ def _select_direction(
 async def _analyze_single(
     timeframe: str = "H1",
     mode: str = None,
-    use_higher_timeframe_context: bool = True,
+    use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
     from src.mode_manager import get_mode_config
 
@@ -1836,7 +1836,11 @@ async def _analyze_single(
         direction = "NEUTRAL"
         bias      = "Neutral"
 
-    # ── HTF gate (hard block for strong misalignment, penalty for slight) ──────
+    # ── Optional HTF context (disabled for normal mode analysis) ──────────────
+    #
+    # Normal analysis is deliberately local to the selected timeframe.  Keep
+    # this compatibility branch for explicit diagnostic callers, but never
+    # enable it from the bot's normal analysis or alert paths.
     htf_align  = True
     htf_reason = ""
     if use_higher_timeframe_context and direction in ("BUY", "SELL"):
@@ -2718,16 +2722,9 @@ def _attach_multi_timeframe_context(
     analysis.institutional_report = report
 
     # The selected timeframe's complete analysis owns the one entry decision.
-    # The other timeframes remain visible as context and can explain why the
-    # setup is stronger, weaker, or still being monitored.
+    # This helper is retained for explicit diagnostic callers only; normal bot
+    # analysis never attaches a multi-timeframe report.
     analysis.combined_direction = analysis.action if analysis.action in ("BUY", "SELL") else "WAIT"
-    if not analysis.wait_reason:
-        context_state = (
-            f"Full timeframe context aligned {final_direction}"
-            if aligned
-            else "Full timeframe context remains mixed; monitoring the selected setup"
-        )
-        analysis.wait_reason = context_state
 
     return analysis
 
@@ -2745,23 +2742,15 @@ async def analyze(
     remain available for callers that intentionally request a separate
     multi-timeframe report.
     """
-    if not include_full_context:
-        return await _analyze_single(
-            timeframe,
-            mode=mode,
-            use_higher_timeframe_context=use_higher_timeframe_context,
-        )
-    multi_timeframe = await analyze_multi_timeframe(mode=mode)
-    analysis = multi_timeframe["analyses"].get(timeframe)
-    if analysis is None:
-        # The full context set is anchored to D1/H4/H1/M15, but Scalp Mode
-        # also exposes M1/M3/M5. Keep local analysis for those charts.
-        analysis = await _analyze_single(
-            timeframe,
-            mode=mode,
-            use_higher_timeframe_context=use_higher_timeframe_context,
-        )
-    return _attach_multi_timeframe_context(analysis, multi_timeframe)
+    # The bot's normal path is always one timeframe: no other candle series is
+    # fetched, compared, or allowed to confirm/veto this entry.  The legacy
+    # context arguments remain in the signature for API compatibility but are
+    # intentionally ignored on this entry path.
+    return await _analyze_single(
+        timeframe,
+        mode=mode,
+        use_higher_timeframe_context=False,
+    )
 
 
 async def analyze_multi_timeframe(
