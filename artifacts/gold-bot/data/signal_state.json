@@ -45,9 +45,7 @@
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
-      "forming_alert_sent": {
-        "M15": "SELL"
-      },
+      "forming_alert_sent": {},
       "forming_alert_last_sent": {
         "M15": 1789344740.702217,
         "H1": 1788954268.457043
