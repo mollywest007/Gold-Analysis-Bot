@@ -36,15 +36,14 @@ def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
 
 
 def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
-    """Return the engine modes/timeframes used by manual multi-analysis."""
+    """Return the selected engine mode/timeframe for manual analysis."""
     mode = get_user_mode(chat_id)
     if mode == COMBINED_MODE:
         return [
             ("scalp", get_combined_timeframes(chat_id)["scalp"]),
             ("intraday", get_combined_timeframes(chat_id)["interval"]),
         ]
-    cfg = get_user_mode_config(chat_id)
-    return [(mode, tf) for tf in cfg.scan_timeframes]
+    return [(mode, get_user_timeframe(chat_id))]
 
 
 def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:

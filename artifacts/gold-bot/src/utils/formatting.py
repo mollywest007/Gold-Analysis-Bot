@@ -560,19 +560,6 @@ def _wait_status(a: MarketAnalysis) -> tuple[str, str]:
             a, "wait_reason", ""
         ) or getattr(a, "verdict_reason", "") or "Evidence is mixed."
 
-    htf_is_against = (
-        direction == "BUY"
-        and any(word in htf_bias.lower() for word in ("bearish", "sell"))
-    ) or (
-        direction == "SELL"
-        and any(word in htf_bias.lower() for word in ("bullish", "buy"))
-    )
-    if htf_is_against:
-        return (
-            f"{direction} FORMING",
-            f"Blocked: {a.timeframe} leans {direction}, but higher timeframe "
-            f"bias is {htf_bias}.",
-        )
     if score < 60:
         return (
             f"{direction} FORMING",
@@ -611,19 +598,6 @@ def _entry_criteria_reason(a: MarketAnalysis, data_is_real: bool) -> str:
         blockers.append(
             f"active timeframe score {int(getattr(a, 'confidence_score', 0) or 0)}/60"
         )
-    if directions:
-        for tf in ("D1", "H4", "H1", "M15"):
-            tf_direction = directions.get(tf, "NO DATA")
-            tf_score = int(scores.get(tf, 0) or 0)
-            if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
-                blockers.append(f"{tf} {tf_direction}/{tf_score}")
-    htf_matches = (
-        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
-    ) or (
-        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
-    if htf_bias != "Not used" and not htf_matches:
-        blockers.append(f"HTF bias {htf_bias}")
     if legacy_confirmation == "CONFLICT":
         blockers.append("legacy conflict")
 
@@ -665,23 +639,7 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
     legacy_confirmation = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
     )
-    multi = report.get("multi_timeframe", {}) or {}
-    mtf_directions = multi.get("directions", {}) or {}
-    mtf_scores = multi.get("scores", {}) or {}
     htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
-    htf_matches = (
-        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
-    ) or (
-        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
-    mtf_text = (
-        " | ".join(
-            f"{tf} {mtf_directions.get(tf, 'NO DATA')}/{int(mtf_scores.get(tf, 0) or 0)}"
-            for tf in ("D1", "H4", "H1", "M15")
-        )
-        if mtf_directions
-        else f"{a.timeframe} local {direction}/{score}"
-    )
     return [
         "",
         "──────────────────────────────────",
@@ -692,8 +650,8 @@ def _decision_summary_lines(a: MarketAnalysis) -> list[str]:
         f"  Setup state     : "
         f"{'READY ' + direction if setup_ready else 'FORMING'}",
         f"  Score           : {score}/100  (minimum 60 for entry)",
-        f"  Mode scope      : {mtf_text}",
-        f"  HTF context     : {htf_bias}  {'✓' if htf_matches else '…'}",
+        f"  Mode scope      : {a.timeframe} only ({direction}/{score})",
+        "  Other timeframes: Not used for this entry decision",
         f"  Legacy layer    : {legacy_confirmation}  "
         f"(BUY {buy_votes} / SELL {sell_votes})",
         f"  Data            : {report.get('data_quality', 'REAL_OHLCV')}",
@@ -726,40 +684,20 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
         not getattr(a, "is_simulated", False)
         and data_quality == "REAL_OHLCV"
     )
-    multi_timeframe = report.get("multi_timeframe", {}) or {}
-    mtf_directions = multi_timeframe.get("directions", {}) or {}
     entry_ready = (
         action in ("BUY", "SELL")
         and data_is_real
-        and (not mtf_directions or multi_timeframe.get("aligned", False))
     )
-    consensus_score = int(multi_timeframe.get("consensus_score", 0) or 0)
     legacy = report.get("legacy", {}) or {}
     legacy_confirmation = legacy.get(
         "confirmation", getattr(a, "legacy_confirmation", "NEUTRAL")
     )
-    multi = report.get("multi_timeframe", {}) or {}
-    mtf_directions = multi.get("directions", {}) or {}
-    mtf_scores = multi.get("scores", {}) or {}
     htf_bias = getattr(a, "htf_bias", "Neutral") or "Neutral"
-    htf_matches = (
-        direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish")
-    ) or (
-        direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish")
-    )
     zone = getattr(a, "best_entry_zone", {}) or report.get("best_entry_zone", {}) or {}
 
     missing = []
     if score < 60:
         missing.append(f"score 60 (now {score})")
-    if mtf_directions:
-        for tf in ("D1", "H4", "H1", "M15"):
-            tf_direction = mtf_directions.get(tf, "NO DATA")
-            tf_score = int(mtf_scores.get(tf, 0) or 0)
-            if direction not in ("BUY", "SELL") or tf_direction != direction or tf_score < 60:
-                missing.append(f"{tf} alignment")
-    if htf_bias != "Not used" and not htf_matches:
-        missing.append("HTF alignment")
     if legacy_confirmation == "CONFLICT":
         missing.append("legacy conflict clearance")
 
@@ -772,14 +710,8 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
         f"{action if entry_ready else 'WAITING — MONITORING'}",
         (
             "  Criteria              : score 60+ | selected mode timeframe"
-            if not mtf_directions
-            else "  Criteria              : score 60+ | D1/H4/H1/M15 aligned"
         ),
-        (
-            "                          local evidence | no conflicting evidence"
-            if not mtf_directions
-            else "                          HTF aligned | no conflicting evidence"
-        ),
+        "                          local evidence | no conflicting evidence",
         *(
             [
                 f"  Entry                 : {fmt_price(getattr(a, 'entry', 0.0))}",
@@ -805,7 +737,7 @@ def _entry_decision_lines(a: MarketAnalysis) -> list[str]:
         if zone.get("low") and zone.get("high")
         else "  Entry zone            : Not formed",
         f"  Evidence              : {', '.join(evidence) if evidence else 'None yet'}",
-        f"  HTF / legacy         : {htf_bias} / {legacy_confirmation}",
+        f"  Other timeframes     : Not used | Legacy: {legacy_confirmation}",
         f"  Conditions            : {', '.join(missing[:5]) if missing else 'All required conditions met'}",
     ]
 

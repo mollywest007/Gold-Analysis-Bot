@@ -42,6 +42,7 @@ def _scan_timeframes(chat_id: int) -> list[str]:
 
 
 def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
+    """Return the selected engine mode/timeframe for manual analysis."""
     mode = get_user_mode(chat_id)
     if mode == COMBINED_MODE:
         combined = get_combined_timeframes(chat_id)
@@ -49,7 +50,7 @@ def _analysis_specs(chat_id: int) -> list[tuple[str, str]]:
             ("scalp", combined["scalp"]),
             ("intraday", combined["interval"]),
         ]
-    return [(mode, tf) for tf in get_user_mode_config(chat_id).scan_timeframes]
+    return [(mode, get_user_timeframe(chat_id))]
 
 
 def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:
@@ -451,7 +452,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "recommend":
                     from src.utils.formatting import recommend_multi_card
-                    await query.edit_message_text("Scanning all available timeframes...", reply_markup=kb)
+                    await query.edit_message_text("Analyzing the selected timeframe...", reply_markup=kb)
                     results = await asyncio.gather(
                         *[
                             analyze(tf_name, mode=_mode)
@@ -494,7 +495,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data.startswith("recommend:"):
-        await query.edit_message_text("Scanning all available timeframes…", reply_markup=kb)
+        await query.edit_message_text("Analyzing the selected timeframe…", reply_markup=kb)
         try:
             from src.utils.formatting import recommend_multi_card as _rmc
             import re as _re

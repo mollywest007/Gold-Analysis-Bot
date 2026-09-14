@@ -1836,41 +1836,12 @@ async def _analyze_single(
         direction = "NEUTRAL"
         bias      = "Neutral"
 
-    # ── Optional HTF context (disabled for normal mode analysis) ──────────────
-    #
-    # Normal analysis is deliberately local to the selected timeframe.  Keep
-    # this compatibility branch for explicit diagnostic callers, but never
-    # enable it from the bot's normal analysis or alert paths.
-    htf_align  = True
+    # Higher/lower timeframe context is never part of the entry decision.
+    # The selected timeframe owns its direction and confidence.  The legacy
+    # context fields remain available for compatibility with older callers,
+    # but a counter-trend or missing context must not change this result.
+    htf_align = True
     htf_reason = ""
-    if use_higher_timeframe_context and direction in ("BUY", "SELL"):
-        htf_strongly_bullish = htf_bias == "Bullish"
-        htf_slightly_bullish = htf_bias == "Slightly Bullish"
-        htf_strongly_bearish = htf_bias == "Bearish"
-        htf_slightly_bearish = htf_bias == "Slightly Bearish"
-        htf_bullish = htf_strongly_bullish or htf_slightly_bullish
-        htf_bearish = htf_strongly_bearish or htf_slightly_bearish
-
-        if direction == "BUY" and htf_strongly_bearish:
-            # Penalty only — heavy confidence hit but signal still fires.
-            # User wants all-TF alerts; hard blocking caused missed entries.
-            confidence = max(50, confidence - 20)
-            htf_align  = False
-            htf_reason = f"Counter-trend: {htf} strongly Bearish"
-        elif direction == "SELL" and htf_strongly_bullish:
-            confidence = max(50, confidence - 20)
-            htf_align  = False
-            htf_reason = f"Counter-trend: {htf} strongly Bullish"
-        elif direction == "BUY" and htf_slightly_bearish:
-            confidence = max(50, confidence - 12)
-            htf_align  = False
-            htf_reason = f"Counter-trend: {htf} Slightly Bearish"
-        elif direction == "SELL" and htf_slightly_bullish:
-            confidence = max(50, confidence - 12)
-            htf_align  = False
-            htf_reason = f"Counter-trend: {htf} Slightly Bullish"
-        elif (direction == "BUY" and htf_bullish) or (direction == "SELL" and htf_bearish):
-            confidence = min(97, confidence + 8)   # reward alignment
 
     # ── Order block detection — now we know direction ─────────────────────────
     ob_at, ob_high, ob_low = (False, 0.0, 0.0)
@@ -2085,11 +2056,6 @@ async def _analyze_single(
                 f"{mode_cfg.label} Mode requires minimum R:R 1:"
                 f"{mode_cfg.min_rr_ratio:g}"
             )
-        elif mode_cfg.htf_gate_required and not htf_align:
-            action = "WAIT"
-            wait_reason = (
-                f"{mode_cfg.label} Mode requires higher-timeframe alignment"
-            )
     else:
         action      = "WAIT"
         wait_reason = htf_reason or verdict_reason or "Indicators split — no directional edge"
@@ -2258,7 +2224,8 @@ async def _analyze_single(
     if session_label == "London/NY Overlap": raw_wp += 5
     elif session_label == "London":          raw_wp += 3
     elif session_label == "Asian":           raw_wp += 2   # Asian session: gold moves, just less volume
-    if htf_align:                            raw_wp += 4   # HTF aligned = trend confirmation
+    # No higher-timeframe bonus: win probability must be derived only from
+    # evidence on the selected timeframe.
     if ob_at:                                raw_wp += 3   # at institutional Order Block
     # FVG aligned — price in imbalance zone that institutions actively fill
     _fvg_wp = (fvg_dir == "BULLISH" and direction == "BUY") or \
@@ -2507,17 +2474,12 @@ async def _analyze_single(
     else:
         legacy_confirmation = "NEUTRAL"
 
-    htf_matches = (
-        not use_higher_timeframe_context
-        or (
-            (institutional_direction == "BUY" and htf_bias in ("Bullish", "Slightly Bullish"))
-            or (institutional_direction == "SELL" and htf_bias in ("Bearish", "Slightly Bearish"))
-        )
-    )
+    # Institutional readiness is local to the selected timeframe.  Do not
+    # let optional context fetched by a diagnostic caller become an entry gate.
+    htf_matches = True
     institutional_ready = (
         institutional_direction in ("BUY", "SELL")
         and institutional_context.confidence_score >= 60
-        and htf_matches
     )
     combined_direction = (
         institutional_direction
@@ -2574,8 +2536,6 @@ async def _analyze_single(
                 f"Combined framework WAIT — institutional {institutional_direction} "
                 f"conflicts with legacy {legacy_direction}"
             )
-        elif use_higher_timeframe_context and not htf_matches:
-            wait_reason = "Combined framework WAIT — higher-timeframe direction is not aligned"
         else:
             wait_reason = "Combined framework WAIT — required evidence is incomplete"
 

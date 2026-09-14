@@ -196,6 +196,49 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIn("Status    : Awaiting confirmation", card)
         self.assertIn("&lt;confirmation&gt; required", card)
 
+    def test_analysis_card_uses_selected_timeframe_only(self):
+        analysis = MarketAnalysis(
+            price=4350.0,
+            timeframe="M15",
+            bias="Bullish",
+            trend="Bullish",
+            strength="Strong",
+            momentum="High",
+            confidence=82,
+            entry=4350.0,
+            stop_loss=4335.0,
+            tp1=4380.0,
+            tp2=4400.0,
+            tp3=4420.0,
+            rr_ratio=2.0,
+            action="BUY",
+            directional_indication="BUY",
+            confidence_score=80,
+            institutional_report={
+                "data_quality": "REAL_OHLCV",
+                "direction": "BUY",
+                "multi_timeframe": {
+                    "directions": {"D1": "SELL", "H4": "SELL", "H1": "WAIT", "M15": "BUY"},
+                    "scores": {"D1": 20, "H4": 20, "H1": 20, "M15": 80},
+                    "aligned": False,
+                },
+            },
+        )
+
+        with patch.object(
+            formatting,
+            "market_status",
+            return_value={"is_open": True, "note": "test"},
+        ):
+            card = formatting.analysis_card(analysis)
+
+        self.assertIn("Timeframe : M15", card)
+        self.assertIn("Mode scope: M15 only", card)
+        self.assertIn("HTF Bias  : Not used (selected timeframe only)", card)
+        self.assertNotIn("D1", card)
+        self.assertNotIn("H4", card)
+        self.assertNotIn("MTF", card)
+
 
 class CachedPriceTests(unittest.IsolatedAsyncioTestCase):
     async def test_inconsistent_spot_sources_fall_back_without_returning_outlier(self):
