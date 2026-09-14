@@ -7,6 +7,19 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.analysis import engine
+from src.analysis.market_data import OHLCVData
+
+
+def _ohlcv():
+    closes = [100 + (i * 0.2) + ((i % 5) * 0.1) for i in range(120)]
+    return OHLCVData(
+        opens=[value - 0.2 for value in closes],
+        highs=[value + 0.5 for value in closes],
+        lows=[value - 0.5 for value in closes],
+        closes=closes,
+        volumes=[1000] * len(closes),
+        spot_price=closes[-1],
+    )
 
 
 class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
@@ -52,3 +65,28 @@ class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
             mode="intraday",
             use_higher_timeframe_context=False,
         )
+
+    async def test_single_analysis_fetches_only_the_selected_timeframe(self):
+        with patch.object(
+            engine,
+            "fetch_ohlcv",
+            new=AsyncMock(return_value=_ohlcv()),
+        ) as fetch_ohlcv, patch.object(
+            engine,
+            "fetch_intermarket_snapshot",
+            new=AsyncMock(return_value={}),
+        ), patch.object(
+            engine,
+            "_get_htf_bias",
+            new=AsyncMock(side_effect=AssertionError("HTF must not be fetched")),
+        ):
+            result = await engine._analyze_single(
+                "M15",
+                mode="scalp",
+                use_higher_timeframe_context=True,
+            )
+
+        self.assertEqual(result.timeframe, "M15")
+        self.assertEqual(result.htf_bias, "Not used")
+        self.assertEqual(result.ltf_trends, {})
+        fetch_ohlcv.assert_awaited_once_with("M15")

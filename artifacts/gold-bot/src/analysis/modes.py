@@ -1,11 +1,10 @@
 """
 Analysis Modes — defines the trading personas the bot can adopt.
 
-Each mode completely changes how the engine analyses the market:
+Each mode completely changes how the engine analyses its selected market:
   - which timeframes are scanned for auto-alerts
   - how tight/wide stops and targets are
-  - how many indicator votes are required before a signal fires
-  - how much higher-timeframe evidence is required
+  - how many selected-timeframe indicator votes are required before a signal fires
   - what confidence level is required
 
 Adding a new mode:  add an entry to MODES dict with a ModeConfig object.
@@ -27,11 +26,10 @@ class ModeConfig:
     # ── Alert scanning ─────────────────────────────────────────────────────────
     scan_timeframes: List[str]   # timeframes the background scanner watches
     preferred_timeframe: str     # default chart used by /signal and /recommend
-    # The primary confirmation chart for each scanned timeframe.  Keeping this
-    # in the mode profile (instead of a global map) lets a scalp setup ignore
-    # macro noise while a position setup can require weekly/monthly agreement.
+    # Retained as metadata for older settings/API clients. It is not consulted
+    # by the single-timeframe entry path.
     confirmation_map: Dict[str, str]
-    # Additional context charts fetched for the report and confluence checks.
+    # Retained as metadata for explicit diagnostic reports only.
     context_timeframes: List[str]
 
     # ── Signal sensitivity ─────────────────────────────────────────────────────
@@ -63,9 +61,8 @@ class ModeConfig:
     # TP distances as SL multiples: (TP1, TP2, TP3)
     tp_mult: Tuple[float, float, float] = (2.0, 3.5, 4.5)
 
-    # ── Higher-timeframe evidence ───────────────────────────────────────────────
-    # True  = strong counter-trend HTF bias blocks the signal outright
-    # False = counter-trend only dents confidence
+    # ── Legacy compatibility ────────────────────────────────────────────────────
+    # Kept for settings/API compatibility; single-timeframe entries never use it.
     htf_gate_required: bool = False
 
     # ── Trade type label injected into MarketAnalysis.trade_type ───────────────
@@ -99,7 +96,7 @@ MODES: Dict[str, ModeConfig] = {
         min_rr_ratio = 1.5,
         feature_weights = {
             "breakout": 0.12, "liquidity_sweep": 0.12, "volume_spike": 0.08,
-            "momentum_shift": 0.10, "trend_regime": 0.06, "macro_alignment": 0.01,
+            "momentum_shift": 0.10, "trend_regime": 0.06, "macro_alignment": 0.0,
         },
         alert_min_win_probability = 55,
         alert_min_grades = ("A+", "A", "B"),
@@ -146,7 +143,7 @@ MODES: Dict[str, ModeConfig] = {
         min_rr_ratio = 2.0,
         feature_weights = {
             "breakout": 0.08, "liquidity_sweep": 0.06, "volume_spike": 0.06,
-            "momentum_shift": 0.05, "trend_regime": 0.08, "macro_alignment": 0.06,
+            "momentum_shift": 0.05, "trend_regime": 0.08, "macro_alignment": 0.0,
         },
         alert_min_win_probability = 62,
         alert_min_grades = ("A+", "A"),
@@ -186,7 +183,7 @@ MODES: Dict[str, ModeConfig] = {
         min_rr_ratio = 2.5,
         feature_weights = {
             "breakout": 0.04, "liquidity_sweep": 0.05, "volume_spike": 0.04,
-            "momentum_shift": 0.02, "trend_regime": 0.12, "macro_alignment": 0.14,
+            "momentum_shift": 0.02, "trend_regime": 0.12, "macro_alignment": 0.0,
         },
         alert_min_win_probability = 68,
         alert_min_grades = ("A+", "A"),
@@ -230,7 +227,7 @@ MODES: Dict[str, ModeConfig] = {
         min_rr_ratio = 3.0,
         feature_weights = {
             "breakout": 0.03, "liquidity_sweep": 0.03, "volume_spike": 0.03,
-            "momentum_shift": 0.01, "trend_regime": 0.16, "macro_alignment": 0.20,
+            "momentum_shift": 0.01, "trend_regime": 0.16, "macro_alignment": 0.0,
         },
         alert_min_win_probability = 72,
         alert_min_grades = ("A+",),

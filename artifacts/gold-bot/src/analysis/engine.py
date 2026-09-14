@@ -1507,50 +1507,29 @@ async def _analyze_single(
     mode: str = None,
     use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
+    """Analyze only ``timeframe``.
+
+    ``use_higher_timeframe_context`` is retained for API compatibility with
+    older callers, but it is intentionally ignored.  A single analysis is an
+    entry decision for one selected chart; fetching another candle series here
+    would make that series an implicit confirmation gate.
+    """
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode) if mode else get_mode_config()
 
-    if use_higher_timeframe_context:
-        # The active mode owns the context hierarchy. The legacy map remains
-        # a safe fallback for callers that introduce a timeframe before adding it
-        # to a mode profile.
-        htf = mode_cfg.confirmation_map.get(timeframe, HTF_MAP.get(timeframe, "H4"))
-
-        bias_timeframes = set(mode_cfg.context_timeframes) | {htf}
-        # Always include the active chart so reports have a local reference even
-        # when a future mode defines a very small context set.
-        bias_timeframes.add(timeframe)
-        bias_results = await asyncio.gather(
-            fetch_ohlcv(timeframe),
-            *(_get_htf_bias(bias_tf) for bias_tf in sorted(bias_timeframes)),
-        )
-        data = bias_results[0]
-        bias_by_tf = dict(zip(sorted(bias_timeframes), bias_results[1:]))
-    else:
-        # Automatic entry alerts are intentionally local to the selected
-        # strategy timeframe.  Do not fetch or compare any other timeframe
-        # before deciding whether this analysis can produce an entry.
-        htf = "Disabled"
-        data = await fetch_ohlcv(timeframe)
-        bias_by_tf = {}
-
-    context_unavailable = "Not used" if not use_higher_timeframe_context else "Neutral"
-    htf_h4_bias = bias_by_tf.get("H4", context_unavailable)
-    htf_d1_bias = bias_by_tf.get("D1", context_unavailable)
-    ltf_h1_bias = bias_by_tf.get("H1", context_unavailable)
-    ltf_m30_bias = bias_by_tf.get("M30", context_unavailable)
-    ltf_m15_bias = bias_by_tf.get("M15", context_unavailable)
-    htf_bias = (
-        bias_by_tf.get(htf, context_unavailable)
-        if use_higher_timeframe_context
-        else context_unavailable
-    )
-    ltf_trends = {
-        tf: bias_by_tf.get(tf, "Neutral")
-        for tf in mode_cfg.context_timeframes
-        if tf in bias_by_tf
-    }
+    # The selected chart is the only candle series used by this analysis.
+    # Keep the old context fields serializable for clients that still display
+    # them, but never populate them from another timeframe.
+    data = await fetch_ohlcv(timeframe)
+    htf = "Disabled"
+    htf_h4_bias = "Not used"
+    htf_d1_bias = "Not used"
+    ltf_h1_bias = "Not used"
+    ltf_m30_bias = "Not used"
+    ltf_m15_bias = "Not used"
+    htf_bias = "Not used"
+    ltf_trends = {}
 
     if data is None or len(data) < 35:
         logger.error(f"Insufficient data for {timeframe}")
@@ -1783,13 +1762,10 @@ async def _analyze_single(
         else "SELL" if minus_di > plus_di
         else "NEUTRAL"
     ) if market_regime_v in ("TRENDING", "SQUEEZE") else "NEUTRAL"
-    macro_direction = (
-        "BUY" if use_higher_timeframe_context
-        and htf_bias in ("Bullish", "Slightly Bullish")
-        else "SELL" if use_higher_timeframe_context
-        and htf_bias in ("Bearish", "Slightly Bearish")
-        else "NEUTRAL"
-    )
+    # Higher-timeframe bias is deliberately unavailable on a single-timeframe
+    # entry.  The selected timeframe's own indicators and structure are the
+    # complete directional evidence set.
+    macro_direction = "NEUTRAL"
     feature_directions = {
         "breakout": breakout_direction,
         "liquidity_sweep": sweep_direction,
@@ -2146,10 +2122,6 @@ async def _analyze_single(
             confluence_list.append("HH/HL market structure (bullish)")
         elif mkt_structure == "LH_LL" and direction == "SELL":
             confluence_list.append("LH/LL market structure (bearish)")
-        if htf_bias in ("Bullish", "Slightly Bullish") and direction == "BUY":
-            confluence_list.append(f"{htf} bias aligned ({htf_bias})")
-        elif htf_bias in ("Bearish", "Slightly Bearish") and direction == "SELL":
-            confluence_list.append(f"{htf} bias aligned ({htf_bias})")
         if vol_spike:
             confluence_list.append("Volume spike (institutional participation)")
         if session_label == "London/NY Overlap":
