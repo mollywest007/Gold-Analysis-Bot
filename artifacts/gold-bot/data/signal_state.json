@@ -45,14 +45,16 @@
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
-      "forming_alert_sent": {},
+      "forming_alert_sent": {
+        "M15": "SELL"
+      },
       "forming_alert_last_sent": {
-        "M15": 1789344740.702217,
+        "M15": 1789370193.3902986,
         "H1": 1788954268.457043
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 6023
+          "8039158711": 6030
         }
       },
       "momentum_shift_warned": {},
