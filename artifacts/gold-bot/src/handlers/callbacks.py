@@ -77,7 +77,7 @@ def _settings_text(chat_id: int, cfg, *, change: str = "") -> str:
             f"Intra-hour alerts timeframe: <b>{combined['interval']}</b>\n\n"
             f"{change}"
             "Both alert streams run simultaneously. "
-            "Choose each timeframe independently below."
+            "Select the timeframe for each stream independently below."
         )
     return (
         "<b>Settings</b>\n\n"
@@ -146,10 +146,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chat_id = update.effective_chat.id
         if data == "alerts:on":
             register_user(chat_id)
-            await query.answer("Automatic alerts turned ON.")
+            await query.answer("Automatic alerts are now enabled.")
         elif data == "alerts:off":
             unregister_user(chat_id)
-            await query.answer("Automatic alerts turned OFF.")
+            await query.answer("Automatic alerts are now disabled.")
         else:
             await query.answer()
 
@@ -157,8 +157,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         state_text = "ON" if is_on else "OFF"
         await query.edit_message_text(
             f"<b>Automatic alerts: {state_text}</b>\n\n"
-            "Choose exactly what you want. Your choice is saved immediately.\n\n"
-            "You will still receive replies to commands when alerts are OFF.",
+            "Select the alert preference you require. Your choice will be saved immediately.\n\n"
+            "You will continue to receive responses to commands while automatic alerts are disabled.",
             parse_mode="HTML",
             reply_markup=alerts_keyboard(is_on),
         )
@@ -204,7 +204,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             _settings_text(
                 chat_id,
                 cfg,
-                change=f"{stream.title()} alert timeframe updated: <b>{tf}</b>\n\n",
+                change=f"{stream.title()} alert timeframe updated successfully: <b>{tf}</b>\n\n",
             ),
             parse_mode="HTML",
             reply_markup=settings_keyboard(
@@ -263,7 +263,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"Market: <b>{mkt_status}</b> — {ms['note']}\n\n"
             f"Mode: <b>{get_user_mode_config(chat_id).label}</b>\n"
             f"Timeframe: <b>{tf}</b>\n\n"
-            "Use the menu below to continue."
+            "Select an option from the menu below to continue."
         )
         try:
             await query.edit_message_text(
@@ -347,7 +347,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                                   reply_markup=kb)
                 elif command == "analyze":
                     await query.edit_message_text(
-                        f"Analyzing {tf}...", reply_markup=kb
+                        f"Analysing {tf}...", reply_markup=kb
                     )
                     a = await analyze(
                         tf, mode=_analysis_mode_for_timeframe(chat_id, tf)
@@ -359,7 +359,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     )
 
                 elif command == "signal":
-                    await query.edit_message_text("Scanning for setup...", reply_markup=kb)
+                    await query.edit_message_text("Scanning for a trade setup...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
@@ -367,7 +367,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     )
 
                 elif command == "trend":
-                    await query.edit_message_text("Reading trend...", reply_markup=kb)
+                    await query.edit_message_text("Assessing the trend...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
@@ -375,7 +375,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     )
 
                 elif command == "levels":
-                    await query.edit_message_text("Calculating levels...", reply_markup=kb)
+                    await query.edit_message_text("Calculating key levels...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
@@ -383,7 +383,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     )
 
                 elif command == "outlook":
-                    await query.edit_message_text("Generating outlook...", reply_markup=kb)
+                    await query.edit_message_text("Generating the market outlook...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
                     await query.edit_message_text(
@@ -392,7 +392,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "recommend":
                     from src.utils.formatting import recommend_multi_card
-                    await query.edit_message_text("Scanning all timeframes...", reply_markup=kb)
+                    await query.edit_message_text("Scanning all available timeframes...", reply_markup=kb)
                     results = await asyncio.gather(
                         *[
                             analyze(tf_name, mode=_mode)
@@ -411,7 +411,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 logger.error(f"refresh:{command} error: {e}")
                 try:
                     await query.edit_message_text(
-                        "Refresh failed — try again in a moment.", reply_markup=kb
+                        "The refresh could not be completed. Please try again in a moment.", reply_markup=kb
                     )
                 except Exception:
                     pass
@@ -435,7 +435,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data.startswith("recommend:"):
-        await query.edit_message_text("Scanning all timeframes…", reply_markup=kb)
+        await query.edit_message_text("Scanning all available timeframes…", reply_markup=kb)
         try:
             from src.utils.formatting import recommend_multi_card as _rmc
             import re as _re
@@ -457,11 +457,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.edit_message_text(plain, reply_markup=kb)
         except Exception as e:
             logger.error(f"callback recommend: {e}")
-            await query.edit_message_text("Scanning failed — please try again in a moment.",
+            await query.edit_message_text("The scan could not be completed. Please try again in a moment.",
                                           reply_markup=kb)
 
     elif data.startswith("analyze:"):
-        await query.edit_message_text(f"Analyzing {tf}…", reply_markup=kb)
+        await query.edit_message_text(f"Analysing {tf}…", reply_markup=kb)
         try:
             a = await analyze(
                 tf, mode=_analysis_mode_for_timeframe(chat_id, tf)
@@ -473,11 +473,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         except Exception as e:
             logger.error(f"callback analyze: {e}")
-            await query.edit_message_text("Analysis failed. Please try again.",
+            await query.edit_message_text("The analysis could not be completed. Please try again.",
                                           reply_markup=kb)
 
     elif data.startswith("signal:"):
-        await query.edit_message_text("Scanning for trade setup…", reply_markup=kb)
+        await query.edit_message_text("Scanning for a trade setup…", reply_markup=kb)
         try:
             analysis_mode = (
                 "scalp"
@@ -489,11 +489,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                           reply_markup=kb)
         except Exception as e:
             logger.error(f"callback signal: {e}")
-            await query.edit_message_text("Signal scan failed. Please try again.",
+            await query.edit_message_text("The signal scan could not be completed. Please try again.",
                                           reply_markup=kb)
 
     elif data.startswith("trend:"):
-        await query.edit_message_text("Reading trend…", reply_markup=kb)
+        await query.edit_message_text("Assessing the trend…", reply_markup=kb)
         try:
             analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
             a = await analyze(tf, mode=analysis_mode)
@@ -501,11 +501,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                           reply_markup=kb)
         except Exception as e:
             logger.error(f"callback trend: {e}")
-            await query.edit_message_text("Trend read failed. Please try again.",
+            await query.edit_message_text("The trend assessment could not be completed. Please try again.",
                                           reply_markup=kb)
 
     elif data.startswith("levels:"):
-        await query.edit_message_text("Calculating levels…", reply_markup=kb)
+        await query.edit_message_text("Calculating key levels…", reply_markup=kb)
         try:
             analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
             a = await analyze(tf, mode=analysis_mode)
@@ -513,11 +513,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                           reply_markup=kb)
         except Exception as e:
             logger.error(f"callback levels: {e}")
-            await query.edit_message_text("Level calculation failed. Please try again.",
+            await query.edit_message_text("The key levels could not be calculated. Please try again.",
                                           reply_markup=kb)
 
     elif data.startswith("outlook:"):
-        await query.edit_message_text("Generating outlook…", reply_markup=kb)
+        await query.edit_message_text("Generating the market outlook…", reply_markup=kb)
         try:
             analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
             a = await analyze(tf, mode=analysis_mode)
@@ -525,7 +525,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                           reply_markup=kb)
         except Exception as e:
             logger.error(f"callback outlook: {e}")
-            await query.edit_message_text("Outlook generation failed. Please try again.",
+            await query.edit_message_text("The market outlook could not be generated. Please try again.",
                                           reply_markup=kb)
 
 

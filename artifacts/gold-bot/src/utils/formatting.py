@@ -218,7 +218,7 @@ def _pd_line(a: MarketAnalysis) -> str:
     if not pd:
         return ""
     icons = {"PREMIUM": "▲ PREMIUM  — sell zone", "DISCOUNT": "▼ DISCOUNT — buy zone",
-             "EQUILIBRIUM": "◆ EQUILIBRIUM — chop zone"}
+             "EQUILIBRIUM": "◆ EQUILIBRIUM — consolidation zone"}
     return f"  Regime    : {icons.get(pd, pd)}"
 
 
@@ -728,7 +728,7 @@ def signal_card(a: MarketAnalysis) -> str:
             f"  Entry     : {fmt_price(a.entry)}",
         ]
         if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
+            lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (preferred execution)")
         lines += [
             f"  Stop Loss : {fmt_price(a.stop_loss)}",
             "──────────────────────────────────",
@@ -1680,7 +1680,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     ote_h = getattr(a, "ote_high", 0.0)
     ote_l = getattr(a, "ote_low", 0.0)
     pd_icons = {"PREMIUM": "▲ PREMIUM (sell zone)", "DISCOUNT": "▼ DISCOUNT (buy zone)",
-                "EQUILIBRIUM": "◆ EQUILIBRIUM (chop)"}
+                "EQUILIBRIUM": "◆ EQUILIBRIUM (consolidation)"}
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
     framework_direction = institutional_report.get("direction", "WAIT")
@@ -1880,7 +1880,7 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
         sep,
         "INSTITUTIONAL CONTEXT",
         f"  Daily : {db or 'N/A'}  |  HTF: {a.htf_bias}",
-        f"  Zone  : {pd_arrow}  |  KZ: {'✓ ' + kz if is_kz else 'Off-hrs'}",
+        f"  Zone  : {pd_arrow}  |  KZ: {'✓ ' + kz if is_kz else 'Outside active hours'}",
     ]
     if pdh > 0 and pdl > 0:
         lines.append(f"  PDH   : {fmt_price(pdh)}   PDL: {fmt_price(pdl)}")
@@ -1903,7 +1903,7 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
     if a.early_entry and a.early_entry != a.entry:
         lines += [
             f"  Limit : {fmt_price(a.early_entry)}  ({a.early_entry_reason[:30]})",
-            f"  Mkt   : {fmt_price(a.entry)}  (if missed)",
+            f"  Mkt   : {fmt_price(a.entry)}  (if the limit entry is missed)",
         ]
     else:
         lines.append(f"  Mkt   : {fmt_price(a.entry)}")
@@ -1954,8 +1954,8 @@ def no_early_entry_card(a: MarketAnalysis) -> str:
         f"  Direction : {a.action}  (grade {a.setup_quality})",
         f"  Win Rate  : {_win_bar(a.win_probability) if a.win_probability else 'N/A'}",
         "",
-        "  Grade below A — 80% threshold NOT met.",
-        "  No early entry issued.",
+                "  Grade below A — the 80% threshold has not been met.",
+                "  No early entry has been issued.",
         "",
         "  What needs to improve:",
         "──────────────────────────────────",
@@ -1964,26 +1964,26 @@ def no_early_entry_card(a: MarketAnalysis) -> str:
     # Tell the user what is missing
     missing = []
     if a.confidence < 80:
-        missing.append(f"Confidence {a.confidence}% &lt; 80% (need more indicators)")
+        missing.append(f"Confidence {a.confidence}% &lt; 80% (additional confirmation required)")
     if len(a.confluence_list) < 4:
-        missing.append(f"Confluence {len(a.confluence_list)}/4+ factors needed")
+        missing.append(f"Confluence {len(a.confluence_list)}/4+ factors required")
     if a.adx < 20:
-        missing.append(f"ADX {a.adx:.1f} too low — market ranging")
+        missing.append(f"ADX {a.adx:.1f} is too low — the market is ranging")
     if a.htf_bias in ("Neutral",):
-        missing.append("HTF bias neutral — need clear macro alignment")
+        missing.append("HTF bias is neutral — clear macro alignment is required")
     if a.session in ("Asian",):
-        missing.append("Asian session — wait for London/NY for volume")
+        missing.append("Asian session — await London/New York volume")
     if not missing:
-        missing.append("Signal gating: R:R or ADX conditions not met")
+        missing.append("Signal criteria: R:R or ADX conditions have not been met")
 
     for m in missing:
         lines.append(f"  - {m}")
 
     lines += [
         "",
-        "  Monitor for setup to improve.",
-        "  Use /alerts to get notified",
-        "  when A/A+ grade fires.",
+        "  Continue monitoring for setup improvement.",
+        "  Use /alerts to receive notifications",
+        "  when an A/A+ grade setup is detected.",
         "",
         "  Not financial advice.", "</pre>",
     ]
@@ -2002,7 +2002,7 @@ def recommend_multi_card(analyses: list) -> str:
     any TF that has an actionable BUY or SELL.
     """
     if not analyses:
-        return "<pre>No analysis data available. Please try again.</pre>"
+        return "<pre>No analysis data is currently available. Please try again.</pre>"
 
     price  = analyses[0].price if analyses else 0.0
     ms     = market_status()
@@ -2490,7 +2490,7 @@ def alert_card(a: MarketAnalysis) -> str:
         f"  Entry     : {fmt_price(a.entry)}",
     ]
     if a.trade_type != "Scalp" and a.limit_entry and a.limit_entry != a.entry:
-        lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (better fill)")
+        lines.append(f"  Limit     : {fmt_price(a.limit_entry)}  (preferred execution)")
     t1 = _estimate_time(a, a.tp1)
     t2 = _estimate_time(a, a.tp2)
     rr1 = round(abs(a.tp1 - a.entry) / abs(a.entry - a.stop_loss), 1) if abs(a.entry - a.stop_loss) > 0 else 0
@@ -2543,7 +2543,7 @@ def market_open_card(a: MarketAnalysis) -> str:
         lines += [
             "SIGNAL    : WAIT",
             f"Reason    : {(a.wait_reason or a.verdict_reason)[:44]}",
-            "Monitor for a clean directional setup.",
+            "Continue monitoring for a clear directional setup.",
         ]
     lines += [
         "─" * 32,
@@ -2582,7 +2582,7 @@ def news_card(items: list) -> str:
         "=" * 32,
     ]
     if not items:
-        lines += ["No headlines available right now.", "Try again in a few minutes."]
+        lines += ["No headlines are currently available.", "Please try again in a few minutes."]
     else:
         for i, item in enumerate(items, 1):
             date_part = f"  [{item['date']}]" if item.get("date") else ""
@@ -2873,7 +2873,7 @@ def market_conditions_card(a: MarketAnalysis) -> str:
         f"  S1: {fmt_price(a.support1)}   S2: {fmt_price(a.support2)}",
         "",
         "  Next update in ~4 hours.",
-        "  Use /signal for on-demand scan.",
+        "  Use /signal to request an on-demand scan.",
         "</pre>",
     ]
     return "\n".join(lines)
@@ -2979,7 +2979,7 @@ def history_card(trades: list, stats: dict) -> str:
             "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
         ]
 
-    lines += ["", "  Use /active for live P&L.", "</pre>"]
+    lines += ["", "  Use /active to view live P&L.", "</pre>"]
     return safe_html("\n".join(lines))
 
 
@@ -3061,8 +3061,8 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
         f"  Signals  W:{stats['wins']}  L:{stats['losses']}  "
         f"Rate:{stats['win_rate']}%",
         "──────────────────────────────────",
-        "  Use /signal for live scan.",
-        "  Use /history for full log.",
+        "  Use /signal to request a live scan.",
+        "  Use /history to view the complete log.",
         "</pre>",
     ]
     return "\n".join(lines)
@@ -3071,13 +3071,13 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
 def welcome_text(name: str) -> str:
     ms = market_status()
     if ms["is_open"]:
-        mkt = f"Market is OPEN — {ms['note']}. Live signals available."
+        mkt = f"Market is OPEN — {ms['note']}. Live signals are available."
     else:
         mkt = f"Market is CLOSED — {ms['note']}."
     return (
         f"Welcome, {name}.\n\n"
         "<b>XAU/USD Gold Analysis Bot</b>\n\n"
-        "Institutional-grade signals. Precision entries.\n"
+        "Institutional-grade market analysis and structured trade plans.\n"
         f"{mkt}\n\n"
         "Select an option from the menu below."
     )
@@ -3085,20 +3085,20 @@ def welcome_text(name: str) -> str:
 
 def help_text() -> str:
     cmds = [
-        ("/signal",    "Trade signal — BUY/SELL with full trade plan"),
-        ("/analyze",   "Full analysis — structure, indicators, levels, entry"),
-        ("/recommend", "Verdict with indicator breakdown"),
-        ("/chart",     "Live chart + AI vision analysis"),
-        ("/trend",     "Trend direction, structure, momentum"),
-        ("/levels",    "Support, resistance, BB, ATR levels"),
-        ("/outlook",   "Market outlook and scenario"),
+        ("/signal",    "Trade signal — BUY/SELL with a complete trade plan"),
+        ("/analyze",   "Complete analysis — structure, indicators, levels, and entry"),
+        ("/recommend", "Recommendation with an indicator breakdown"),
+        ("/chart",     "Live chart with AI vision analysis"),
+        ("/trend",     "Trend direction, structure, and momentum"),
+        ("/levels",    "Support, resistance, BB, and ATR levels"),
+        ("/outlook",   "Market outlook and potential scenarios"),
         ("/active",    "View open trades and live P&L"),
         ("/history",   "View recent trade results"),
-        ("/news",      "Latest gold market headlines"),
-        ("/alerts",    "Open automatic alert ON/OFF controls"),
-        ("/mode",      "Switch Scalp, Intra-hour, combined, Swing, or Position"),
-        ("/settings",  "Change mode and timeframe"),
-        ("/help",      "This message"),
+        ("/news",      "View the latest gold market headlines"),
+        ("/alerts",    "Manage automatic alert preferences"),
+        ("/mode",      "Select Scalp, Intra-hour, combined, Swing, or Position mode"),
+        ("/settings",  "Change the analysis mode and timeframe"),
+        ("/help",      "Display this command reference"),
     ]
     lines = ["<b>Available Commands</b>\n"]
     for cmd, desc in cmds:
@@ -3110,10 +3110,10 @@ def help_text() -> str:
         f"<b>Market:</b> {mkt_status} — {ms['note']}",
         "",
         "<b>Analysis Modes:</b>",
-        "⚡ Scalp    — M1/M3/M5/M15 (fast momentum)",
-        "📊 Intraday — M15/M30/H1 (same session)",
+        "⚡ Scalp    — M1/M3/M5/M15 (short-term momentum)",
+        "📊 Intraday — M15/M30/H1 (same-session analysis)",
         "🌊 Swing    — H4/D1/W1 (multi-day structure)",
-        "🏛️ Position — D1/W1/MN1 (macro trend)",
+        "🏛️ Position — D1/W1/MN1 (macro-trend analysis)",
     ]
     return "\n".join(lines)
 

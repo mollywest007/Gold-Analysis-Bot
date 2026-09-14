@@ -3186,7 +3186,7 @@ async def _send_trade_reminder_once(
                 f"{tp3_line}"
                 f"{tp1_retrace_warning}"
                 f"{'─' * 30}\n"
-                f"Use /active to track live.  Use /signal for latest scan."
+                f"Use /active to monitor the position. Use /signal for the latest scan."
             )
 
             dead, delivered = await _broadcast_text(

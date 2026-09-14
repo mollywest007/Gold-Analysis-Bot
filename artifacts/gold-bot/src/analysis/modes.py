@@ -83,7 +83,7 @@ MODES: Dict[str, ModeConfig] = {
         name        = "scalp",
         label       = "Scalp",
         emoji       = "⚡",
-        description = "Quick entries on M5/M15. Tight stops, fast targets. Pure momentum.",
+        description = "Short-term entries on M5/M15 with tight stops, defined targets, and a momentum focus.",
         scan_timeframes = ["M1", "M3", "M5", "M15"],
         # M15 is the stable default for a new Scalp session. M1/M3/M5 remain
         # available in Settings for traders who want faster execution.
@@ -121,18 +121,18 @@ MODES: Dict[str, ModeConfig] = {
         htf_gate_strict  = False,     # ignore macro trend; trade the micro move
         trade_type_label = "Scalp",
         tip = (
-            "⚡ <b>Scalp Mode active.</b>\n"
-            "Signals fire on M1, M3, M5 and M15. Stops are tight — "
-            "monitor the trade closely and be ready to exit quickly."
+            "⚡ <b>Scalp Mode is active.</b>\n"
+            "Signals are generated on M1, M3, M5, and M15. Stops are tight; "
+            "monitor positions closely and be prepared to exit promptly."
         ),
-        risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
+        risk_note = "Tight volatility-based stop; TP1 targets a quick 1.5R move.",
     ),
 
     "intraday": ModeConfig(
         name        = "intraday",
         label       = "Intraday",
         emoji       = "📊",
-        description = "Day-trade setups on M15/M30/H1. Balanced risk, same-day exits.",
+        description = "Intraday setups on M15/M30/H1 with balanced risk and same-session exits.",
         scan_timeframes = ["M15", "M30", "H1"],
         preferred_timeframe = "H1",
         confirmation_map = {"M15": "H1", "M30": "H1", "H1": "H4"},
@@ -161,9 +161,9 @@ MODES: Dict[str, ModeConfig] = {
         htf_gate_strict  = False,
         trade_type_label = "Intraday",
         tip = (
-            "📊 <b>Intraday Mode active.</b>\n"
-            "Scanning M15, M30 and H1. Standard risk management. "
-            "Targets are realistic for same-session trades."
+            "📊 <b>Intraday Mode is active.</b>\n"
+            "Scanning M15, M30, and H1 with standard risk management. "
+            "Targets are designed for same-session trades."
         ),
         risk_note = "Balanced intraday stop; TP1 targets 2R and TP2 extends the day move.",
     ),
@@ -172,7 +172,7 @@ MODES: Dict[str, ModeConfig] = {
         name        = "swing",
         label       = "Swing",
         emoji       = "🌊",
-        description = "Multi-day setups on H4/D1/W1. Wider stops, bigger targets, fewer signals.",
+        description = "Multi-day setups on H4/D1/W1 with wider stops, larger targets, and fewer signals.",
         scan_timeframes = ["H4", "D1", "W1"],
         preferred_timeframe = "H4",
         confirmation_map = {"H4": "D1", "D1": "W1", "W1": "MN1"},
@@ -205,9 +205,9 @@ MODES: Dict[str, ModeConfig] = {
         htf_gate_strict  = True,      # strong counter-trend D1 blocks H4 signals
         trade_type_label = "Swing",
         tip = (
-            "🌊 <b>Swing Mode active.</b>\n"
-            "Scanning H4, D1 and W1. Wider stops, larger targets. "
-            "Expect fewer signals — only high-quality setups fire."
+            "🌊 <b>Swing Mode is active.</b>\n"
+            "Scanning H4, D1, and W1 with wider stops and larger targets. "
+            "Signals are limited to higher-quality setups."
         ),
         risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",
     ),
@@ -216,7 +216,7 @@ MODES: Dict[str, ModeConfig] = {
         name        = "position",
         label       = "Position",
         emoji       = "🏛️",
-        description = "Long-term trades on D1/W1/MN1. Maximum confirmation, macro trend focus.",
+        description = "Long-term trades on D1/W1/MN1 with maximum confirmation and a macro-trend focus.",
         scan_timeframes = ["D1", "W1", "MN1"],
         preferred_timeframe = "D1",
         confirmation_map = {"D1": "W1", "W1": "MN1", "MN1": "MN1"},
@@ -249,9 +249,9 @@ MODES: Dict[str, ModeConfig] = {
         htf_gate_strict  = True,
         trade_type_label = "Position",
         tip = (
-            "🏛️ <b>Position Mode active.</b>\n"
-            "Scanning D1, W1 and MN1. Very few signals — only macro-confirmed moves. "
-            "Stops are wide; targets are large. This is a long-term strategy."
+            "🏛️ <b>Position Mode is active.</b>\n"
+            "Scanning D1, W1, and MN1. Signals are limited to macro-confirmed moves. "
+            "Stops are wide and targets are larger, consistent with a long-term strategy."
         ),
         risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
     ),
@@ -263,7 +263,7 @@ MODES: Dict[str, ModeConfig] = {
         name        = "scalp_interval",
         label       = "Scalp / Intra-hour",
         emoji       = "⚡📊",
-        description = "Run Scalp and Intra-hour alerts together with separate timeframes.",
+        description = "Run Scalp and Intra-hour alerts concurrently using separate timeframes.",
         scan_timeframes = ["M15", "H1"],
         preferred_timeframe = "M15",
         confirmation_map = {"M15": "H1", "H1": "H4"},
@@ -285,9 +285,9 @@ MODES: Dict[str, ModeConfig] = {
         htf_gate_strict  = False,
         trade_type_label = "Scalp / Intra-hour",
         tip = (
-            "⚡📊 <b>Scalp / Intra-hour Mode active.</b>\n"
+            "⚡📊 <b>Scalp / Intra-hour Mode is active.</b>\n"
             "The bot monitors one Scalp timeframe and one Intra-hour timeframe "
-            "at the same time."
+            "concurrently."
         ),
         risk_note = "Each alert uses the risk plan of its own Scalp or Intra-hour stream.",
     ),

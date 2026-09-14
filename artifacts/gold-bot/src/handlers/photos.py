@@ -242,7 +242,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     status_msg = await message.reply_text(
-        "Chart received. Running professional analysis... this takes 20-40 seconds.",
+        "Chart received. Running the professional analysis. This may take 20–40 seconds.",
     )
 
     try:
@@ -275,11 +275,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Photo analysis failed: {e}", exc_info=True)
         try:
             await status_msg.edit_text(
-                f"Analysis failed. Please try again with a clear chart screenshot.\n"
+                f"The analysis could not be completed. Please try again with a clear chart screenshot.\n"
                 f"Error: {html.escape(type(e).__name__)}",
             )
         except Exception:
-            await message.reply_text("Analysis failed. Please try again.")
+            await message.reply_text("The analysis could not be completed. Please try again.")
 
 
 def register_photo_handlers(app: Application) -> None:

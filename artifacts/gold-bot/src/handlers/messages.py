@@ -52,7 +52,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_text(
-        "Use the menu or a command.\nType /help for all commands.",
+        "Please select an option from the menu or enter a command.\nUse /help to view all available commands.",
         reply_markup=main_menu_keyboard(),
     )
 
