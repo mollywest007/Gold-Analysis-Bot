@@ -49,12 +49,12 @@
         "M15": "SELL"
       },
       "forming_alert_last_sent": {
-        "M15": 1789344193.53458,
+        "M15": 1789344740.702217,
         "H1": 1788954268.457043
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 6005
+          "8039158711": 6023
         }
       },
       "momentum_shift_warned": {},
