@@ -149,8 +149,8 @@ async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     state_text = "ON" if is_on else "OFF"
     await update.message.reply_text(
         f"<b>Automatic alerts: {state_text}</b>\n\n"
-        "Select the alert preference you require. Your choice will be saved immediately.\n\n"
-        "You will continue to receive responses to commands while automatic alerts are disabled.",
+        "Choose exactly what you want. Your choice is saved immediately.\n\n"
+        "You will still receive replies to commands when alerts are OFF.",
         parse_mode="HTML",
         reply_markup=alerts_keyboard(is_on),
     )
@@ -169,7 +169,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(
-        f"Running the full market analysis for {tf}...{' (' + note + ')' if note else ''}"
+        f"Running full market analysis on {tf}...{' (' + note + ')' if note else ''}"
     )
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
@@ -179,8 +179,8 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if getattr(a, "is_simulated", False):
             await msg.edit_text(
                 "⚠️ <b>DATA UNAVAILABLE</b>\n"
-                "Market data could not be retrieved because Yahoo Finance is unreachable. "
-                "This analysis is based on simulated prices and is <b>not reliable</b>.\n\n"
+                "Market data could not be fetched (Yahoo Finance is unreachable). "
+                "Analysis is based on simulated prices and is <b>not reliable</b>.\n\n"
                 "Please try again in a few minutes.",
                 parse_mode="HTML",
             )
@@ -200,10 +200,10 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if a.setup_quality == "C":
                 await update.message.reply_text(
                     f"⚠️ <b>Grade C — Do NOT enter this trade</b>\n\n"
-                    f"The engine indicates a {a.action} direction, but the setup quality is too low "
+                    f"The engine sees a {a.action} direction but the setup quality is too low "
                     f"(win probability {a.win_probability}%, ADX {a.adx:.1f}). "
                     f"Entering here has a poor risk/reward profile.\n\n"
-                    f"<b>Wait for a Grade A or A+ setup.</b> Use /signal to continue scanning.",
+                    f"<b>Wait for a Grade A or A+ setup.</b> Use /signal to keep scanning.",
                     parse_mode="HTML",
                 )
                 return
@@ -216,7 +216,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 from telegram import InputFile
                 from src.chart_generator import generate_chart_image
                 chart_msg = await update.message.reply_text(
-                    f"Generating the {tf} chart..."
+                    f"Generating {tf} chart..."
                 )
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
@@ -245,7 +245,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     except Exception as e:
         logger.error(f"recommend error: {e}")
-        await msg.edit_text("The recommendation could not be generated. Please try again.")
+        await msg.edit_text("Recommendation failed. Please try again.")
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -256,7 +256,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     tf = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg = await update.message.reply_text(
-        f"Analysing {tf}...{' (' + note + ')' if note else ''}"
+        f"Analyzing {tf}...{' (' + note + ')' if note else ''}"
     )
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
@@ -267,7 +267,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     except Exception as e:
         logger.error(f"analyze error: {e}")
-        await msg.edit_text("The analysis could not be completed. Please try again.")
+        await msg.edit_text("Analysis failed. Please try again.")
 
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa: F811
@@ -278,7 +278,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
-    msg  = await update.message.reply_text(f"Scanning for a trade setup...{' (' + note + ')' if note else ''}")
+    msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -287,7 +287,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if getattr(a, "is_simulated", False):
             await msg.edit_text(
                 "⚠️ <b>DATA UNAVAILABLE</b>\n"
-                "Market data could not be retrieved. This signal is based on simulated prices "
+                "Market data could not be fetched. Signal is based on simulated prices "
                 "and is <b>not reliable</b>. Please try again in a few minutes.",
                 parse_mode="HTML",
             )
@@ -307,7 +307,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 from telegram import InputFile
                 from src.chart_generator import generate_chart_image
                 chart_msg = await update.message.reply_text(
-                    f"Generating the {tf} chart for this signal..."
+                    f"Generating {tf} chart for this signal..."
                 )
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
@@ -322,7 +322,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 logger.warning(f"signal chart attach failed: {chart_err}")
     except Exception as e:
         logger.error(f"signal error: {e}")
-        await msg.edit_text("The signal scan could not be completed. Please try again.")
+        await msg.edit_text("Signal scan failed. Please try again.")
 
 
 async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -333,7 +333,7 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
-    msg  = await update.message.reply_text(f"Assessing the trend...{' (' + note + ')' if note else ''}")
+    msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -341,7 +341,7 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             reply_markup=refresh_keyboard("trend", tf))
     except Exception as e:
         logger.error(f"trend error: {e}")
-        await msg.edit_text("The trend assessment could not be completed. Please try again.")
+        await msg.edit_text("Trend read failed. Please try again.")
 
 
 async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -352,7 +352,7 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
-    msg  = await update.message.reply_text(f"Calculating key levels...{' (' + note + ')' if note else ''}")
+    msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -360,7 +360,7 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             reply_markup=refresh_keyboard("levels", tf))
     except Exception as e:
         logger.error(f"levels error: {e}")
-        await msg.edit_text("The key levels could not be calculated. Please try again.")
+        await msg.edit_text("Level calculation failed. Please try again.")
 
 
 async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -371,7 +371,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
-    msg  = await update.message.reply_text(f"Generating the market outlook...{' (' + note + ')' if note else ''}")
+    msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -379,7 +379,7 @@ async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                             reply_markup=refresh_keyboard("outlook", tf))
     except Exception as e:
         logger.error(f"outlook error: {e}")
-        await msg.edit_text("The market outlook could not be generated. Please try again.")
+        await msg.edit_text("Outlook generation failed. Please try again.")
 
 
 
@@ -390,7 +390,7 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat_id = update.effective_chat.id
     mode_name = get_user_mode(chat_id)
     timeframe = get_user_timeframe(chat_id)
-    msg   = await update.message.reply_text("Retrieving active trades...")
+    msg   = await update.message.reply_text("Fetching active trades...")
     try:
         price = await get_gold_price()
     except Exception:
@@ -430,8 +430,8 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"Analysis Mode: <b>{mode.emoji} {mode.label}</b>\n"
             f"{mode.description}\n\n"
             f"Current Timeframe: <b>{tf}</b>\n\n"
-            "Select a mode to change the strategy, then select a timeframe "
-            "within the chosen mode."
+            "Choose a mode to change the strategy, then choose a timeframe "
+            "within that mode."
         )
         keyboard = settings_keyboard(tf, mode.name)
     await update.message.reply_text(
@@ -447,7 +447,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = [
         f"<b>Analysis Mode</b>\nActive: {cfg.emoji} <b>{cfg.label}</b>",
         f"<i>{cfg.description}</i>\n",
-        "Select a mode in <b>/settings</b> to change the analysis strategy.",
+        "Select a mode in <b>/settings</b> to change the strategy.",
         "",
     ]
     for mode in list_modes():
@@ -470,7 +470,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = await update.message.reply_text("Retrieving the latest gold market headlines...")
+    msg = await update.message.reply_text("Fetching gold headlines...")
     try:
         from src.news import fetch_gold_news
         items = await fetch_gold_news()
@@ -478,7 +478,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             reply_markup=refresh_keyboard("news", "none"))
     except Exception as e:
         logger.error(f"news error: {e}")
-        await msg.edit_text("The latest news could not be retrieved at this time. Please try again shortly.")
+        await msg.edit_text("Could not fetch news right now. Try again shortly.")
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -508,7 +508,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tf  = _get_tf(context, chat_id)
     ms  = market_status()
     msg = await update.message.reply_text(
-        f"Generating the XAU/USD {tf} chart...",
+        f"Generating XAU/USD {tf} chart...",
         parse_mode="HTML",
     )
 
@@ -517,11 +517,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         img_bytes = await generate_chart_image(tf)
     except Exception as e:
         logger.error(f"cmd_chart — chart generation error: {e}", exc_info=True)
-        await msg.edit_text("The chart could not be generated. Please try again shortly.")
+        await msg.edit_text("Chart generation failed. Try again shortly.")
         return
 
     if img_bytes is None:
-        await msg.edit_text("The chart could not be generated. Please try again shortly.")
+        await msg.edit_text("Could not generate the chart. Try again shortly.")
         return
 
     # ── Step 2: Send chart photo (retry once on transient network error) ───────
@@ -542,17 +542,17 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 logger.error(f"cmd_chart photo send failed after retry: {e}")
                 await msg.edit_text(
-                    "The chart image was generated but could not be sent because of a Telegram connection error.\n"
+                    "Chart image generated but could not be sent — Telegram connection error.\n"
                     "Please try again in a moment."
                 )
                 return
         except Exception as e:
             logger.error(f"cmd_chart photo send error: {e}", exc_info=True)
-            await msg.edit_text("The chart image could not be sent. Please try again shortly.")
+            await msg.edit_text(f"Chart image could not be sent. Try again shortly.")
             return
 
     # ── Step 3: Gemini Vision analysis (with engine fallback on quota) ────────
-    await msg.edit_text("Analysing the chart with AI. This may take 15–30 seconds.")
+    await msg.edit_text("Analysing chart with AI... this takes 15-30 seconds.")
     gemini_ok = False
     try:
         result = await analyse_chart_bytes(img_bytes)
@@ -563,11 +563,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         is_quota = "429" in err_str or "quota" in err_str.lower()
         if is_quota:
             logger.info("cmd_chart — Gemini quota hit, falling back to engine analysis.")
-            await msg.edit_text("The AI vision quota has been reached. Sending the engine analysis instead.")
+            await msg.edit_text("AI vision quota reached — sending engine analysis instead.")
         else:
             short = _html.escape(err_str[:200])
             await msg.edit_text(
-                f"Chart sent. The AI analysis could not be completed. Please try again shortly.\n<i>{short}</i>",
+                f"Chart sent. AI analysis failed — try again shortly.\n<i>{short}</i>",
                 parse_mode="HTML",
             )
             return
@@ -593,7 +593,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await msg.delete()
         except Exception as e:
             logger.error(f"cmd_chart — engine fallback failed: {e}")
-            await msg.edit_text("The chart was sent, but analysis is currently unavailable. Please try /recommend instead.")
+            await msg.edit_text("Chart sent. Analysis unavailable right now — try /recommend instead.")
 
 
 def register_command_handlers(app: Application) -> None:
