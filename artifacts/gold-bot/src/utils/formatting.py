@@ -1255,9 +1255,19 @@ def _reference_analysis_card(
     multi_timeframe = report.get("multi_timeframe", {}) or {}
     legacy = report.get("legacy", {}) or {}
     combined = report.get("combined", {}) or {}
+    data_quality = report.get("data_quality", "REAL_OHLCV")
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and data_quality == "REAL_OHLCV"
+    )
     direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
     action = getattr(a, "action", "WAIT") or "WAIT"
-    strict_ready = action in ("BUY", "SELL")
+    consensus_score = int(multi_timeframe.get("consensus_score", 0) or 0)
+    strict_ready = (
+        action in ("BUY", "SELL")
+        and data_is_real
+        and bool(multi_timeframe.get("aligned", False))
+    )
 
     buy_votes = int(getattr(a, "buy_votes", 0) or 0)
     sell_votes = int(getattr(a, "sell_votes", 0) or 0)

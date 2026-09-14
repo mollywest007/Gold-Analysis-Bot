@@ -47,6 +47,39 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(volumes, [10.0, 20.0, 40.0])
         self.assertEqual(timestamps, [1.0, 2.0, 4.0])
 
+    def test_higher_timeframe_aggregation_discards_partial_utc_buckets(self):
+        data = market_data.OHLCVData(
+            opens=list(range(100, 109)),
+            highs=list(range(101, 110)),
+            lows=list(range(99, 108)),
+            closes=list(range(100, 109)),
+            volumes=[1.0] * 9,
+            timestamps=[3600 * i for i in range(1, 10)],
+        )
+
+        result = market_data._aggregate_bars(data, 4)
+
+        # 01:00–04:00 is a partial UTC bucket, and the final bucket is also
+        # incomplete, so neither may be treated as H4.
+        self.assertEqual(result.timestamps, [14400.0])
+        self.assertEqual(result.opens, [103])
+        self.assertEqual(result.closes, [106])
+
+    def test_liquidity_sweep_uses_the_prior_range(self):
+        from src.analysis import institutional
+
+        highs = [100.0] * 20 + [105.0]
+        lows = [99.0] * 20 + [95.0]
+        closes = [99.5] * 20 + [100.5]
+        opens = [99.5] * 21
+
+        smc = institutional._smc(
+            opens, highs, lows, closes, [100.0] * 21, 1.0,
+            {"trend": "RANGING", "choch": "NONE"},
+        )
+
+        self.assertEqual(smc["liquidity_sweep"], "BULLISH")
+
     def test_spot_source_selection_accepts_swissquote_when_goldapi_fails(self):
         self.assertEqual(
             market_data._first_valid_spot([RuntimeError("down"), 4455.25]),

@@ -115,7 +115,7 @@ _MARKET_REFRESH_COMMANDS = frozenset(
 )
 
 
-def _invalidate_refresh_market_data(command: str, timeframe: str) -> None:
+def _invalidate_refresh_market_data(command: str, timeframe: str = "all") -> None:
     """Refresh the selected candle set without discarding all context data."""
     from src.analysis.market_data import invalidate_cache, invalidate_price_cache
 
@@ -336,6 +336,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
                 analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                 a = await analyze(tf, mode=analysis_mode)
+                if getattr(a, "is_simulated", False):
+                    await query.edit_message_text(
+                        "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                        "Market data could not be fetched. The chart analysis is "
+                        "based on simulated prices and is <b>not reliable</b>.",
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
+                    return
                 await query.edit_message_text(
                     pro_analysis_card(a), parse_mode="HTML", reply_markup=kb
                 )
@@ -372,6 +381,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Scanning for a trade setup...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
+                    if getattr(a, "is_simulated", False):
+                        await query.edit_message_text(
+                            "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                            "Market data could not be fetched. This signal is "
+                            "based on simulated prices and is <b>not reliable</b>.",
+                            parse_mode="HTML",
+                            reply_markup=kb,
+                        )
+                        return
                     await query.edit_message_text(
                         signal_card(a), parse_mode="HTML", reply_markup=kb
                     )
@@ -380,6 +398,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Assessing the trend...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
+                    if getattr(a, "is_simulated", False):
+                        await query.edit_message_text(
+                            "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                            "Market data could not be fetched. Trend information is "
+                            "not reliable until live OHLCV returns.",
+                            parse_mode="HTML",
+                            reply_markup=kb,
+                        )
+                        return
                     await query.edit_message_text(
                         trend_card(a), parse_mode="HTML", reply_markup=kb
                     )
@@ -388,6 +415,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Calculating key levels...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
+                    if getattr(a, "is_simulated", False):
+                        await query.edit_message_text(
+                            "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                            "Market data could not be fetched. Key levels are "
+                            "not reliable until live OHLCV returns.",
+                            parse_mode="HTML",
+                            reply_markup=kb,
+                        )
+                        return
                     await query.edit_message_text(
                         levels_card(a), parse_mode="HTML", reply_markup=kb
                     )
@@ -396,6 +432,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text("Generating the market outlook...", reply_markup=kb)
                     analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
                     a = await analyze(tf, mode=analysis_mode)
+                    if getattr(a, "is_simulated", False):
+                        await query.edit_message_text(
+                            "⚠️ <b>DATA UNAVAILABLE</b>\n"
+                            "Market data could not be fetched. The outlook is "
+                            "not reliable until live OHLCV returns.",
+                            parse_mode="HTML",
+                            reply_markup=kb,
+                        )
+                        return
                     await query.edit_message_text(
                         outlook_card(a), parse_mode="HTML", reply_markup=kb
                     )

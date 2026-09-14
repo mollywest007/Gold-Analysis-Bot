@@ -9,3 +9,4 @@
 - [Institutional Price-Action Framework](gold-bot-institutional-framework.md) — trade bias is gated by six price-action layers and strict Daily→H4→H1→M15 alignment
 - [Alert Scan Ownership](gold-bot-alert-scan-ownership.md) — production alert scans are account-scoped; legacy no-account helpers must not inspect another account's trades
 - [Gold Bot Analysis Layout](gold-bot-analysis-layout.md) — decision summary comes first; strict confirmation and early provisional plans stay visibly separate
+- [Gold Bot Market Data Integrity](gold-bot-market-data-integrity.md) — aggregate only complete UTC candles and compare liquidity sweeps with the prior range

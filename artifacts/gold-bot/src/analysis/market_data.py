@@ -129,16 +129,37 @@ def _aligned_ohlcv_rows(quote: dict, raw_timestamps: list) -> tuple:
 
 
 def _aggregate_bars(data: "OHLCVData", step: int) -> "OHLCVData":
+    """Aggregate complete provider bars on stable UTC candle boundaries."""
     n    = len(data.closes)
     opens, highs, lows, closes, volumes, timestamps = [], [], [], [], [], []
-    for i in range(0, n - step + 1, step):
-        opens.append(data.opens[i])
-        highs.append(max(data.highs[i:i + step]))
-        lows.append(min(data.lows[i:i + step]))
-        closes.append(data.closes[i + step - 1])
-        volumes.append(sum(v for v in data.volumes[i:i + step] if v))
-        if data.timestamps:
-            timestamps.append(data.timestamps[i])
+    if data.timestamps and len(data.timestamps) == n:
+        bucket_seconds = step * 60 if step == 3 else step * 3600
+        groups = []
+        current_key = None
+        for i, timestamp in enumerate(data.timestamps):
+            seconds = int(float(timestamp))
+            key = seconds - seconds % bucket_seconds
+            if key != current_key:
+                groups.append([])
+                current_key = key
+            groups[-1].append(i)
+        for indices in groups:
+            if len(indices) != step:
+                continue
+            first, last = indices[0], indices[-1]
+            opens.append(data.opens[first])
+            highs.append(max(data.highs[i] for i in indices))
+            lows.append(min(data.lows[i] for i in indices))
+            closes.append(data.closes[last])
+            volumes.append(sum(data.volumes[i] for i in indices if data.volumes[i]))
+            timestamps.append(float(data.timestamps[first]))
+    else:
+        for i in range(0, n - step + 1, step):
+            opens.append(data.opens[i])
+            highs.append(max(data.highs[i:i + step]))
+            lows.append(min(data.lows[i:i + step]))
+            closes.append(data.closes[i + step - 1])
+            volumes.append(sum(v for v in data.volumes[i:i + step] if v))
     result              = OHLCVData(opens, highs, lows, closes, volumes,
                                     is_simulated=data.is_simulated,
                                     timestamps=timestamps)

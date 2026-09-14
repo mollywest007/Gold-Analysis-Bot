@@ -2674,16 +2674,18 @@ def _apply_multi_timeframe_consensus(
     """Apply the strict Daily → H4 → H1 → M15 rule to one report."""
     analyses = multi_timeframe.get("analyses", {})
     framework_order = ("D1", "H4", "H1", "M15")
-    directions = [
-        (analyses[tf].institutional_report or {}).get("direction", "WAIT")
+    directions_by_tf = {
+        tf: (analyses[tf].institutional_report or {}).get("direction", "WAIT")
         for tf in framework_order
         if tf in analyses
-    ]
-    scores = [
-        analyses[tf].confidence_score
+    }
+    scores_by_tf = {
+        tf: analyses[tf].confidence_score
         for tf in framework_order
         if tf in analyses
-    ]
+    }
+    directions = [directions_by_tf.get(tf, "NO DATA") for tf in framework_order]
+    scores = [scores_by_tf.get(tf, 0) for tf in framework_order]
     final_direction = multi_timeframe.get("final_direction", "WAIT")
     aligned = (
         len(directions) == len(framework_order)
@@ -2695,8 +2697,8 @@ def _apply_multi_timeframe_consensus(
     report = analysis.institutional_report or {}
     report["multi_timeframe"] = {
         "framework_order": list(framework_order),
-        "directions": dict(zip(framework_order, directions)),
-        "scores": dict(zip(framework_order, scores)),
+        "directions": directions_by_tf,
+        "scores": scores_by_tf,
         "aligned": aligned,
         "final_direction": final_direction if aligned else "WAIT",
         "consensus_score": int(multi_timeframe.get("confidence_score", 0) or 0),
@@ -2716,8 +2718,8 @@ def _apply_multi_timeframe_consensus(
         analysis.combined_direction = "WAIT"
         analysis.win_probability = 0
         direction_text = ", ".join(
-            f"{tf}={directions[index] if index < len(directions) else 'NO DATA'}"
-            for index, tf in enumerate(framework_order)
+            f"{tf}={directions_by_tf.get(tf, 'NO DATA')}"
+            for tf in framework_order
         )
         analysis.wait_reason = (
             "Multi-timeframe consensus WAIT — "

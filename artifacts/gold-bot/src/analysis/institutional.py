@@ -321,8 +321,12 @@ def _levels(highs, lows, closes, price) -> dict[str, Any]:
 
 
 def _smc(opens, highs, lows, closes, volumes, atr, structure) -> dict[str, Any]:
-    recent_high = max(highs[-20:]) if len(highs) >= 20 else max(highs)
-    recent_low = min(lows[-20:]) if len(lows) >= 20 else min(lows)
+    # Compare the latest wick with the preceding range. Including the current
+    # candle makes a strict sweep test impossible.
+    prior_highs = highs[-21:-1] if len(highs) >= 21 else highs[:-1]
+    prior_lows = lows[-21:-1] if len(lows) >= 21 else lows[:-1]
+    recent_high = max(prior_highs) if prior_highs else max(highs)
+    recent_low = min(prior_lows) if prior_lows else min(lows)
     last = closes[-1]
     equal_highs = len(highs) >= 4 and abs(max(highs[-4:]) - sorted(highs[-4:])[-2]) <= atr * .25
     equal_lows = len(lows) >= 4 and abs(min(lows[-4:]) - sorted(lows[-4:])[1]) <= atr * .25
