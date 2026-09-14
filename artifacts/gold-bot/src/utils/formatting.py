@@ -1274,6 +1274,30 @@ def _reference_analysis_card(
         f"                {layer_2}",
         "",
         "──────────────────────────────────",
+        "  STRICT CONFIRMED ENTRY",
+        "──────────────────────────────────",
+    ]
+    if strict_ready:
+        lines += [
+            f"  Status      : CONFIRMED {action}",
+            "  Gate        : PASSED — strict confirmation complete",
+            f"  Entry       : {fmt_price(a.entry)}",
+            f"  Stop Loss   : {fmt_price(a.stop_loss)}",
+            f"  TP1 / TP2   : {fmt_price(a.tp1)} / {fmt_price(a.tp2)}",
+            f"  TP3 / R:R   : {fmt_price(a.tp3)} / 1:{a.rr_ratio}",
+            "  Trade state : ACTIVE PLAN",
+        ]
+    else:
+        lines += [
+            "  Status      : WAITING — no confirmed entry",
+            f"  Gate        : {strict_reason}",
+            f"  Reason      : {engine_reason[:110]}",
+            "  Trade state : NO ACTIVE TRADE",
+        ]
+
+    lines += [
+        "",
+        "──────────────────────────────────",
         "  EARLY ENTRY WATCH",
         "──────────────────────────────────",
         "  This section is separate from strict confirmation.",
@@ -1335,27 +1359,7 @@ def _reference_analysis_card(
         f"  S1          : {fmt_price(a.support1)}",
         f"  S2          : {fmt_price(a.support2)}",
         f"  ATR(14)     : {fmt_price(a.atr)}",
-        "",
-        "──────────────────────────────────",
-        "  STRICT CONFIRMED ENTRY",
-        "──────────────────────────────────",
     ]
-    if strict_ready:
-        lines += [
-            f"  Status      : CONFIRMED {action}",
-            f"  Entry       : {fmt_price(a.entry)}",
-            f"  Stop Loss   : {fmt_price(a.stop_loss)}",
-            f"  TP1 / TP2   : {fmt_price(a.tp1)} / {fmt_price(a.tp2)}",
-            f"  TP3 / R:R   : {fmt_price(a.tp3)} / 1:{a.rr_ratio}",
-            "  Trade state : ACTIVE PLAN",
-        ]
-    else:
-        lines += [
-            "  Status      : WAITING — no confirmed entry is available",
-            f"  Reason      : {engine_reason[:110]}",
-            f"  Strict gate : {strict_reason}",
-            "  Trade state : NO ACTIVE TRADE",
-        ]
 
     if not ms["is_open"]:
         lines += ["", f"  ! {ms['status_text']} — {ms['note']}"]
