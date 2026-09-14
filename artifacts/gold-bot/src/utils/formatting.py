@@ -545,47 +545,6 @@ def _indicator_rows(a: MarketAnalysis) -> str:
     return "\n".join(rows)
 
 
-def _compact_indicator_lines(a: MarketAnalysis) -> list[str]:
-    """Render the indicator panel in the compact order used by the phone view."""
-    rows = [
-        "",
-        "──────────────────────────────────",
-        "  INDICATORS",
-        "──────────────────────────────────",
-    ]
-    indicator_rows = _indicator_rows(a).splitlines()
-    if indicator_rows:
-        rows.extend(indicator_rows)
-    else:
-        rows.append("  No indicator snapshot returned")
-    rows.extend(
-        [
-            f"  MACD Hist : {getattr(a, 'macd_hist', 0.0):+.3f}",
-            f"  +DI / -DI : {getattr(a, 'plus_di', 0.0):.1f} / "
-            f"{getattr(a, 'minus_di', 0.0):.1f}",
-            f"  Stoch K/D : {getattr(a, 'stoch_k_val', 0.0):.1f} / "
-            f"{getattr(a, 'stoch_d_val', 0.0):.1f}",
-            f"  BB %B     : {getattr(a, 'bb_pct', 0.0):.1f}%",
-            f"  Williams%R: {getattr(a, 'willr_value', -50.0):.1f}"
-            + (
-                f"  ← {getattr(a, 'willr_caution', '')}"
-                if getattr(a, "willr_caution", "")
-                else ""
-            ),
-            f"  Supertrend: "
-            f"{'BUY (▲ bullish)' if getattr(a, 'supertrend_direction', '') == 'BUY' else ('SELL (▼ bearish)' if getattr(a, 'supertrend_direction', '') == 'SELL' else 'neutral')}",
-            f"  CCI(20)   : {getattr(a, 'cci_value', 0.0):.0f}",
-            f"  VWAP      : {getattr(a, 'vwap', 0.0):,.2f}  "
-            f"Price {'>' if a.price > getattr(a, 'vwap', a.price) else '<'} VWAP",
-            f"  BB BW     : {getattr(a, 'bb_bandwidth', 0.0):.2f}%  "
-            f"Regime: {getattr(a, 'market_regime', 'NORMAL')}",
-            f"  Votes     : BUY {getattr(a, 'buy_votes', 0)}/8  "
-            f"SELL {getattr(a, 'sell_votes', 0)}/8",
-        ]
-    )
-    return rows
-
-
 # ─── SIGNAL CARD ──────────────────────────────────────────────────────────────
 
 def _kill_zone_line(a: MarketAnalysis) -> str:
@@ -1277,6 +1236,38 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
     institutional_report = getattr(a, "institutional_report", {}) or {}
     framework_scores = institutional_report.get("score_breakdown", {}) or {}
     multi_timeframe = institutional_report.get("multi_timeframe", {}) or {}
+    direction = getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    matching_votes = (
+        getattr(a, "buy_votes", 0)
+        if direction == "BUY"
+        else getattr(a, "sell_votes", 0)
+    )
+    evidence = []
+    if matching_votes >= 2:
+        evidence.append(f"{direction} votes {matching_votes}")
+    if float(getattr(a, "adx", 0.0) or 0.0) >= 18:
+        evidence.append(f"ADX {float(a.adx):.1f}")
+    if getattr(a, "choch", "NONE") != "NONE":
+        evidence.append(str(a.choch).replace("_", " "))
+    if getattr(a, "bos", "NONE") in ("BULLISH_BOS", "BEARISH_BOS"):
+        evidence.append(str(a.bos).replace("_", " "))
+    early_watch_ready = (
+        direction in ("BUY", "SELL") and score >= 55 and bool(evidence)
+    )
+    early_grade = (
+        getattr(a, "setup_quality", "")
+        or getattr(a, "setup_grade", "")
+        or "WAIT"
+    )
+    if direction in ("BUY", "SELL"):
+        early_status = "WATCH READY" if early_watch_ready else "Awaiting confirmation"
+        early_analysis = ", ".join(evidence) if evidence else "Directional evidence remains inconclusive."
+        early_decision = "For manual review only; this does not constitute an active trade."
+    else:
+        early_status = "NO EARLY DIRECTION"
+        early_analysis = "Liquidity confirmation not confirmed."
+        early_decision = "No early watch; wait for directional evidence."
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  FULL ANALYSIS         ║",
@@ -1285,8 +1276,6 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  Price     : {fmt_price(a.price)}",
         f"  Timeframe : {a.timeframe}   {_mkt_line()}",
         f"  Session   : {a.session or 'N/A'}",
-        *_decision_summary_lines(a),
-        *_entry_paths_lines(a),
         "",
         "──────────────────────────────────",
         "  MARKET STRUCTURE",
@@ -1300,7 +1289,7 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"  ADX       : {a.adx:.1f}",
         "",
         "──────────────────────────────────",
-        "  INSTITUTIONAL EVIDENCE",
+        "  INSTITUTIONAL SCORE",
         "──────────────────────────────────",
         f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
         f"  Maximum   : 100/100",
@@ -1316,6 +1305,24 @@ def _legacy_analysis_card(a: MarketAnalysis, account_id: int | None = None) -> s
         f"              OB {framework_scores.get('order_block_reaction', 0)}/15 | "
         f"FVG {framework_scores.get('fair_value_gap_confirmation', 0)}/10 | "
         f"C {framework_scores.get('candlestick_confirmation', 0)}/5",
+        "",
+        "──────────────────────────────────",
+        "  EARLY ENTRY WATCH",
+        "──────────────────────────────────",
+        "  Separate from strict confirmation.",
+        f"  Status    : {early_status}",
+        f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        f"  Analysis  : {early_analysis}",
+        f"  Decision  : {early_decision}",
+        *(
+            [
+                f"  INDICATION: {direction} (not confirmed)",
+                f"  Setup Grade: {early_grade}",
+                f"  Confidence: {getattr(a, 'confidence', 0)}%",
+            ]
+            if direction in ("BUY", "SELL")
+            else []
+        ),
         "",
         "──────────────────────────────────",
         "  INDICATORS",
@@ -2023,10 +2030,7 @@ def analysis_card(a: MarketAnalysis, account_id: int | None = None) -> str:
     the trade.  Detailed indicator output stays available without competing
     with the decision at the top of the message.
     """
-    # Keep the familiar board order used before the recent redesign.  The
-    # legacy renderer below is the same information architecture, with only
-    # the readability improvements applied above.
-    return _reference_analysis_card(a, account_id)
+    return _legacy_analysis_card(a, account_id)
 
     ms = market_status()
     report = getattr(a, "institutional_report", {}) or {}
@@ -2234,10 +2238,7 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
     Shows everything the engine computed so the user understands
     the market before seeing any entry.
     """
-    # The full-analysis command is the primary Telegram analysis surface.
-    # Keep it on the same screenshot-based board as /analyze so the two
-    # commands cannot drift into different layouts.
-    return _reference_analysis_card(a)
+    return _legacy_analysis_card(a)
 
     ms  = market_status()
     mkt = "LIVE" if ms["is_open"] else ms["status_text"]
