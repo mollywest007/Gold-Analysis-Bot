@@ -545,6 +545,47 @@ def _indicator_rows(a: MarketAnalysis) -> str:
     return "\n".join(rows)
 
 
+def _compact_indicator_lines(a: MarketAnalysis) -> list[str]:
+    """Render the indicator panel in the compact order used by the phone view."""
+    rows = [
+        "",
+        "──────────────────────────────────",
+        "  INDICATORS",
+        "──────────────────────────────────",
+    ]
+    indicator_rows = _indicator_rows(a).splitlines()
+    if indicator_rows:
+        rows.extend(indicator_rows)
+    else:
+        rows.append("  No indicator snapshot returned")
+    rows.extend(
+        [
+            f"  MACD Hist : {getattr(a, 'macd_hist', 0.0):+.3f}",
+            f"  +DI / -DI : {getattr(a, 'plus_di', 0.0):.1f} / "
+            f"{getattr(a, 'minus_di', 0.0):.1f}",
+            f"  Stoch K/D : {getattr(a, 'stoch_k_val', 0.0):.1f} / "
+            f"{getattr(a, 'stoch_d_val', 0.0):.1f}",
+            f"  BB %B     : {getattr(a, 'bb_pct', 0.0):.1f}%",
+            f"  Williams%R: {getattr(a, 'willr_value', -50.0):.1f}"
+            + (
+                f"  ← {getattr(a, 'willr_caution', '')}"
+                if getattr(a, "willr_caution", "")
+                else ""
+            ),
+            f"  Supertrend: "
+            f"{'BUY (▲ bullish)' if getattr(a, 'supertrend_direction', '') == 'BUY' else ('SELL (▼ bearish)' if getattr(a, 'supertrend_direction', '') == 'SELL' else 'neutral')}",
+            f"  CCI(20)   : {getattr(a, 'cci_value', 0.0):.0f}",
+            f"  VWAP      : {getattr(a, 'vwap', 0.0):,.2f}  "
+            f"Price {'>' if a.price > getattr(a, 'vwap', a.price) else '<'} VWAP",
+            f"  BB BW     : {getattr(a, 'bb_bandwidth', 0.0):.2f}%  "
+            f"Regime: {getattr(a, 'market_regime', 'NORMAL')}",
+            f"  Votes     : BUY {getattr(a, 'buy_votes', 0)}/8  "
+            f"SELL {getattr(a, 'sell_votes', 0)}/8",
+        ]
+    )
+    return rows
+
+
 # ─── SIGNAL CARD ──────────────────────────────────────────────────────────────
 
 def _kill_zone_line(a: MarketAnalysis) -> str:
@@ -1665,6 +1706,16 @@ def _reference_analysis_card(
         or wait_detail
     )
 
+    early_status_display = (
+        "Awaiting confirmation"
+        if direction in ("BUY", "SELL") and not strict_ready
+        else early_status
+    )
+    setup_grade = (
+        getattr(a, "setup_quality", "")
+        or getattr(a, "setup_grade", "")
+        or "WAIT"
+    )
     lines = [
         "<pre>",
         "╔══════════════════════════════════╗",
@@ -1676,18 +1727,56 @@ def _reference_analysis_card(
         f"  Session      : {a.session or 'Not used'}",
         "",
         "──────────────────────────────────",
-        "  DECISION INPUTS",
+        "  MARKET STRUCTURE",
         "──────────────────────────────────",
-        f"  Institutional score : {score}/100",
-        f"  MTF consensus       : {consensus_score}/100 "
-        f"({'ALIGNED' if multi_timeframe.get('aligned', False) else 'WAITING'})",
-        f"  Bias / combined     : {report.get('direction', 'WAIT')} / "
-        f"{combined.get('direction', 'WAIT')}",
-        f"  Legacy layer        : {legacy.get('direction', 'WAIT')} "
+        f"  Structure : {_struct_label(a.market_structure)}",
+        f"  Trend     : {a.trend}",
+        f"  Momentum  : {a.momentum}",
+        f"  ADX       : {a.adx:.1f}",
+        "",
+        "──────────────────────────────────",
+        "  INSTITUTIONAL SCORE",
+        "──────────────────────────────────",
+        f"  Institutional: {score}/100",
+        "  Maximum   : 100/100",
+        f"  Bias      : {report.get('direction', 'WAIT')}",
+        f"  Legacy    : {legacy.get('direction', 'WAIT')} "
         f"({legacy.get('confirmation', 'NEUTRAL')})",
-        f"  MTF chain           : {_mtf_chain_text(multi_timeframe)}",
-        f"  Data quality        : {data_quality}",
-        f"  Framework points    : {layer_1} | {layer_2}",
+        f"  Legacy Conf.: {legacy.get('confidence', getattr(a, 'confidence', 0))}%",
+        f"  Combined  : {combined.get('direction', 'WAIT')}",
+        f"  MTF Chain : {_mtf_chain_text(multi_timeframe)}",
+        f"  Layers    : {layer_1} |",
+        f"              {layer_2}",
+        "",
+        "──────────────────────────────────",
+        "  EARLY ENTRY WATCH",
+        "──────────────────────────────────",
+        "  Separate from strict confirmation.",
+        f"  Status    : {early_status_display}",
+        f"  Direction : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
+        f"  Analysis  : {early_analysis}",
+        f"  Decision  : {early_decision}",
+        "  Strict    : WAITING for Daily → H4 → H1 → M15 alignment.",
+    ]
+    if direction in ("BUY", "SELL") and not strict_ready:
+        lines += [
+            f"  INDICATION: {direction} (not confirmed)",
+            "  Status    : Awaiting confirmation",
+            f"  Setup Grade: {setup_grade}",
+            f"  Confidence: {getattr(a, 'confidence', 0)}%",
+        ]
+    lines += [
+        *_compact_indicator_lines(a),
+        "",
+        "──────────────────────────────────",
+        "  KEY LEVELS",
+        "──────────────────────────────────",
+        f"  R2        : {fmt_price(a.resistance2)}",
+        f"  R1        : {fmt_price(a.resistance1)}",
+        f"  -- Price  : {fmt_price(a.price)}",
+        f"  S1        : {fmt_price(a.support1)}",
+        f"  S2        : {fmt_price(a.support2)}",
+        f"  ATR(14)   : {fmt_price(a.atr)}",
         "",
         "──────────────────────────────────",
         "  STRICT CONFIRMED ENTRY",
@@ -1698,29 +1787,19 @@ def _reference_analysis_card(
         *_strict_confirmation_lines(
             a, report, direction, data_is_real=data_is_real, strict_ready=strict_ready
         ),
-        *_path_plan_lines(a, entry=float(getattr(a, "entry", 0.0) or 0.0),
-                          label="STRICT CONFIRMED ENTRY"),
+        *_path_plan_lines(
+            a,
+            entry=float(getattr(a, "entry", 0.0) or 0.0),
+            label="STRICT CONFIRMED ENTRY",
+        ),
         "",
         "  Trade state         : ACTIVE PLAN"
         if strict_ready
         else "  Trade state         : NO ACTIVE TRADE",
         "",
         "──────────────────────────────────",
-        "  EARLY WATCH ENTRY",
+        "  EARLY WATCH DETAILS",
         "──────────────────────────────────",
-        f"  Status              : {early_status}",
-        f"  Direction           : {direction if direction in ('BUY', 'SELL') else 'WAIT'}",
-        *(
-            [
-                f"  INDICATION: {direction} (not confirmed)",
-                "  Status              : Awaiting confirmation",
-                f"  Setup Grade         : {getattr(a, 'setup_quality', 'WAIT') or getattr(a, 'setup_grade', 'WAIT')}",
-                f"  Confidence          : {getattr(a, 'confidence', 0)}%",
-            ]
-            if direction in ("BUY", "SELL") and not strict_ready
-            else []
-        ),
-        f"  Analysis            : {early_analysis}",
         *_path_market_data_lines(a, report, direction, section="EARLY WATCH ENTRY"),
         *_early_trigger_lines(
             a, report, direction, data_is_real=data_is_real, watch_ready=watch_ready
