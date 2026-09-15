@@ -1258,10 +1258,13 @@ async def _send_setup_forming_alert(
     )
     if not valid_stop:
         atr = _safe_float(getattr(a, "atr", 0.0), 0.0)
-        risk = max(atr * 2.0, abs(market_entry - stop_loss), 0.01)
+        # Analysis objects from the live engine normally include a stop. Keep
+        # the provisional card usable for partial/test objects without turning
+        # a missing stop into a multi-thousand-point synthetic risk.
+        fallback_risk = max(abs(market_entry) * 0.001, 0.01)
+        risk = max(atr * 2.0, fallback_risk)
         stop_loss = provisional_entry - risk if forming_dir == "BUY" else provisional_entry + risk
-    base_risk = abs(market_entry - _safe_float(getattr(a, "stop_loss", 0.0), 0.0))
-    base_risk = max(base_risk, abs(provisional_entry - stop_loss), 0.01)
+    base_risk = max(abs(provisional_entry - stop_loss), 0.01)
 
     def _target_or_default(value: float, multiple: float) -> float:
         valid = (
@@ -1277,11 +1280,11 @@ async def _send_setup_forming_alert(
     tp3 = _target_or_default(tp3, 3.5)
 
     if early_entry_watch:
-        alert_title = "⚠️  PROVISIONAL EARLY ENTRY"
+        alert_title = "⚠️  PROVISIONAL EARLY ENTRY  (SETUP FORMING)"
         if early_entry and early_entry != price:
-            watch_line = f"  Entry zone : {provisional_entry:,.2f}  (limit)\n"
+            watch_line = f"  Watch limit : {provisional_entry:,.2f}\n"
         elif ote_low and ote_high:
-            watch_line = f"  Entry zone : {ote_low:,.2f} – {ote_high:,.2f}\n"
+            watch_line = f"  Watch OTE   : {ote_low:,.2f} – {ote_high:,.2f}\n"
         else:
             watch_line = f"  Entry      : {provisional_entry:,.2f}\n"
         plan_lines = (
@@ -2562,146 +2565,6 @@ async def _check_and_alert_once(
                     f"[{tf}] No early-entry criteria — "
                     "waiting for balanced setup confirmation."
                 )
-            continue
-            if False:  # legacy block retained only until the next cleanup pass
-                forming_dir = None
-                early_warning = False
-                early_entry = False
-                institutional_report = getattr(a, "institutional_report", {}) or {}
-                institutional_structure = institutional_report.get(
-                    "market_structure", {}
-                ) or {}
-                institutional_smc = institutional_report.get("smc", {}) or {}
-                if a.buy_votes >= 3 and a.buy_votes > a.sell_votes and a.adx >= 15:
-                    forming_dir = "BUY"
-                elif a.sell_votes >= 3 and a.sell_votes > a.buy_votes and a.adx >= 15:
-                    forming_dir = "SELL"
-                elif (
-                    # M15 early-warning path: do not weaken the confirmed
-                    # signal gate, but warn when bearish HTF structure and
-                    # two key bearish indicators are present. This catches
-                    # fast moves like EMA/candle deterioration before ADX and
-                    # the full vote count catch up.
-                    tf == "M15"
-                    and getattr(a, "htf_bias", "Neutral") == "Bearish"
-                    and a.sell_votes >= 2
-                    and a.sell_votes >= a.buy_votes
-                    and a.adx >= 10
-                    and any(
-                        ind.name in {"EMA Stack", "Candle"}
-                        and ind.signal == "SELL"
-                        for ind in a.indicators
-                    )
-                ):
-                    forming_dir = "SELL"
-                    early_warning = True
-                elif (
-                    # Institutional early-warning path: a fast structural move
-                    # can be actionable to watch even when legacy indicators
-                    # are tied or lagging.
-                    tf == "M15"
-                    and getattr(a, "htf_bias", "Neutral") == "Bearish"
-                    and a.adx >= 10
-                    and (
-                        institutional_structure.get("bos") == "BEARISH_BOS"
-                        or institutional_structure.get("mss") == "BEARISH_MSS"
-                    )
-                    and institutional_smc.get("fair_value_gap") == "BEARISH"
-                ):
-                    forming_dir = "SELL"
-                    early_warning = True
-                elif (
-                    # Symmetric M15 early-warning path for bullish setups.
-                    # Confirmed BUY gating remains unchanged.
-                    tf == "M15"
-                    and getattr(a, "htf_bias", "Neutral") == "Bullish"
-                    and a.buy_votes >= 2
-                    and a.buy_votes >= a.sell_votes
-                    and a.adx >= 10
-                    and any(
-                        ind.name in {"EMA Stack", "Candle"}
-                        and ind.signal == "BUY"
-                        for ind in a.indicators
-                    )
-                ):
-                    forming_dir = "BUY"
-                    early_warning = True
-                elif (
-                    # Symmetric institutional early-warning path for a bullish
-                    # structural move before the legacy vote catches up.
-                    tf == "M15"
-                    and getattr(a, "htf_bias", "Neutral") == "Bullish"
-                    and a.adx >= 10
-                    and (
-                        institutional_structure.get("bos") == "BULLISH_BOS"
-                        or institutional_structure.get("mss") == "BULLISH_MSS"
-                    )
-                    and institutional_smc.get("fair_value_gap") == "BULLISH"
-                ):
-                    forming_dir = "BUY"
-                    early_warning = True
-                elif (
-                    # Generic early-entry watch for every configured timeframe
-                    # and mode. This is deliberately separate from the strict
-                    # action gate: it informs the trader about a directional
-                    # setup without opening a trade or consuming the strict
-                    # signal lock.
-                    getattr(a, "directional_indication", "NEUTRAL")
-                    in ("BUY", "SELL")
-                    and getattr(a, "confidence_score", 0) >= 55
-                    and (
-                        (
-                            getattr(a, "directional_indication", "") == "BUY"
-                            and a.buy_votes >= 2
-                        )
-                        or (
-                            getattr(a, "directional_indication", "") == "SELL"
-                            and a.sell_votes >= 2
-                        )
-                        or getattr(a, "adx", 0) >= 18
-                        or getattr(a, "choch", "NONE") != "NONE"
-                        or getattr(a, "bos", "NONE")
-                        in ("BULLISH_BOS", "BEARISH_BOS")
-                    )
-                ):
-                    forming_dir = getattr(a, "directional_indication")
-                    early_entry = True
-                if forming_dir:
-                    active_trade = next(
-                        (
-                            t for t in _get_active_trades()
-                            if t.get("timeframe") == tf
-                            and (
-                                mode_name != COMBINED_MODE
-                                or t.get("mode") == analysis_mode
-                            )
-                            and t.get("direction") != forming_dir
-                        ),
-                        None,
-                    )
-                    if active_trade:
-                        # An opposing pre-signal is still actionable
-                        # information even though it cannot open a second
-                        # trade. Warn before the full signal is confirmed.
-                        await _send_momentum_shift_warning(
-                            bot, subs, active_trade, tf, forming_dir,
-                            confirmed=False,
-                            state=state,
-                            lock_key=state_key,
-                            stream_label=stream_label,
-                        )
-                    elif not active_signal.get(state_key):
-                        await _send_setup_forming_alert(
-                            bot, subs, a, tf, forming_dir,
-                            state=state,
-                            lock_key=state_key,
-                            stream_label=stream_label,
-                            early_warning=early_warning,
-                            early_entry_watch=early_entry,
-                        )
-                else:
-                    # Direction collapsed — reset forming state so next build-up fires fresh
-                    forming_alert_sent.pop(state_key, None)
             continue
 
         # Full signal fired — reset the forming-alert state for this TF
