@@ -22,7 +22,7 @@ from src.user_preferences import (
     get_mode_config as get_user_mode_config,
     get_timeframe as get_user_timeframe,
 )
-from src.utils.formatting import entry_card
+from src.utils.formatting import early_entry_card
 from src import trade_tracker
 from src.image_gen import generate_result_image
 
@@ -46,6 +46,12 @@ _tf_last_fired: Dict[str, float] = {}
 # scan cannot send the same entry before the persistent lock is written.
 _pending_signal: Dict[str, str] = {}
 _scan_lock = asyncio.Lock()
+# Early-entry watch state is separate from confirmed trade locks.  A
+# provisional alert must never claim a timeframe or create an active trade.
+_forming_alert_sent: Dict[str, str] = {}
+_forming_alert_last_sent: Dict[str, float] = {}
+_forming_alert_message_ids: Dict[str, Dict[str, int]] = {}
+FORMING_ALERT_RETRY_SECONDS = 15 * 60
 # Post-SL cooldown — after a loss, block re-entry on that TF for 2 candle periods.
 # Prevents the bot spamming re-entries every 15s in volatile/choppy conditions.
 # Structure: { "M15": <timestamp when cooldown expires> }
@@ -181,6 +187,77 @@ def _stream_alert_label(mode: str | None) -> str:
     return ""
 
 
+def _balanced_early_direction(a, analysis_mode: str) -> str:
+    """Return a direction when the balanced Scalp early-entry gate passes."""
+    if analysis_mode != "scalp":
+        return ""
+    if getattr(a, "is_simulated", False):
+        return ""
+
+    report = getattr(a, "institutional_report", {}) or {}
+    if report.get("data_quality", "REAL_OHLCV") != "REAL_OHLCV":
+        return ""
+
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    if score < 55:
+        return ""
+
+    legacy_confirmation = str(
+        getattr(a, "legacy_confirmation", "")
+        or (report.get("legacy", {}) or {}).get("confirmation", "NEUTRAL")
+    ).upper()
+    if legacy_confirmation == "CONFLICT":
+        return ""
+
+    rr_ratio = _safe_float(getattr(a, "rr_ratio", 0.0), 0.0)
+    if rr_ratio < 1.5:
+        return ""
+
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    legacy_direction = str(
+        getattr(a, "legacy_direction", "")
+        or (report.get("legacy", {}) or {}).get("direction", "")
+        or getattr(a, "directional_indication", "")
+    ).upper()
+    if legacy_direction not in ("BUY", "SELL"):
+        if buy_votes >= 2 and buy_votes > sell_votes:
+            legacy_direction = "BUY"
+        elif sell_votes >= 2 and sell_votes > buy_votes:
+            legacy_direction = "SELL"
+        else:
+            return ""
+
+    aligned_votes = buy_votes if legacy_direction == "BUY" else sell_votes
+    if aligned_votes < 2:
+        return ""
+
+    structure = report.get("market_structure", {}) or {}
+    bos = str(structure.get("bos", getattr(a, "bos", "NONE")) or "NONE")
+    choch = str(structure.get("choch", getattr(a, "choch", "NONE")) or "NONE")
+    aligned_structure = (
+        legacy_direction == "BUY"
+        and (bos == "BULLISH_BOS" or choch == "BULLISH_CHOCH")
+    ) or (
+        legacy_direction == "SELL"
+        and (bos == "BEARISH_BOS" or choch == "BEARISH_CHOCH")
+    )
+    adx = _safe_float(getattr(a, "adx", 0.0), 0.0)
+    if adx < 18 and not aligned_structure:
+        return ""
+
+    institutional_direction = str(
+        report.get("direction", getattr(a, "institutional_direction", "WAIT"))
+        or "WAIT"
+    ).upper()
+    if (
+        institutional_direction in ("BUY", "SELL")
+        and institutional_direction != legacy_direction
+    ):
+        return ""
+    return legacy_direction
+
+
 def _combined_timeframes_from_state(value: str) -> dict[str, str]:
     """Parse the persisted combined-mode timeframe summary."""
     result = {}
@@ -240,6 +317,9 @@ class AccountAlertState:
     tp_reanalysis_until: Dict[str, float] = field(default_factory=dict)
     tp_reanalysis_start_sent: Dict[str, bool] = field(default_factory=dict)
     momentum_shift_warned: Dict[str, str] = field(default_factory=dict)
+    forming_alert_sent: Dict[str, str] = field(default_factory=dict)
+    forming_alert_last_sent: Dict[str, float] = field(default_factory=dict)
+    forming_alert_message_ids: Dict[str, Dict[str, int]] = field(default_factory=dict)
     reminded_trade_ids: Dict[str, Set[str]] = field(default_factory=dict)
     mode: str = ""
     timeframe: str = ""
@@ -263,6 +343,13 @@ def _state_from_record(record: dict) -> AccountAlertState:
             for key, value in (record.get("tp_reanalysis_start_sent") or {}).items()
         },
         momentum_shift_warned=dict(record.get("momentum_shift_warned") or {}),
+        forming_alert_sent=dict(record.get("forming_alert_sent") or {}),
+        forming_alert_last_sent=dict(record.get("forming_alert_last_sent") or {}),
+        forming_alert_message_ids={
+            str(key): dict(value or {})
+            for key, value in (record.get("forming_alert_message_ids") or {}).items()
+            if isinstance(value, dict)
+        },
         reminded_trade_ids={
             str(trade_id): set(milestones or [])
             for trade_id, milestones in reminded.items()
@@ -285,6 +372,9 @@ def _state_record(state: AccountAlertState) -> dict:
         "tp_reanalysis_until": state.tp_reanalysis_until,
         "tp_reanalysis_start_sent": state.tp_reanalysis_start_sent,
         "momentum_shift_warned": state.momentum_shift_warned,
+        "forming_alert_sent": state.forming_alert_sent,
+        "forming_alert_last_sent": state.forming_alert_last_sent,
+        "forming_alert_message_ids": state.forming_alert_message_ids,
         "reminded_trade_ids": {
             trade_id: sorted(milestones)
             for trade_id, milestones in state.reminded_trade_ids.items()
@@ -906,6 +996,9 @@ async def _advance_tp_reanalysis(
         (state.tf_last_fired if state else _tf_last_fired),
         (state.pending_signal if state else _pending_signal),
         (state.momentum_shift_warned if state else _momentum_shift_warned),
+        (state.forming_alert_sent if state else _forming_alert_sent),
+        (state.forming_alert_last_sent if state else _forming_alert_last_sent),
+        (state.forming_alert_message_ids if state else _forming_alert_message_ids),
         (state.sl_cooldown_until if state else _sl_cooldown_until),
         (state.tp_cooldown_until if state else _tp_cooldown_until),
         reanalysis_until,
@@ -1116,10 +1209,12 @@ async def _send_setup_forming_alert(
     early_warning: bool = False, early_entry_watch: bool = False,
 ) -> None:
     """
-    Retired compatibility hook. The bot has one actionable notification path:
-    a complete analysis produces BUY or SELL and the normal entry card is sent.
+    Send a provisional early-entry alert without claiming the timeframe.
+
+    This is intentionally separate from the confirmed entry path.  It gives
+    Scalp users an actionable heads-up while the stricter institutional gate
+    continues to evaluate the selected timeframe.
     """
-    return
     forming_alert_sent = state.forming_alert_sent if state else _forming_alert_sent
     forming_alert_last_sent = (
         state.forming_alert_last_sent if state else _forming_alert_last_sent
@@ -1140,7 +1235,6 @@ async def _send_setup_forming_alert(
     adx = getattr(a, "adx", 0.0)
     confidence = getattr(a, "confidence", 0)
     institutional_score = getattr(a, "confidence_score", 0)
-    htf_bias = getattr(a, "htf_bias", "Neutral")
     early_entry = getattr(a, "early_entry", 0.0) or getattr(a, "limit_entry", 0.0)
     ote_high = getattr(a, "ote_high", 0.0)
     ote_low = getattr(a, "ote_low", 0.0)
@@ -1236,7 +1330,8 @@ async def _send_setup_forming_alert(
         f"   Votes    : {votes}/8 core indicators agree\n"
         f"   ADX      : {adx:.1f}   Legacy conf: {confidence}%\n"
         f"   Institutional score: {institutional_score}/100\n"
-        f"   HTF      : {htf_bias}{kz_tag}\n"
+        f"   R:R      : 1:{_safe_float(getattr(a, 'rr_ratio', 0.0), 0.0):.1f}{kz_tag}\n"
+        f"   Evidence : selected timeframe only\n"
         f"{status_line}"
         f"{watch_line}"
         f"{plan_lines}"
@@ -1783,7 +1878,7 @@ async def _fire_signal(
 ) -> bool:
     """Broadcast a single-TF entry signal: entry card + live chart."""
     # 1. Send the entry card (same format as /recommend Part 2)
-    text = entry_card(a, alert_label=alert_label)
+    text = early_entry_card(a, alert_label=alert_label)
     dead, delivered = await _broadcast_text(
         bot, subs, text, return_result=True
     )
@@ -2002,6 +2097,7 @@ async def _check_and_alert_once(
         sl_cooldown_until = state.sl_cooldown_until
         tp_cooldown_until = state.tp_cooldown_until
         momentum_shift_warned = state.momentum_shift_warned
+        forming_alert_sent = state.forming_alert_sent
         _clear_orphaned_pending_claims(
             pending_signal,
             account_id=account_id,
@@ -2020,6 +2116,7 @@ async def _check_and_alert_once(
         sl_cooldown_until = _sl_cooldown_until
         tp_cooldown_until = _tp_cooldown_until
         momentum_shift_warned = _momentum_shift_warned
+        forming_alert_sent = _forming_alert_sent
 
     def _get_active_trades():
         return (
@@ -2411,13 +2508,59 @@ async def _check_and_alert_once(
                 )
                 continue
 
-            # A WAIT result is informational only. There is one actionable
-            # notification path: the complete analysis must produce BUY/SELL.
-            # Do not emit a separate notification or create a second waiting state.
-            if not active_signal.get(state_key):
+            # Balanced Scalp early-entry path.  This sends a provisional
+            # heads-up only; it does not claim the signal lock or create a
+            # trade.  The confirmed BUY/SELL path below remains unchanged.
+            if active_signal.get(state_key):
                 logger.info(
-                    f"[{tf}] No valid entry yet — complete analysis remains "
-                    "visible through the command cards."
+                    f"[{tf}] Early entry suppressed — an active signal already "
+                    "owns this timeframe."
+                )
+                continue
+
+            forming_dir = _balanced_early_direction(a, analysis_mode)
+            if forming_dir:
+                logger.info(
+                    f"[{tf}] Balanced early-entry criteria met — "
+                    f"{forming_dir} score={getattr(a, 'confidence_score', 0)}/100 "
+                    f"votes={'BUY' if forming_dir == 'BUY' else 'SELL'} "
+                    f"{getattr(a, 'buy_votes' if forming_dir == 'BUY' else 'sell_votes', 0)} "
+                    f"adx={getattr(a, 'adx', 0):.1f} "
+                    f"rr={getattr(a, 'rr_ratio', 0):.1f}"
+                )
+                active_trade = next(
+                    (
+                        t for t in _get_active_trades()
+                        if t.get("timeframe") == tf
+                        and (
+                            mode_name != COMBINED_MODE
+                            or t.get("mode") == analysis_mode
+                        )
+                        and t.get("direction") != forming_dir
+                    ),
+                    None,
+                )
+                if active_trade:
+                    await _send_momentum_shift_warning(
+                        bot, subs, active_trade, tf, forming_dir,
+                        confirmed=False,
+                        state=state,
+                        lock_key=state_key,
+                        stream_label=stream_label,
+                    )
+                else:
+                    await _send_setup_forming_alert(
+                        bot, subs, a, tf, forming_dir,
+                        state=state,
+                        lock_key=state_key,
+                        stream_label=stream_label,
+                        early_entry_watch=True,
+                    )
+            else:
+                forming_alert_sent.pop(state_key, None)
+                logger.info(
+                    f"[{tf}] No early-entry criteria — "
+                    "waiting for balanced setup confirmation."
                 )
             continue
             if False:  # legacy block retained only until the next cleanup pass

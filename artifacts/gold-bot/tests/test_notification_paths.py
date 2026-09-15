@@ -683,6 +683,17 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             setup_quality="FORMING",
             confidence=78,
             win_probability=0,
+            confidence_score=60,
+            rr_ratio=1.5,
+            legacy_direction="BUY",
+            directional_indication="NEUTRAL",
+            legacy_confirmation="NEUTRAL",
+            analysis_mode="scalp",
+            institutional_report={
+                "data_quality": "REAL_OHLCV",
+                "direction": "WAIT",
+                "legacy": {"direction": "BUY", "confirmation": "NEUTRAL"},
+            },
             is_simulated=False,
             buy_votes=4,
             sell_votes=2,
@@ -700,6 +711,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(alerts, "_sync_mode_state"), \
              patch.object(alerts, "get_mode_config", return_value=SimpleNamespace(
+                 name="scalp",
+                 preferred_timeframe="M15",
                  confluence_min_tfs=3,
              )), \
              patch.object(alerts, "get_scan_timeframes", return_value=["M15"]), \
@@ -1082,6 +1095,17 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             setup_quality="FORMING",
             confidence=78,
             win_probability=0,
+            confidence_score=60,
+            rr_ratio=1.5,
+            legacy_direction="BUY",
+            directional_indication="NEUTRAL",
+            legacy_confirmation="NEUTRAL",
+            analysis_mode="scalp",
+            institutional_report={
+                "data_quality": "REAL_OHLCV",
+                "direction": "WAIT",
+                "legacy": {"direction": "BUY", "confirmation": "NEUTRAL"},
+            },
             is_simulated=False,
             buy_votes=4,
             sell_votes=1,

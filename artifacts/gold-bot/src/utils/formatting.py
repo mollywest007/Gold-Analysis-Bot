@@ -2852,6 +2852,11 @@ def entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
     return safe_html("\n".join(lines))
 
 
+def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
+    """Compatibility name for the direct entry alert renderer."""
+    return entry_card(a, alert_label=alert_label)
+
+
 def no_entry_card(a: MarketAnalysis) -> str:
     """Shown when the complete analysis has not produced a valid setup."""
     lines = ["<pre>",
