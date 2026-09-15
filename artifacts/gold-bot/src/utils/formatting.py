@@ -441,6 +441,135 @@ def _mode_risk_line(a: MarketAnalysis = None) -> str:
     return f"  Risk Plan : {note}" if note else ""
 
 
+def _entry_confirmation_lines(
+    a: MarketAnalysis,
+    *,
+    compact: bool = False,
+) -> list[str]:
+    """Explain the live conditions still blocking an entry alert.
+
+    This is intentionally derived from the same fields used by the combined
+    decision and alert-quality gates.  It must not imply that a score alone
+    creates an entry.
+    """
+    report = getattr(a, "institutional_report", {}) or {}
+    institutional_direction = str(
+        report.get(
+            "direction",
+            getattr(a, "institutional_direction", "WAIT"),
+        )
+        or "WAIT"
+    ).upper()
+    action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    legacy = report.get("legacy", {}) or {}
+    legacy_confirmation = str(
+        legacy.get(
+            "confirmation",
+            getattr(a, "legacy_confirmation", "NEUTRAL"),
+        )
+        or "NEUTRAL"
+    ).upper()
+    data_is_real = (
+        not getattr(a, "is_simulated", False)
+        and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
+    )
+
+    reasons = [
+        str(reason).strip()
+        for reason in (
+            getattr(a, "reasons_against", None)
+            or report.get("reasons_against", [])
+            or []
+        )
+        if str(reason).strip()
+    ]
+    waiting_for: list[str] = []
+
+    if not data_is_real:
+        waiting_for.append("real market data")
+    if action not in ("BUY", "SELL"):
+        if institutional_direction not in ("BUY", "SELL"):
+            waiting_for.extend(reasons[:2])
+            if score < 60:
+                waiting_for.append(f"score to reach 60/100 (currently {score}/100)")
+            if not reasons:
+                waiting_for.append("a clear BUY or SELL direction")
+        elif score < 60:
+            waiting_for.append(f"score to reach 60/100 (currently {score}/100)")
+        if legacy_confirmation == "CONFLICT":
+            waiting_for.append("legacy indicators to stop conflicting")
+    else:
+        cfg = _mode_config_for_analysis(a)
+        grade = str(
+            getattr(a, "setup_quality", "")
+            or getattr(a, "setup_grade", "WAIT")
+            or "WAIT"
+        )
+        win_probability = int(getattr(a, "win_probability", 0) or 0)
+        choch = str(getattr(a, "choch", "") or "")
+        direction = action
+        choch_aligned = (
+            (direction == "BUY" and choch == "BULLISH_CHOCH")
+            or (direction == "SELL" and choch == "BEARISH_CHOCH")
+        )
+        standard_quality = (
+            win_probability >= cfg.alert_min_win_probability
+            and grade in cfg.alert_min_grades
+        )
+        institutional_lead_quality = (
+            legacy_confirmation == "NEUTRAL"
+            and score >= 60
+            and grade in cfg.alert_min_grades
+        )
+        choch_quality = (
+            choch_aligned
+            and win_probability >= max(50, cfg.alert_min_win_probability - 4)
+            and grade in (*cfg.alert_min_grades, "B")
+        )
+        if not (standard_quality or institutional_lead_quality or choch_quality):
+            waiting_for.append(
+                f"alert quality (grade {grade}, win {win_probability}%/"
+                f"{cfg.alert_min_win_probability}% minimum)"
+            )
+
+    # Keep the section readable and avoid repeating the same blocker.
+    deduped: list[str] = []
+    for item in waiting_for:
+        if item not in deduped:
+            deduped.append(item)
+    waiting_for = deduped[:3]
+
+    if action in ("BUY", "SELL") and not waiting_for:
+        status = f"✅ CONFIRMED {action} — alert checks passed"
+        waiting_text = "Nothing — entry confirmation is complete"
+    elif action in ("BUY", "SELL"):
+        status = f"⚠️ {action} found — alert gate not ready"
+        waiting_text = "; ".join(waiting_for) or "final alert checks"
+    else:
+        status = "⏳ WAITING"
+        waiting_text = "; ".join(waiting_for) or "entry confirmation"
+
+    if compact:
+        return [
+            f"Entry wait : {waiting_text}",
+            f"Score gate : {score}/100  (need 60+)",
+            f"Entry state: {status}",
+        ]
+
+    sep = "─" * 34
+    return [
+        "",
+        "  ENTRY CONFIRMATION",
+        sep,
+        f"  Status    : {status}",
+        f"  Waiting for: {waiting_text}",
+        f"  Score gate: {score}/100  (need 60+)",
+        f"  Legacy gate: "
+        f"{'PASS — no conflict' if legacy_confirmation != 'CONFLICT' else 'WAIT — conflict detected'}",
+    ]
+
+
 def _resolve_direction(analyses: list) -> dict:
     """
     Returns a dict with:
@@ -1318,6 +1447,7 @@ def _reference_style_analysis_card(
         f"  Bias      : {bias} ({strength})",
         f"  Trend     : {trend}  |  ADX {adx:.0f}",
         f"  Confidence: {int(getattr(a, 'confidence', 0) or 0)}%",
+        *_entry_confirmation_lines(a),
         "",
         sep,
         "  TRADE PLAN",
@@ -3383,6 +3513,7 @@ def multi_timeframe_card(analyses: list) -> str:
             f"RSI     : {a.rsi_value:.0f}  |  "
             f"Stoch {a.stoch_k_val:.0f}/{a.stoch_d_val:.0f}",
         ]
+        lines += _entry_confirmation_lines(a, compact=True)
         if action in ("BUY", "SELL"):
             lines += [
                 f"Entry   : {fmt_price(a.entry)}",

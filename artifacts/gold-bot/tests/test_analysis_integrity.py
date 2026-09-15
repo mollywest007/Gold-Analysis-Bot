@@ -194,6 +194,8 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIn("Direction : SELL", card)
         self.assertIn("Action    : WAIT", card)
         self.assertIn("Conflict  : None — all clear", card)
+        self.assertIn("ENTRY CONFIRMATION", card)
+        self.assertIn("Waiting for:", card)
         self.assertNotIn("Awaiting confirmation", card)
         self.assertNotIn("Engine note", card)
 
@@ -242,6 +244,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             card = formatting.analysis_card(analysis)
 
         self.assertIn("WHAT TO DO", card)
+        self.assertIn("ENTRY CONFIRMATION", card)
         self.assertIn("Entry :", card)
         self.assertIn("Alert :", card)
         self.assertNotIn("Timeframe", card)
