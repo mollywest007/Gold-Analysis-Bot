@@ -1345,7 +1345,13 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
 
 
 def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
-    """Render a compact, single-scope Telegram analysis card."""
+    """Render a compact, single-scope Telegram analysis card.
+
+    The card is intentionally written as one selected mode/timeframe report.
+    It must not imply that other timeframe candles were used as confirmation.
+    Keep the labels short and aligned because Telegram renders this inside a
+    monospace ``pre`` block.
+    """
     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
     early_direction = str(getattr(a, "early_direction", "") or "").upper()
     indication = str(getattr(a, "directional_indication", "") or "").upper()
@@ -1411,6 +1417,29 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         or getattr(a, "verdict_reason", "")
         or "No additional conditions are currently blocking the plan."
     )
+    report = getattr(a, "institutional_report", {}) or {}
+    legacy = report.get("legacy", {}) or {}
+    legacy_state = str(
+        legacy.get("confirmation", getattr(a, "legacy_confirmation", "NEUTRAL"))
+        or "NEUTRAL"
+    ).upper()
+    conflict = (
+        str(legacy.get("direction", "Indicator evidence")) + " — conflict detected"
+        if legacy_state == "CONFLICT"
+        else "None — all clear"
+    )
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
+    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    trend = str(getattr(a, "trend", "") or "Not available")
+    structure = _struct_label(str(getattr(a, "market_structure", "") or "Not available"))
+    session = str(getattr(a, "session", "") or "Not available")
+    supertrend = str(getattr(a, "supertrend_direction", "") or "Not available")
+    if supertrend in ("BUY", "SELL"):
+        supertrend = "Bullish" if supertrend == "BUY" else "Bearish"
+    regime = str(getattr(a, "market_regime", "") or condition.title())
+    mode_display = mode_label or "SELECTED MODE"
     stream_heading = {
         "SCALP": "⚡ SCALP ENTRY",
         "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
@@ -1418,33 +1447,48 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     lines = [
         "<pre>",
         *([stream_heading] if stream_heading else []),
-        f"XAU/USD  |  {scope}",
-        f"{fmt_price(price)}  |  {data_quality}",
+        "╔══════════════════════════════════╗",
+        "║       XAU/USD ANALYSIS CARD      ║",
+        "╚══════════════════════════════════╝",
+        f"Mode      : {mode_display}",
+        f"TF        : {timeframe} only",
+        f"Price     : {fmt_price(price)}  |  {data_quality}",
         "──────────────────────────────────",
         "WHAT TO DO",
-        f"Direction : {direction}  |  Action: {action}",
-        "Conflict  : None — all clear",
-        f"Bias      : {getattr(a, 'bias', 'Ranging')}  |  Condition: {condition}",
+        f"Direction : {direction}",
+        f"Action    : {action}",
+        f"Conflict  : {conflict}",
+        f"Bias      : {getattr(a, 'bias', 'Ranging')}  |  {condition}",
         f"Status    : {status}",
+        f"Session   : {session}",
         "──────────────────────────────────",
         "HOW IT IS ANALYZING",
-        f"Trend     : EMA20 {fmt_price(ema20)} / EMA50 {fmt_price(ema50)} → {trend_bias}",
-        f"Momentum  : RSI14 {rsi:.1f} → {rsi_support}",
-        f"Opportunity: {setup}",
-        f"Risk      : ATR14 {fmt_price(atr)} → stop/targets from volatility",
+        f"Data      : {data_quality} candles ({timeframe} only)",
+        f"Trend     : EMA20 {fmt_price(ema20)} / EMA50 {fmt_price(ema50)}",
+        f"            → {trend_bias} | {trend}",
+        f"Momentum  : RSI14 {rsi:.1f} → {rsi_support} | ADX {adx:.1f}",
+        f"Structure : {structure}",
+        f"Price act.: {setup}",
+        f"Risk      : ATR14 {fmt_price(atr)} → volatility-based levels",
+        f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
+        f"Regime    : {regime} | Supertrend {supertrend}",
         "──────────────────────────────────",
         "TRADE PLAN",
-        f"Entry Zone: {zone}",
-        f"Early Entry: {fmt_price(early_entry) if early_entry else '—'}",
-        f"Entry     : {fmt_price(entry) if entry else '—'}",
-        f"SL        : {fmt_price(stop) if stop else '—'}",
-        f"TP1       : {fmt_price(target) if target else '—'}",
-        f"R:R       : {f'1:{rr:g}' if rr else '—'}",
-        f"Invalid   : {fmt_price(invalidation) if invalidation else '—'}",
+        f"Zone    : {zone}",
+        f"Entry : {fmt_price(entry) if entry else '—'}",
+        f"Early   : {fmt_price(early_entry) if early_entry else '—'}",
+        f"SL      : {fmt_price(stop) if stop else '—'}",
+        f"TP1     : {fmt_price(target) if target else '—'}",
+        f"R:R     : {f'1:{rr:g}' if rr else '—'}",
+        f"Invalid : {fmt_price(invalidation) if invalidation else '—'}",
         "──────────────────────────────────",
         "DECISION",
-        f"Alert     : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",
-        f"Waiting   : {wait_reason[:180]}",
+        f"Alert : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",
+        f"Waiting   : {wait_reason[:150]}",
+        "──────────────────────────────────",
+        "ENTRY CONFIRMATION",
+        f"State     : {status}",
+        f"Waiting for: {'entry confirmation' if action not in ('BUY', 'SELL') else 'nothing — setup is active'}",
         (
             "Note      : provisional review only — not guaranteed."
             if status == "EARLY ENTRY"
