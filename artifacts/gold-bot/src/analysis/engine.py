@@ -167,6 +167,19 @@ class MarketAnalysis:
     recommended_rr: float = 0.0
     macro_status: str = "UNAVAILABLE"
     intermarket_status: str = "UNAVAILABLE"
+    # Simple EMA/RSI/ATR framework fields.  These are intentionally separate
+    # from the legacy compatibility fields above so API clients can migrate
+    # without having to infer the new decision from the old report.
+    ema20: float = 0.0
+    ema50: float = 0.0
+    market_condition: str = "RANGING"
+    entry_zone_low: float = 0.0
+    entry_zone_high: float = 0.0
+    early_entry: float = 0.0
+    invalidation: float = 0.0
+    signal_status: str = "NO TRADE"
+    early_direction: str = ""
+    price_action_setup: str = ""
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -1502,6 +1515,305 @@ def _select_direction(
 
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
+
+def _simple_price_action(
+    direction: str,
+    opens: List[float],
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    price: float,
+    ema20: float,
+    ema50: float,
+    atr: float,
+) -> Tuple[str, bool]:
+    """Classify only the local opportunity needed by the simple framework.
+
+    This deliberately avoids the former indicator stack, ICT/SMC evidence,
+    volume, Fibonacci, and multi-timeframe confirmations.  A setup can be a
+    breakout, continuation, rejection, or a developing pullback.
+    """
+    if direction not in ("BUY", "SELL") or len(closes) < 3:
+        return "", False
+
+    volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
+    lookback = min(10, len(closes) - 1)
+    prior_high = max(highs[-lookback - 1:-1])
+    prior_low = min(lows[-lookback - 1:-1])
+    last_open = opens[-1]
+    last_close = closes[-1]
+    last_high = highs[-1]
+    last_low = lows[-1]
+    body = abs(last_close - last_open)
+    lower_wick = min(last_open, last_close) - last_low
+    upper_wick = last_high - max(last_open, last_close)
+
+    breakout = (
+        direction == "BUY" and last_close > prior_high
+    ) or (
+        direction == "SELL" and last_close < prior_low
+    )
+    continuation = (
+        direction == "BUY"
+        and closes[-1] > closes[-2] > closes[-3]
+        and last_close >= ema20
+    ) or (
+        direction == "SELL"
+        and closes[-1] < closes[-2] < closes[-3]
+        and last_close <= ema20
+    )
+    near_ema = min(abs(price - ema20), abs(price - ema50)) <= volatility * 0.8
+    rejection = (
+        direction == "BUY"
+        and near_ema
+        and lower_wick >= max(body * 0.8, volatility * 0.15)
+        and last_close >= last_open
+    ) or (
+        direction == "SELL"
+        and near_ema
+        and upper_wick >= max(body * 0.8, volatility * 0.15)
+        and last_close <= last_open
+    )
+
+    if breakout:
+        return ("Breakout", True)
+    if rejection:
+        return ("Rejection", True)
+    if continuation:
+        return ("Continuation", True)
+    if near_ema:
+        return ("Pullback developing", False)
+    return ("", False)
+
+
+def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAnalysis:
+    """Analyze XAU/USD with the intentionally small EMA/RSI/ATR framework."""
+    closes = data.closes
+    highs = data.highs
+    lows = data.lows
+    opens = data.opens
+    price = float(data.price or closes[-1])
+    ema20 = _ema(closes, 20)
+    ema50 = _ema(closes, 50)
+    rsi = compute_rsi(closes, 14)
+    atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
+    ema_gap = abs(ema20 - ema50)
+
+    if ema_gap <= atr * 0.15:
+        condition = "RANGING"
+        direction = "NEUTRAL"
+    elif ema20 > ema50:
+        condition = "BULLISH"
+        direction = "BUY" if rsi >= 50 else "NEUTRAL"
+    else:
+        condition = "BEARISH"
+        direction = "SELL" if rsi <= 50 else "NEUTRAL"
+
+    rsi_supports = direction in ("BUY", "SELL")
+    setup, confirmed_setup = _simple_price_action(
+        direction, opens, highs, lows, closes, price, ema20, ema50, atr
+    )
+    developing_pullback = setup == "Pullback developing"
+    has_entry_opportunity = confirmed_setup or developing_pullback
+    early_direction = direction if direction in ("BUY", "SELL") and has_entry_opportunity else ""
+    action = direction if confirmed_setup and rsi_supports else "WAIT"
+
+    risk = atr * 1.2
+    if action in ("BUY", "SELL") or early_direction:
+        plan_direction = action if action in ("BUY", "SELL") else early_direction
+        entry = round(price, 2)
+        stop_loss = round(
+            entry - risk if plan_direction == "BUY" else entry + risk, 2
+        )
+        tp1 = round(
+            entry + risk * 1.8 if plan_direction == "BUY" else entry - risk * 1.8,
+            2,
+        )
+        tp2 = round(
+            entry + risk * 2.6 if plan_direction == "BUY" else entry - risk * 2.6,
+            2,
+        )
+        tp3 = round(
+            entry + risk * 3.4 if plan_direction == "BUY" else entry - risk * 3.4,
+            2,
+        )
+        rr_ratio = 1.8
+        zone_width = atr * 0.25
+        zone_low = round(entry - zone_width, 2)
+        zone_high = round(entry + zone_width, 2)
+        signal_status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "EARLY ENTRY"
+        invalidation = stop_loss
+    else:
+        entry = stop_loss = tp1 = tp2 = tp3 = rr_ratio = 0.0
+        zone_low = zone_high = invalidation = 0.0
+        signal_status = "NO TRADE"
+
+    if condition == "RANGING":
+        wait_reason = "NO TRADE — 20 EMA and 50 EMA are too close; market is ranging"
+    elif not rsi_supports:
+        wait_reason = (
+            f"NO TRADE — RSI 14 ({rsi:.1f}) does not support the {condition.lower()} trend"
+        )
+    elif not has_entry_opportunity:
+        wait_reason = (
+            f"NO TRADE — {condition.lower()} trend and RSI align; "
+            "waiting for a pullback, breakout, continuation, or rejection"
+        )
+    elif signal_status == "EARLY ENTRY":
+        wait_reason = (
+            f"EARLY ENTRY — {setup}; price action is developing, not yet a confirmed trigger"
+        )
+    else:
+        wait_reason = f"{setup} aligned with EMA trend and RSI momentum"
+
+    if condition == "RANGING":
+        confidence = 50
+    elif not rsi_supports:
+        confidence = 55
+    elif confirmed_setup:
+        confidence = 78
+    elif developing_pullback:
+        confidence = 68
+    else:
+        confidence = 60
+
+    bias = {
+        "BULLISH": "Bullish",
+        "BEARISH": "Bearish",
+        "RANGING": "Ranging",
+    }[condition]
+    trend = bias
+    strength = "Strong" if ema_gap >= atr * 0.5 else "Moderate"
+    momentum = (
+        "Bullish" if rsi > 50 else "Bearish" if rsi < 50 else "Neutral"
+    )
+    session_label, _ = get_trading_session()
+    recent_high = round(max(highs[-20:]), 2)
+    prior_high = round(max(highs[-40:-20]), 2) if len(highs) >= 40 else recent_high
+    recent_low = round(min(lows[-20:]), 2)
+    prior_low = round(min(lows[-40:-20]), 2) if len(lows) >= 40 else recent_low
+    data_quality = "SIMULATED" if data.is_simulated else "REAL_OHLCV"
+    simple_direction = (
+        action if action in ("BUY", "SELL") else early_direction
+    )
+    report = {
+        "framework": "EMA20/EMA50 + RSI14 + ATR14",
+        "data_quality": data_quality,
+        "direction": simple_direction or "WAIT",
+        "market_condition": condition,
+        "ema20": round(ema20, 2),
+        "ema50": round(ema50, 2),
+        "rsi14": round(rsi, 2),
+        "atr14": round(atr, 2),
+        "price_action": setup or "None",
+        "signal_status": signal_status,
+        "entry_zone": {"low": zone_low, "high": zone_high},
+        "invalidation": invalidation,
+        "recommended_rr": rr_ratio,
+        "score_breakdown": {
+            "ema_trend": 35 if condition != "RANGING" else 0,
+            "rsi_momentum": 25 if rsi_supports else 0,
+            "price_action": 40 if confirmed_setup else 20 if developing_pullback else 0,
+        },
+    }
+    reasons_against = [wait_reason] if signal_status != "CONFIRMED ENTRY" else []
+    indicators = [
+        Indicator("EMA 20/50", ema20, simple_direction or "NEUTRAL", 0.45),
+        Indicator("RSI(14)", rsi, simple_direction or "NEUTRAL", 0.30),
+        Indicator("ATR(14)", atr, "RISK", 0.25),
+    ]
+    confluence = []
+    if condition != "RANGING":
+        confluence.append(f"20 EMA {'above' if condition == 'BULLISH' else 'below'} 50 EMA")
+    if rsi_supports:
+        confluence.append(f"RSI 14 {rsi:.1f} supports {simple_direction}")
+    if setup:
+        confluence.append(f"Price action: {setup}")
+
+    return MarketAnalysis(
+        price=price,
+        timeframe=timeframe,
+        bias=bias,
+        trend=trend,
+        strength=strength,
+        momentum=momentum,
+        confidence=confidence,
+        entry=entry,
+        stop_loss=stop_loss,
+        tp1=tp1,
+        tp2=tp2,
+        rr_ratio=rr_ratio,
+        action=action,
+        wait_reason=wait_reason,
+        resistance1=recent_high,
+        resistance2=prior_high,
+        support1=recent_low,
+        support2=prior_low,
+        breakout=setup == "Breakout",
+        reversal=setup == "Rejection",
+        liquidity_zone="Not used",
+        atr=atr,
+        indicators=indicators,
+        buy_votes=2 if simple_direction == "BUY" else 0,
+        sell_votes=2 if simple_direction == "SELL" else 0,
+        wait_votes=1 if not rsi_supports else 0,
+        verdict_reason=wait_reason,
+        session=session_label,
+        htf_bias="Not used",
+        candle_pattern="Not used",
+        trade_type=mode_cfg.trade_type_label,
+        analysis_mode=mode_cfg.name,
+        limit_entry=entry,
+        entry_note="Market price; ATR risk plan",
+        rsi_value=rsi,
+        market_structure=condition,
+        win_probability=confidence if action in ("BUY", "SELL") else 0,
+        directional_indication=simple_direction or "NEUTRAL",
+        confluence_list=confluence,
+        tp3=tp3,
+        setup_quality="A" if action in ("BUY", "SELL") else "B" if early_direction else "WAIT",
+        setup_grade="A" if action in ("BUY", "SELL") else "B" if early_direction else "WAIT",
+        is_simulated=data.is_simulated,
+        daily_bias=condition,
+        liquidity_evidence="Not used",
+        fvg_direction="Not used",
+        order_block_direction="Not used",
+        candle_evidence="Not used",
+        buying_pressure="Not used",
+        selling_pressure="Not used",
+        pressure_advantage="Not used",
+        market_regime=condition,
+        institutional_report=report,
+        bullish_probability=confidence if condition == "BULLISH" else 100 - confidence,
+        bearish_probability=confidence if condition == "BEARISH" else 100 - confidence,
+        confidence_score=confidence,
+        legacy_direction=simple_direction or "WAIT",
+        legacy_confirmation="ALIGNED" if rsi_supports else "NEUTRAL",
+        combined_direction=action if action in ("BUY", "SELL") else "WAIT",
+        risk_level="MODERATE" if atr > 0 else "HIGH",
+        reasons_supporting=confluence,
+        reasons_against=reasons_against,
+        invalidating_conditions=(
+            [f"Close beyond {invalidation:.2f}"]
+            if invalidation
+            else ["No trade plan until EMA trend and RSI align"]
+        ),
+        best_entry_zone={"low": zone_low, "high": zone_high},
+        recommended_rr=rr_ratio,
+        macro_status="Not used",
+        intermarket_status="Not used",
+        ema20=ema20,
+        ema50=ema50,
+        market_condition=condition,
+        entry_zone_low=zone_low,
+        entry_zone_high=zone_high,
+        early_entry=entry if early_direction else 0.0,
+        invalidation=invalidation,
+        signal_status=signal_status,
+        early_direction=early_direction,
+        price_action_setup=setup,
+    )
+
 async def _analyze_single(
     timeframe: str = "H1",
     mode: str = None,
@@ -1534,6 +1846,12 @@ async def _analyze_single(
     if data is None or len(data) < 35:
         logger.error(f"Insufficient data for {timeframe}")
         raise RuntimeError(f"Could not fetch enough market data for {timeframe}")
+
+    # The active decision engine is intentionally small: EMA20/EMA50 trend,
+    # RSI14 momentum, local price action, and ATR14 risk.  The former
+    # institutional/indicator stack remains below only as compatibility
+    # reference code; it is no longer reachable from the live analysis path.
+    return _analyze_simple_data(data, timeframe, mode_cfg)
 
     # The institutional layer is independent from the legacy vote engine.  It
     # gets the same candle set, plus a cached cross-asset snapshot, and is

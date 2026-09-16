@@ -188,74 +188,36 @@ def _stream_alert_label(mode: str | None) -> str:
 
 
 def _balanced_early_direction(a, analysis_mode: str) -> str:
-    """Return a direction when the balanced Scalp early-entry gate passes."""
-    if analysis_mode != "scalp":
-        return ""
+    """Return the simple framework's developing opportunity direction.
+
+    Early alerts are now based on the same EMA/RSI/ATR analysis as confirmed
+    alerts.  They are intentionally provisional and never create a trade.
+    """
     if getattr(a, "is_simulated", False):
         return ""
+    status = getattr(a, "signal_status", None)
+    if status == "EARLY ENTRY":
+        direction = str(getattr(a, "early_direction", "") or "").upper()
+        return direction if direction in ("BUY", "SELL") else ""
 
-    report = getattr(a, "institutional_report", {}) or {}
-    if report.get("data_quality", "REAL_OHLCV") != "REAL_OHLCV":
-        return ""
-
-    score = int(getattr(a, "confidence_score", 0) or 0)
-    if score < 55:
-        return ""
-
-    legacy_confirmation = str(
-        getattr(a, "legacy_confirmation", "")
-        or (report.get("legacy", {}) or {}).get("confirmation", "NEUTRAL")
-    ).upper()
-    if legacy_confirmation == "CONFLICT":
-        return ""
-
-    rr_ratio = _safe_float(getattr(a, "rr_ratio", 0.0), 0.0)
-    if rr_ratio < 1.5:
-        return ""
-
-    buy_votes = int(getattr(a, "buy_votes", 0) or 0)
-    sell_votes = int(getattr(a, "sell_votes", 0) or 0)
-    legacy_direction = str(
-        getattr(a, "legacy_direction", "")
-        or (report.get("legacy", {}) or {}).get("direction", "")
-        or getattr(a, "directional_indication", "")
-    ).upper()
-    if legacy_direction not in ("BUY", "SELL"):
-        if buy_votes >= 2 and buy_votes > sell_votes:
-            legacy_direction = "BUY"
-        elif sell_votes >= 2 and sell_votes > buy_votes:
-            legacy_direction = "SELL"
-        else:
-            return ""
-
-    aligned_votes = buy_votes if legacy_direction == "BUY" else sell_votes
-    if aligned_votes < 2:
-        return ""
-
-    structure = report.get("market_structure", {}) or {}
-    bos = str(structure.get("bos", getattr(a, "bos", "NONE")) or "NONE")
-    choch = str(structure.get("choch", getattr(a, "choch", "NONE")) or "NONE")
-    aligned_structure = (
-        legacy_direction == "BUY"
-        and (bos == "BULLISH_BOS" or choch == "BULLISH_CHOCH")
-    ) or (
-        legacy_direction == "SELL"
-        and (bos == "BEARISH_BOS" or choch == "BEARISH_CHOCH")
-    )
-    adx = _safe_float(getattr(a, "adx", 0.0), 0.0)
-    if adx < 18 and not aligned_structure:
-        return ""
-
-    institutional_direction = str(
-        report.get("direction", getattr(a, "institutional_direction", "WAIT"))
-        or "WAIT"
-    ).upper()
-    if (
-        institutional_direction in ("BUY", "SELL")
-        and institutional_direction != legacy_direction
-    ):
-        return ""
-    return legacy_direction
+    # Compatibility for older notification fixtures and API clients that do
+    # not yet populate the new status fields.  Live MarketAnalysis objects
+    # always have signal_status, so the former institutional gate cannot run
+    # on the production path.
+    if status is None and analysis_mode == "scalp":
+        report = getattr(a, "institutional_report", {}) or {}
+        if (
+            report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
+            and _safe_float(getattr(a, "rr_ratio", 0.0)) >= 1.5
+        ):
+            direction = str(
+                getattr(a, "legacy_direction", "")
+                or getattr(a, "directional_indication", "")
+                or report.get("legacy", {}).get("direction", "")
+            ).upper()
+            if direction in ("BUY", "SELL"):
+                return direction
+    return ""
 
 
 def _combined_timeframes_from_state(value: str) -> dict[str, str]:
@@ -1295,13 +1257,11 @@ async def _send_setup_forming_alert(
             f"  TP3        : {tp3:,.2f}\n"
             "  Risk       : HIGH — provisional, manual review only\n"
         )
-        status_line = (
-            "  Status     : EARLY CRITERIA MET — strict confirmation still running\n"
-        )
+        status_line = "  Signal Status : EARLY ENTRY — provisional review only\n"
         decision_lines = (
             "  This is a provisional entry plan.\n"
             "  It is not saved as an active trade.\n"
-            "  A confirmed alert will follow if the strict gate aligns.\n"
+            "  It is not a guaranteed entry.\n"
         )
     else:
         alert_title = (
@@ -1319,22 +1279,52 @@ async def _send_setup_forming_alert(
             else ""
         )
         plan_lines = ""
-        status_line = "  Status     : UNCONFIRMED — strict confirmation still running\n"
+        status_line = "  Signal Status : EARLY ENTRY — provisional review only\n"
         decision_lines = (
             "  This is an early warning only.\n"
-            "  A separate confirmed alert will follow\n"
-            "  if the strict timeframe gate aligns.\n"
+            "  Wait for the price-action trigger before treating it as confirmed.\n"
         )
+    report = getattr(a, "institutional_report", {}) or {}
+    entry_zone_low = _safe_float(
+        getattr(a, "entry_zone_low", 0.0) or report.get("entry_zone", {}).get("low", 0.0)
+    )
+    entry_zone_high = _safe_float(
+        getattr(a, "entry_zone_high", 0.0) or report.get("entry_zone", {}).get("high", 0.0)
+    )
+    entry_zone = (
+        f"{entry_zone_low:,.2f} – {entry_zone_high:,.2f}"
+        if entry_zone_low and entry_zone_high
+        else "Not formed"
+    )
+    ema20 = _safe_float(getattr(a, "ema20", 0.0))
+    ema50 = _safe_float(getattr(a, "ema50", 0.0))
+    rsi14 = _safe_float(getattr(a, "rsi_value", 0.0))
+    atr14 = _safe_float(getattr(a, "atr", 0.0))
+    invalidation = _safe_float(
+        getattr(a, "invalidation", 0.0) or getattr(a, "stop_loss", 0.0)
+    )
+    signal_status = getattr(a, "signal_status", "EARLY ENTRY") or "EARLY ENTRY"
+    compatibility_evidence = (
+        f"   Legacy evidence: {votes}/8 core indicators agree\n"
+        if not hasattr(a, "signal_status")
+        else ""
+    )
     text = (
         f"<pre>{alert_title}  —  {stream_label + '  ' if stream_label else ''}XAU/USD  {tf}\n"
         f"{'─' * 34}\n"
-        f"{arrow}  Direction : {forming_dir}\n"
-        f"   Price    : {price:,.2f}\n"
-        f"   Votes    : {votes}/8 core indicators agree\n"
-        f"   ADX      : {adx:.1f}   Legacy conf: {confidence}%\n"
-        f"   Institutional score: {institutional_score}/100\n"
-        f"   R:R      : 1:{_safe_float(getattr(a, 'rr_ratio', 0.0), 0.0):.1f}{kz_tag}\n"
-        f"   Evidence : selected timeframe only\n"
+        f"{arrow}  Market Bias : {forming_dir}\n"
+        f"   Current Market Condition: {getattr(a, 'market_condition', 'N/A')}\n"
+        f"   20 EMA   : {ema20:,.2f}   50 EMA: {ema50:,.2f}\n"
+        f"   RSI 14   : {rsi14:.1f}   ATR 14: {atr14:,.2f}{kz_tag}\n"
+        f"   Entry Zone: {entry_zone}\n"
+        f"   Early Entry: {provisional_entry:,.2f}\n"
+        f"   Stop-Loss : {stop_loss:,.2f}\n"
+        f"   Take-Profit: {tp1:,.2f}\n"
+        f"   Risk-to-Reward: 1:{_safe_float(getattr(a, 'rr_ratio', 0.0), 0.0):.1f}\n"
+        f"   Invalidation: {invalidation:,.2f}\n"
+        f"   Price action: {getattr(a, 'price_action_setup', '') or 'Developing'}\n"
+        f"   Signal Status: {signal_status}\n"
+        f"{compatibility_evidence}"
         f"{status_line}"
         f"{watch_line}"
         f"{plan_lines}"
@@ -2482,9 +2472,13 @@ async def _check_and_alert_once(
             continue
 
         logger.info(
-            f"[{tf}] scan: action={a.action} grade={a.setup_quality} "
-            f"inst_score={getattr(a, 'confidence_score', 0)}/100 "
-            f"legacy_conf={a.confidence}% win={a.win_probability}% adx={a.adx:.1f}"
+            f"[{tf}] scan: status={getattr(a, 'signal_status', 'UNKNOWN')} "
+            f"action={a.action} condition={getattr(a, 'market_condition', 'UNKNOWN')} "
+            f"ema20={getattr(a, 'ema20', 0.0):.2f} "
+            f"ema50={getattr(a, 'ema50', 0.0):.2f} "
+            f"rsi14={getattr(a, 'rsi_value', 0.0):.1f} "
+            f"atr14={getattr(a, 'atr', 0.0):.2f} "
+            f"setup={getattr(a, 'price_action_setup', '') or 'none'}"
         )
 
         if state_key in reanalysis_blocked:
@@ -2524,7 +2518,7 @@ async def _check_and_alert_once(
             forming_dir = _balanced_early_direction(a, analysis_mode)
             if forming_dir:
                 logger.info(
-                    f"[{tf}] Balanced early-entry criteria met — "
+                    f"[{tf}] Simple early-entry criteria met — "
                     f"{forming_dir} score={getattr(a, 'confidence_score', 0)}/100 "
                     f"votes={'BUY' if forming_dir == 'BUY' else 'SELL'} "
                     f"{getattr(a, 'buy_votes' if forming_dir == 'BUY' else 'sell_votes', 0)} "
@@ -2562,8 +2556,8 @@ async def _check_and_alert_once(
             else:
                 forming_alert_sent.pop(state_key, None)
                 logger.info(
-                    f"[{tf}] No early-entry criteria — "
-                    "waiting for balanced setup confirmation."
+                    f"[{tf}] No early-entry opportunity — "
+                    "waiting for a pullback, breakout, continuation, or rejection."
                 )
             continue
 

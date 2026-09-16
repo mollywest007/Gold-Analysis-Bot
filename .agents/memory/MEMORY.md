@@ -10,3 +10,4 @@
 - [Alert Scan Ownership](gold-bot-alert-scan-ownership.md) — production alert scans are account-scoped; legacy no-account helpers must not inspect another account's trades
 - [Gold Bot Analysis Layout](gold-bot-analysis-layout.md) — decision summary comes first; strict confirmation and early provisional plans stay visibly separate
 - [Gold Bot Market Data Integrity](gold-bot-market-data-integrity.md) — aggregate only complete UTC candles and compare liquidity sweeps with the prior range
+- [Gold Bot Simple Entry Framework](gold-bot-simple-entry-framework.md) — production entries use EMA20/EMA50 trend, RSI14 support, local price action, and ATR14 risk

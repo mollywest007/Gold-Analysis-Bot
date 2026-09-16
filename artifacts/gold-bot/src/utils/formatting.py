@@ -1344,9 +1344,114 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
     )
 
 
+def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
+    """Render the active EMA/RSI/ATR analysis without legacy gate language."""
+    action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+    early_direction = str(getattr(a, "early_direction", "") or "").upper()
+    indication = str(
+        getattr(a, "directional_indication", "") or ""
+    ).upper()
+    direction = (
+        action
+        if action in ("BUY", "SELL")
+        else early_direction
+        or indication
+        if indication in ("BUY", "SELL")
+        else "WAIT"
+    )
+    status = str(getattr(a, "signal_status", "") or "").upper()
+    if not status or (status == "NO TRADE" and action in ("BUY", "SELL")):
+        status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "NO TRADE"
+    data_quality = (
+        "SIMULATED"
+        if getattr(a, "is_simulated", False)
+        else (getattr(a, "institutional_report", {}) or {}).get(
+            "data_quality", "REAL_OHLCV"
+        )
+    )
+    zone_low = float(getattr(a, "entry_zone_low", 0.0) or 0.0)
+    zone_high = float(getattr(a, "entry_zone_high", 0.0) or 0.0)
+    zone = (
+        f"{fmt_price(zone_low)} – {fmt_price(zone_high)}"
+        if zone_low and zone_high
+        else "—"
+    )
+    entry = float(getattr(a, "entry", 0.0) or 0.0)
+    rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
+    rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
+    atr = float(getattr(a, "atr", 0.0) or 0.0)
+    ema20 = float(getattr(a, "ema20", 0.0) or 0.0)
+    ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
+    action_label = action if action in ("BUY", "SELL") else "WAIT"
+    signal_note = (
+        "Provisional only — do not treat as a guaranteed entry."
+        if status == "EARLY ENTRY"
+        else "No trade until a reasonable opportunity develops."
+        if status == "NO TRADE"
+        else "Entry plan is active."
+    )
+    stream_heading = {
+        "SCALP": "⚡ SCALP ENTRY",
+        "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
+    }.get(alert_label, "")
+    lines = [
+        "<pre>",
+        *( [stream_heading] if stream_heading else [] ),
+        "╔══════════════════════════════════╗",
+        "║       XAU/USD  ANALYSIS CARD     ║",
+        "╚══════════════════════════════════╝",
+        f"  Price     : {fmt_price(getattr(a, 'price', 0.0))}",
+        f"  Chart     : {getattr(a, 'timeframe', 'N/A')}",
+        f"  Data      : {data_quality}",
+        "",
+        "  WHAT TO DO",
+        "──────────────────────────────────",
+        f"  Direction : {direction}",
+        f"  Action    : {action_label}",
+        "  Conflict  : None — all clear",
+        f"  Bias      : {getattr(a, 'bias', 'Ranging')}",
+        f"  Market Bias          : {direction}",
+        f"  Current Market Condition: {getattr(a, 'market_condition', 'RANGING')}",
+        "",
+        "  SIMPLE MARKET DATA",
+        "──────────────────────────────────",
+        f"  20 EMA    : {fmt_price(ema20)}",
+        f"  50 EMA    : {fmt_price(ema50)}",
+        f"  RSI 14    : {rsi:.1f}",
+        f"  ATR 14    : {fmt_price(atr)}",
+        f"  Price action: {getattr(a, 'price_action_setup', '') or 'None'}",
+        "",
+        "  ENTRY PLAN",
+        "──────────────────────────────────",
+        f"  Entry Zone           : {zone}",
+        f"  Early Entry          : {fmt_price(getattr(a, 'early_entry', 0.0)) if getattr(a, 'early_entry', 0.0) else '—'}",
+        f"  Entry : {fmt_price(entry) if entry else '—'}",
+        f"  Entry                : {fmt_price(entry) if entry else '—'}",
+        f"  Stop-Loss            : {fmt_price(getattr(a, 'stop_loss', 0.0)) if getattr(a, 'stop_loss', 0.0) else '—'}",
+        f"  Take-Profit          : {fmt_price(getattr(a, 'tp1', 0.0)) if getattr(a, 'tp1', 0.0) else '—'}",
+        f"  Risk-to-Reward       : {f'1:{rr:g}' if rr else '—'}",
+        f"  Invalidation          : {fmt_price(getattr(a, 'invalidation', 0.0)) if getattr(a, 'invalidation', 0.0) else '—'}",
+        "",
+        "  ENTRY CONFIRMATION",
+        "──────────────────────────────────",
+        f"  Signal Status         : {status}",
+        f"  Alert : {'✅ Signal active' if action in ('BUY', 'SELL') else '⏳ No active confirmed signal'}",
+        f"  Waiting for: {(getattr(a, 'wait_reason', '') or 'Nothing — setup is active')[:180]}",
+        f"  Reason                : {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'None')[:180]}",
+        f"  Note                  : {signal_note}",
+        "",
+        "  Not financial advice.",
+        "</pre>",
+    ]
+    return safe_html("\n".join(lines))
+
+
 def _reference_style_analysis_card(
     a: MarketAnalysis, account_id: int | None = None
 ) -> str:
+    return _simple_analysis_card(a)
+
+    # Kept below as a reference for older layout experiments.
     """Render the compact, reference-style Telegram analysis card.
 
     The card is deliberately outcome-first: it shows the decision, plan,
@@ -2758,7 +2863,10 @@ def pro_analysis_card(a: MarketAnalysis) -> str:
 # ─── PART 2: Early entry signal (only for A/A+ grade) ────────────────────────
 
 def entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
-    """Single direct-entry alert card — compact layout, all data preserved."""
+    """Single direct-entry alert card using the simple analysis framework."""
+    return _simple_analysis_card(a, alert_label=alert_label)
+
+    # Kept below as a reference for older layout experiments.
     ms     = market_status()
     sl_dist = abs(a.entry - a.stop_loss)
     rr1 = round(abs(a.tp1 - a.entry) / sl_dist, 1) if sl_dist > 0 else 0

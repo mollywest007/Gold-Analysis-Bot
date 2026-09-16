@@ -44,15 +44,13 @@
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "momentum_shift_warned": {},
-      "forming_alert_sent": {
-        "M15": "SELL"
-      },
+      "forming_alert_sent": {},
       "forming_alert_last_sent": {
-        "M15": 1789475885.467297
+        "M15": 1789502579.5208707
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 6094
+          "8039158711": 6118
         }
       },
       "reminded_trade_ids": {
