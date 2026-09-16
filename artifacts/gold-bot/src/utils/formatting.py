@@ -1345,21 +1345,17 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
 
 
 def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
-    """Render the active EMA/RSI/ATR analysis without legacy gate language."""
+    """Render a compact, single-scope Telegram analysis card."""
     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
     early_direction = str(getattr(a, "early_direction", "") or "").upper()
-    indication = str(
-        getattr(a, "directional_indication", "") or ""
-    ).upper()
+    indication = str(getattr(a, "directional_indication", "") or "").upper()
     signal_direction = (
-        action
-        if action in ("BUY", "SELL")
-        else early_direction
-        or indication
-        if indication in ("BUY", "SELL")
+        action if action in ("BUY", "SELL")
+        else early_direction if early_direction in ("BUY", "SELL")
+        else indication if indication in ("BUY", "SELL")
         else "WAIT"
     )
-    condition = str(getattr(a, "market_condition", "") or "").upper()
+    condition = str(getattr(a, "market_condition", "") or "RANGING").upper()
     trend_bias = (
         "BUY" if condition == "BULLISH"
         else "SELL" if condition == "BEARISH"
@@ -1369,6 +1365,16 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     status = str(getattr(a, "signal_status", "") or "").upper()
     if not status or (status == "NO TRADE" and action in ("BUY", "SELL")):
         status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "NO TRADE"
+
+    timeframe = str(getattr(a, "timeframe", "N/A") or "N/A")
+    mode = str(getattr(a, "analysis_mode", "") or "").lower()
+    mode_label = {
+        "scalp": "SCALP",
+        "intraday": "INTRADAY",
+        "swing": "SWING",
+        "position": "POSITION",
+    }.get(mode, str(getattr(a, "trade_type", "") or "").upper())
+    scope = f"{mode_label} | {timeframe}" if mode_label else timeframe
     data_quality = (
         "SIMULATED"
         if getattr(a, "is_simulated", False)
@@ -1376,96 +1382,78 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             "data_quality", "REAL_OHLCV"
         )
     )
+    price = float(getattr(a, "price", 0.0) or 0.0)
+    ema20 = float(getattr(a, "ema20", 0.0) or 0.0)
+    ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
+    rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
+    atr = float(getattr(a, "atr", 0.0) or 0.0)
+    entry = float(getattr(a, "entry", 0.0) or 0.0)
+    early_entry = float(getattr(a, "early_entry", 0.0) or 0.0)
+    stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
+    target = float(getattr(a, "tp1", 0.0) or 0.0)
+    invalidation = float(getattr(a, "invalidation", 0.0) or 0.0)
+    rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
     zone_low = float(getattr(a, "entry_zone_low", 0.0) or 0.0)
     zone_high = float(getattr(a, "entry_zone_high", 0.0) or 0.0)
     zone = (
         f"{fmt_price(zone_low)} – {fmt_price(zone_high)}"
-        if zone_low and zone_high
-        else "—"
+        if zone_low and zone_high else "—"
     )
-    entry = float(getattr(a, "entry", 0.0) or 0.0)
-    rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
-    rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
-    atr = float(getattr(a, "atr", 0.0) or 0.0)
-    ema20 = float(getattr(a, "ema20", 0.0) or 0.0)
-    ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
-    action_label = action if action in ("BUY", "SELL") else "WAIT"
-    wait_reason = (
+    rsi_support = (
+        "supports " + trend_bias
+        if (trend_bias == "BUY" and rsi >= 50)
+        or (trend_bias == "SELL" and rsi <= 50)
+        else "does not support bias"
+    )
+    setup = str(getattr(a, "price_action_setup", "") or "None detected")
+    wait_reason = str(
         getattr(a, "wait_reason", "")
         or getattr(a, "verdict_reason", "")
         or "No additional conditions are currently blocking the plan."
     )
-    if status == "NO TRADE" and signal_direction == "WAIT":
-        signal_note = "The EMA trend may be directional, but no entry opportunity is active."
-    else:
-        signal_note = (
-        "Provisional only — do not treat as a guaranteed entry."
-        if status == "EARLY ENTRY"
-        else "No trade until a reasonable opportunity develops."
-        if status == "NO TRADE"
-        else "Entry plan is active."
-        )
     stream_heading = {
         "SCALP": "⚡ SCALP ENTRY",
         "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
     }.get(alert_label, "")
     lines = [
         "<pre>",
-        *( [stream_heading] if stream_heading else [] ),
-        "╔══════════════════════════════════╗",
-        "║       XAU/USD  ANALYSIS CARD     ║",
-        "╚══════════════════════════════════╝",
-        f"  Price     : {fmt_price(getattr(a, 'price', 0.0))}",
-        f"  Chart     : {getattr(a, 'timeframe', 'N/A')}",
-        f"  Data      : {data_quality}",
-        "",
-        "  WHAT TO DO",
+        *([stream_heading] if stream_heading else []),
+        f"XAU/USD  |  {scope}",
+        f"{fmt_price(price)}  |  {data_quality}",
         "──────────────────────────────────",
-        f"  Direction : {direction}",
-        f"  Action    : {action_label}",
-        "  Conflict  : None — all clear",
-        f"  Bias      : {getattr(a, 'bias', 'Ranging')}",
-        f"  Market Bias          : {trend_bias}",
-        f"  Current Market Condition: {condition or 'RANGING'}",
-        "",
-        "  HOW THIS ANALYSIS WORKS",
+        "WHAT TO DO",
+        f"Direction : {direction}  |  Action: {action}",
+        "Conflict  : None — all clear",
+        f"Bias      : {getattr(a, 'bias', 'Ranging')}  |  Condition: {condition}",
+        f"Status    : {status}",
         "──────────────────────────────────",
-        "  1. Trend      : 20 EMA vs 50 EMA sets bias.",
-        "  2. Momentum   : RSI 14 checks direction support;",
-        "                   extreme RSI is not required.",
-        "  3. Opportunity: latest candles are checked for",
-        "                   pullback, continuation, breakout, or rejection.",
-        "  4. Risk       : ATR 14 sets the stop and targets.",
-        "",
-        "  CURRENT MARKET DATA",
+        "HOW IT IS ANALYZING",
+        f"Trend     : EMA20 {fmt_price(ema20)} / EMA50 {fmt_price(ema50)} → {trend_bias}",
+        f"Momentum  : RSI14 {rsi:.1f} → {rsi_support}",
+        f"Opportunity: {setup}",
+        f"Risk      : ATR14 {fmt_price(atr)} → stop/targets from volatility",
         "──────────────────────────────────",
-        f"  20 EMA    : {fmt_price(ema20)}",
-        f"  50 EMA    : {fmt_price(ema50)}",
-        f"  RSI 14    : {rsi:.1f}",
-        f"  ATR 14    : {fmt_price(atr)}",
-        f"  RSI support: {'Supports ' + trend_bias if trend_bias in ('BUY', 'SELL') and ((trend_bias == 'BUY' and rsi >= 50) or (trend_bias == 'SELL' and rsi <= 50)) else 'Not supporting the EMA bias'}",
-        f"  Price action: {getattr(a, 'price_action_setup', '') or 'None detected'}",
-        "",
-        "  ENTRY PLAN",
+        "TRADE PLAN",
+        f"Entry Zone: {zone}",
+        f"Early Entry: {fmt_price(early_entry) if early_entry else '—'}",
+        f"Entry     : {fmt_price(entry) if entry else '—'}",
+        f"SL        : {fmt_price(stop) if stop else '—'}",
+        f"TP1       : {fmt_price(target) if target else '—'}",
+        f"R:R       : {f'1:{rr:g}' if rr else '—'}",
+        f"Invalid   : {fmt_price(invalidation) if invalidation else '—'}",
         "──────────────────────────────────",
-        f"  Entry Zone           : {zone}",
-        f"  Early Entry          : {fmt_price(getattr(a, 'early_entry', 0.0)) if getattr(a, 'early_entry', 0.0) else '—'}",
-        f"  Entry : {fmt_price(entry) if entry else '—'}",
-        f"  Entry                : {fmt_price(entry) if entry else '—'}",
-        f"  Stop-Loss            : {fmt_price(getattr(a, 'stop_loss', 0.0)) if getattr(a, 'stop_loss', 0.0) else '—'}",
-        f"  Take-Profit          : {fmt_price(getattr(a, 'tp1', 0.0)) if getattr(a, 'tp1', 0.0) else '—'}",
-        f"  Risk-to-Reward       : {f'1:{rr:g}' if rr else '—'}",
-        f"  Invalidation          : {fmt_price(getattr(a, 'invalidation', 0.0)) if getattr(a, 'invalidation', 0.0) else '—'}",
-        "",
-        "  ENTRY CONFIRMATION",
+        "DECISION",
+        f"Alert     : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",
+        f"Waiting   : {wait_reason[:180]}",
+        (
+            "Note      : provisional review only — not guaranteed."
+            if status == "EARLY ENTRY"
+            else "Note      : no trade until a valid opportunity develops."
+            if status == "NO TRADE"
+            else "Note      : active entry plan."
+        ),
         "──────────────────────────────────",
-        f"  Signal Status         : {status}",
-        f"  Alert : {'✅ Signal active' if action in ('BUY', 'SELL') else '⏳ No active confirmed signal'}",
-        f"  Waiting for: {wait_reason[:180]}",
-        f"  Reason                : {wait_reason[:180]}",
-        f"  Note                  : {signal_note}",
-        "",
-        "  Not financial advice.",
+        "Not financial advice.",
         "</pre>",
     ]
     return safe_html("\n".join(lines))
