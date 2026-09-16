@@ -1351,7 +1351,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     indication = str(
         getattr(a, "directional_indication", "") or ""
     ).upper()
-    direction = (
+    signal_direction = (
         action
         if action in ("BUY", "SELL")
         else early_direction
@@ -1359,6 +1359,13 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         if indication in ("BUY", "SELL")
         else "WAIT"
     )
+    condition = str(getattr(a, "market_condition", "") or "").upper()
+    trend_bias = (
+        "BUY" if condition == "BULLISH"
+        else "SELL" if condition == "BEARISH"
+        else "RANGE"
+    )
+    direction = signal_direction if signal_direction != "WAIT" else trend_bias
     status = str(getattr(a, "signal_status", "") or "").upper()
     if not status or (status == "NO TRADE" and action in ("BUY", "SELL")):
         status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "NO TRADE"
@@ -1383,13 +1390,21 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     ema20 = float(getattr(a, "ema20", 0.0) or 0.0)
     ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
     action_label = action if action in ("BUY", "SELL") else "WAIT"
-    signal_note = (
+    wait_reason = (
+        getattr(a, "wait_reason", "")
+        or getattr(a, "verdict_reason", "")
+        or "No additional conditions are currently blocking the plan."
+    )
+    if status == "NO TRADE" and signal_direction == "WAIT":
+        signal_note = "The EMA trend may be directional, but no entry opportunity is active."
+    else:
+        signal_note = (
         "Provisional only — do not treat as a guaranteed entry."
         if status == "EARLY ENTRY"
         else "No trade until a reasonable opportunity develops."
         if status == "NO TRADE"
         else "Entry plan is active."
-    )
+        )
     stream_heading = {
         "SCALP": "⚡ SCALP ENTRY",
         "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
@@ -1410,16 +1425,26 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"  Action    : {action_label}",
         "  Conflict  : None — all clear",
         f"  Bias      : {getattr(a, 'bias', 'Ranging')}",
-        f"  Market Bias          : {direction}",
-        f"  Current Market Condition: {getattr(a, 'market_condition', 'RANGING')}",
+        f"  Market Bias          : {trend_bias}",
+        f"  Current Market Condition: {condition or 'RANGING'}",
         "",
-        "  SIMPLE MARKET DATA",
+        "  HOW THIS ANALYSIS WORKS",
+        "──────────────────────────────────",
+        "  1. Trend      : 20 EMA vs 50 EMA sets bias.",
+        "  2. Momentum   : RSI 14 checks direction support;",
+        "                   extreme RSI is not required.",
+        "  3. Opportunity: latest candles are checked for",
+        "                   pullback, continuation, breakout, or rejection.",
+        "  4. Risk       : ATR 14 sets the stop and targets.",
+        "",
+        "  CURRENT MARKET DATA",
         "──────────────────────────────────",
         f"  20 EMA    : {fmt_price(ema20)}",
         f"  50 EMA    : {fmt_price(ema50)}",
         f"  RSI 14    : {rsi:.1f}",
         f"  ATR 14    : {fmt_price(atr)}",
-        f"  Price action: {getattr(a, 'price_action_setup', '') or 'None'}",
+        f"  RSI support: {'Supports ' + trend_bias if trend_bias in ('BUY', 'SELL') and ((trend_bias == 'BUY' and rsi >= 50) or (trend_bias == 'SELL' and rsi <= 50)) else 'Not supporting the EMA bias'}",
+        f"  Price action: {getattr(a, 'price_action_setup', '') or 'None detected'}",
         "",
         "  ENTRY PLAN",
         "──────────────────────────────────",
@@ -1436,8 +1461,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "──────────────────────────────────",
         f"  Signal Status         : {status}",
         f"  Alert : {'✅ Signal active' if action in ('BUY', 'SELL') else '⏳ No active confirmed signal'}",
-        f"  Waiting for: {(getattr(a, 'wait_reason', '') or 'Nothing — setup is active')[:180]}",
-        f"  Reason                : {(getattr(a, 'wait_reason', '') or getattr(a, 'verdict_reason', '') or 'None')[:180]}",
+        f"  Waiting for: {wait_reason[:180]}",
+        f"  Reason                : {wait_reason[:180]}",
         f"  Note                  : {signal_note}",
         "",
         "  Not financial advice.",
