@@ -2505,60 +2505,13 @@ async def _check_and_alert_once(
                 )
                 continue
 
-            # Balanced Scalp early-entry path.  This sends a provisional
-            # heads-up only; it does not claim the signal lock or create a
-            # trade.  The confirmed BUY/SELL path below remains unchanged.
-            if active_signal.get(state_key):
-                logger.info(
-                    f"[{tf}] Early entry suppressed — an active signal already "
-                    "owns this timeframe."
-                )
-                continue
-
-            forming_dir = _balanced_early_direction(a, analysis_mode)
-            if forming_dir:
-                logger.info(
-                    f"[{tf}] Simple early-entry criteria met — "
-                    f"{forming_dir} score={getattr(a, 'confidence_score', 0)}/100 "
-                    f"votes={'BUY' if forming_dir == 'BUY' else 'SELL'} "
-                    f"{getattr(a, 'buy_votes' if forming_dir == 'BUY' else 'sell_votes', 0)} "
-                    f"adx={getattr(a, 'adx', 0):.1f} "
-                    f"rr={getattr(a, 'rr_ratio', 0):.1f}"
-                )
-                active_trade = next(
-                    (
-                        t for t in _get_active_trades()
-                        if t.get("timeframe") == tf
-                        and (
-                            mode_name != COMBINED_MODE
-                            or t.get("mode") == analysis_mode
-                        )
-                        and t.get("direction") != forming_dir
-                    ),
-                    None,
-                )
-                if active_trade:
-                    await _send_momentum_shift_warning(
-                        bot, subs, active_trade, tf, forming_dir,
-                        confirmed=False,
-                        state=state,
-                        lock_key=state_key,
-                        stream_label=stream_label,
-                    )
-                else:
-                    await _send_setup_forming_alert(
-                        bot, subs, a, tf, forming_dir,
-                        state=state,
-                        lock_key=state_key,
-                        stream_label=stream_label,
-                        early_entry_watch=True,
-                    )
-            else:
-                forming_alert_sent.pop(state_key, None)
-                logger.info(
-                    f"[{tf}] No early-entry opportunity — "
-                    "waiting for a pullback, breakout, continuation, or rejection."
-                )
+            # Developing setups are intentionally silent.  The bot only sends
+            # automatic entry notifications after a confirmed BUY/SELL setup.
+            forming_alert_sent.pop(state_key, None)
+            logger.info(
+                f"[{tf}] No confirmed entry — waiting for a confirmed "
+                "pullback, breakout, continuation, or rejection."
+            )
             continue
 
         # Full signal fired — reset the forming-alert state for this TF

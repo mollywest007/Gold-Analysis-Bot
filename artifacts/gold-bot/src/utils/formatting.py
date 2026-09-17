@@ -1353,11 +1353,9 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     monospace ``pre`` block.
     """
     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
-    early_direction = str(getattr(a, "early_direction", "") or "").upper()
     indication = str(getattr(a, "directional_indication", "") or "").upper()
     signal_direction = (
         action if action in ("BUY", "SELL")
-        else early_direction if early_direction in ("BUY", "SELL")
         else indication if indication in ("BUY", "SELL")
         else "WAIT"
     )
@@ -1394,7 +1392,6 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
     atr = float(getattr(a, "atr", 0.0) or 0.0)
     entry = float(getattr(a, "entry", 0.0) or 0.0)
-    early_entry = float(getattr(a, "early_entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     target = float(getattr(a, "tp1", 0.0) or 0.0)
     invalidation = float(getattr(a, "invalidation", 0.0) or 0.0)
@@ -1476,7 +1473,6 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "TRADE PLAN",
         f"Zone    : {zone}",
         f"Entry : {fmt_price(entry) if entry else '—'}",
-        f"Early   : {fmt_price(early_entry) if early_entry else '—'}",
         f"SL      : {fmt_price(stop) if stop else '—'}",
         f"TP1     : {fmt_price(target) if target else '—'}",
         f"R:R     : {f'1:{rr:g}' if rr else '—'}",
@@ -1490,9 +1486,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"State     : {status}",
         f"Waiting for: {'entry confirmation' if action not in ('BUY', 'SELL') else 'nothing — setup is active'}",
         (
-            "Note      : provisional review only — not guaranteed."
-            if status == "EARLY ENTRY"
-            else "Note      : no trade until a valid opportunity develops."
+            "Note      : no trade until a confirmed opportunity develops."
             if status == "NO TRADE"
             else "Note      : active entry plan."
         ),

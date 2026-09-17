@@ -1613,14 +1613,16 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     setup, confirmed_setup = _simple_price_action(
         direction, opens, highs, lows, closes, price, ema20, ema50, atr
     )
+    # A developing pullback is context, not an entry.  Only a confirmed
+    # price-action setup may produce a direction or trade plan.
     developing_pullback = setup == "Pullback developing"
-    has_entry_opportunity = confirmed_setup or developing_pullback
-    early_direction = direction if direction in ("BUY", "SELL") and has_entry_opportunity else ""
+    has_entry_opportunity = confirmed_setup
+    early_direction = ""
     action = direction if confirmed_setup and rsi_supports else "WAIT"
 
     risk = atr * 1.2
-    if action in ("BUY", "SELL") or early_direction:
-        plan_direction = action if action in ("BUY", "SELL") else early_direction
+    if action in ("BUY", "SELL"):
+        plan_direction = action
         entry = round(price, 2)
         stop_loss = round(
             entry - risk if plan_direction == "BUY" else entry + risk, 2
@@ -1641,7 +1643,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         zone_width = atr * 0.25
         zone_low = round(entry - zone_width, 2)
         zone_high = round(entry + zone_width, 2)
-        signal_status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "EARLY ENTRY"
+        signal_status = "CONFIRMED ENTRY"
         invalidation = stop_loss
     else:
         entry = stop_loss = tp1 = tp2 = tp3 = rr_ratio = 0.0
@@ -1659,10 +1661,6 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             f"NO TRADE — {condition.lower()} trend and RSI align; "
             "waiting for a pullback, breakout, continuation, or rejection"
         )
-    elif signal_status == "EARLY ENTRY":
-        wait_reason = (
-            f"EARLY ENTRY — {setup}; price action is developing, not yet a confirmed trigger"
-        )
     else:
         wait_reason = f"{setup} aligned with EMA trend and RSI momentum"
 
@@ -1672,8 +1670,6 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         confidence = 55
     elif confirmed_setup:
         confidence = 78
-    elif developing_pullback:
-        confidence = 68
     else:
         confidence = 60
 

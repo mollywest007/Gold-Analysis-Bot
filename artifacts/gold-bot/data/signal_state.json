@@ -35,28 +35,24 @@
     "8039158711": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
+      "active_signal": {},
+      "closed_signal": {
         "M15": "SELL"
       },
-      "closed_signal": {},
       "last_fired": {
-        "M15": 1789519460.292914
+        "M15": 1789603945.5988803
       },
       "pending_signal": {},
-      "sl_cooldown_until": {},
+      "sl_cooldown_until": {
+        "M15": 1789605745.5988846
+      },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "momentum_shift_warned": {},
       "forming_alert_sent": {},
-      "forming_alert_last_sent": {
-        "M15": 1789519350.3835065
-      },
-      "forming_alert_message_ids": {
-        "M15": {
-          "8039158711": 6127
-        }
-      },
+      "forming_alert_last_sent": {},
+      "forming_alert_message_ids": {},
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
           "entry",
@@ -83,6 +79,32 @@
           "update_6x"
         ],
         "129b2877e2de4e9bb0e763fb19b100c7": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "a1d0f876c4e8499e805ad160ba4579d1": [
+          "entry"
+        ],
+        "6c788be5652840a0ae0b452f33920cc0": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "5f87978ce3b748d997a60a15d93a1630": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "214d8b13856f46008b42ccba744ebd57": [
+          "entry"
+        ],
+        "f37bdda858e14686ab8c7dd1e1e7fece": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "48855bf74e8a49a9b731ab7e6dcf25a5": [
           "entry",
           "update_2x",
           "update_6x"
