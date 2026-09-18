@@ -46,6 +46,10 @@ _tf_last_fired: Dict[str, float] = {}
 # scan cannot send the same entry before the persistent lock is written.
 _pending_signal: Dict[str, str] = {}
 _scan_lock = asyncio.Lock()
+# Trade exits have their own short critical section so a fast quote monitor
+# cannot race the full alert scan while both update the JSON trade store.
+_trade_exit_lock = asyncio.Lock()
+_fast_exit_lock = asyncio.Lock()
 # Early-entry watch state is separate from confirmed trade locks.  A
 # provisional alert must never claim a timeframe or create an active trade.
 _forming_alert_sent: Dict[str, str] = {}
@@ -2315,9 +2319,10 @@ async def _check_and_alert_once(
                         if extremes is not None:
                             tf_extremes[scope] = extremes
 
-            events = trade_tracker.check_trades(
-                current_price, tf_extremes=tf_extremes, account_id=account_id
-            )
+            async with _trade_exit_lock:
+                events = trade_tracker.check_trades(
+                    current_price, tf_extremes=tf_extremes, account_id=account_id
+                )
             event_trade_ids: set[str] = set()
             cooldown_event_trade_ids: set[str] = set()
             for ev in events:
@@ -2829,6 +2834,140 @@ async def _check_and_alert_once(
         grouped.setdefault((signal[0], signal[4].action), []).append(signal)
     for (stream_label, direction), signals in grouped.items():
         await _process(signals, direction)
+
+
+async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check open trades from a fresh spot quote without running analysis.
+
+    The normal alert scan also checks exits, but it can be occupied by OHLCV,
+    analysis, chart generation, or Telegram work.  This lightweight job keeps
+    SL/TP detection responsive while leaving entry analysis on its existing
+    cadence.  Verified candle extremes remain the responsibility of the full
+    scan; this path is live-spot evidence only.
+    """
+    if _fast_exit_lock.locked():
+        logger.info("Fast exit scan skipped — previous fast scan is still running.")
+        return
+
+    async with _fast_exit_lock:
+        subscribers = _load()
+        if not subscribers:
+            return
+
+        from src.market_hours import market_status
+
+        if not market_status()["is_open"]:
+            return
+
+        try:
+            current_price = _safe_float(await get_gold_price())
+        except Exception as error:
+            logger.warning("Fast exit scan could not fetch spot price: %s", error)
+            return
+        if current_price <= 0:
+            logger.warning("Fast exit scan skipped — live spot unavailable.")
+            return
+
+        bot = context.application.bot
+        for account_id in sorted(subscribers):
+            state = _load_account_state(account_id)
+            active_trades = trade_tracker.get_active_trades(account_id)
+            if not active_trades:
+                continue
+
+            async with _trade_exit_lock:
+                events = trade_tracker.check_trades(
+                    current_price, account_id=account_id
+                )
+
+            subs = {account_id}
+            event_ids: set[str] = set()
+            combined = get_user_mode(account_id) == COMBINED_MODE
+            for event in events:
+                trade = event.get("trade") or {}
+                trade_id = str(trade.get("id") or "")
+                if trade_id:
+                    event_ids.add(trade_id)
+                if event.get("event") == "EXPIRED":
+                    state_key = _trade_state_key(trade, combined=combined)
+                    clear_signal_lock(
+                        state_key, state=state, account_id=account_id
+                    )
+                    continue
+
+                await _send_verified_result_event(
+                    bot,
+                    subs,
+                    trade,
+                    event.get("event", ""),
+                    event.get("exit_price", current_price),
+                    account_id,
+                )
+
+                if not trade_tracker.is_active_trade(trade):
+                    event_name = event.get("event", "")
+                    state_key = _trade_state_key(trade, combined=combined)
+                    is_loss = event_name in ("SL", "TP1_SL")
+                    is_final_target = event_name == "TP3"
+                    cooldown_until = clear_signal_lock(
+                        state_key,
+                        after_sl=is_loss,
+                        after_tp=is_final_target,
+                        state=state,
+                        account_id=account_id,
+                    )
+                    if is_loss and cooldown_until and trade_id:
+                        period = _TF_PERIOD_SECONDS.get(
+                            trade.get("timeframe", ""),
+                            _DEFAULT_TF_PERIOD_SECONDS,
+                        )
+                        if trade_tracker.mark_cooldown_notification_pending(
+                            trade_id,
+                            cooldown_until,
+                            _SL_COOLDOWN_CANDLES * period,
+                            account_id,
+                        ):
+                            await _send_sl_cooldown_notification(
+                                bot, subs, trade, event_name, account_id
+                            )
+
+            # Retry terminal-result or cooldown notices that could not be
+            # delivered on an earlier fast or full scan.
+            for pending_trade in trade_tracker.get_pending_result_notifications(
+                account_id
+            ):
+                pending_id = str(pending_trade.get("id") or "")
+                if pending_id and pending_id not in event_ids:
+                    pending_event = _pending_result_event(pending_trade)
+                    if pending_event:
+                        await _send_verified_result_event(
+                            bot,
+                            subs,
+                            pending_trade,
+                            pending_event,
+                            _safe_float(
+                                pending_trade.get("sl")
+                                or pending_trade.get("entry")
+                                or current_price
+                            ),
+                            account_id,
+                        )
+
+            for pending_trade in trade_tracker.get_pending_cooldown_notifications(
+                account_id
+            ):
+                pending_id = str(pending_trade.get("id") or "")
+                if pending_id and pending_id not in event_ids:
+                    pending_event = (
+                        "TP1_SL"
+                        if pending_trade.get("status") == "tp1_sl_hit"
+                        else "SL"
+                    )
+                    await _send_sl_cooldown_notification(
+                        bot, subs, pending_trade, pending_event, account_id
+                    )
+
+            _save_signal_state(account_id, state)
 
 
 async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:

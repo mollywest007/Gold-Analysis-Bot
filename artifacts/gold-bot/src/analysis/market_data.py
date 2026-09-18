@@ -44,7 +44,9 @@ OHLCV_TTL  = 5 * 60   # 5 minutes
 OHLCV_TTL_BY_TIMEFRAME: Dict[str, int] = {
     "M15": 60,
 }
-PRICE_TTL  = 30       # 30 seconds
+# Exit monitoring uses this quote cache.  A long TTL can leave a fast SL/TP
+# move invisible while the heavier analysis scan is still running.
+PRICE_TTL  = 5        # seconds
 MAX_SOURCE_SPREAD = 75.0
 MAX_FUTURES_SPOT_DEVIATION = 100.0
 

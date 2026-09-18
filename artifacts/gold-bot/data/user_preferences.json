@@ -10,5 +10,9 @@
   "101": {
     "mode": "scalp",
     "timeframe": "M15"
+  },
+  "123": {
+    "mode": "scalp",
+    "timeframe": "M15"
   }
 }

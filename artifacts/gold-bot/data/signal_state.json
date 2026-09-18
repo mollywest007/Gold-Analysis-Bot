@@ -40,11 +40,11 @@
         "M15": "BUY"
       },
       "last_fired": {
-        "M15": 1789669893.9611788
+        "M15": 1789731033.1460066
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1789671693.9611824
+        "M15": 1789732833.146013
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
@@ -122,6 +122,9 @@
           "entry",
           "update_2x",
           "update_6x"
+        ],
+        "26432d0b5dce43b89ef176cc7a834007": [
+          "entry"
         ]
       }
     }

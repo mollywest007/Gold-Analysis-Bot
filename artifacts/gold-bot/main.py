@@ -23,6 +23,7 @@ from src.handlers import (
 )
 from src.alerts import (
     check_and_alert,
+    check_open_trades_fast,
     send_market_conditions_summary,
     send_startup_summary,
     send_trade_reminder_for_accounts,
@@ -43,6 +44,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 ALERT_INTERVAL_SECONDS  = 15    # 15 seconds — catch entries before the move extends
+FAST_EXIT_INTERVAL_SECONDS = 5   # quote-only SL/TP monitor, independent of analysis
 CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 
 
@@ -230,6 +232,14 @@ def main() -> None:
         name="alert_scanner",
     )
 
+    # Fast exit monitor — does not wait for the heavier entry-analysis scan.
+    app.job_queue.run_repeating(
+        check_open_trades_fast,
+        interval=FAST_EXIT_INTERVAL_SECONDS,
+        first=5,
+        name="fast_exit_scanner",
+    )
+
     # Market conditions summary — broadcast every 4 hours during market hours
     # first=4*3600 so it never fires on startup/restart, only on schedule
     app.job_queue.run_repeating(
@@ -260,6 +270,7 @@ def main() -> None:
         f"Jobs scheduled — cache warm: 15s | "
         f"cache refresh: {CACHE_REFRESH_SECONDS}s | "
         f"alert scan: {ALERT_INTERVAL_SECONDS}s | "
+        f"fast exits: {FAST_EXIT_INTERVAL_SECONDS}s | "
         f"market conditions: 4h | key health: 6h"
     )
 
