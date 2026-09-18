@@ -37,14 +37,14 @@
       "timeframe": "M15",
       "active_signal": {},
       "closed_signal": {
-        "M15": "SELL"
+        "M15": "BUY"
       },
       "last_fired": {
-        "M15": 1789603945.5988803
+        "M15": 1789669893.9611788
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1789605745.5988846
+        "M15": 1789671693.9611824
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
@@ -105,6 +105,20 @@
           "update_6x"
         ],
         "48855bf74e8a49a9b731ab7e6dcf25a5": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "512d14756b4f4bcd91f521a57efe1cca": [
+          "entry",
+          "update_2x"
+        ],
+        "774c4b6ddb374e1db0b828a3c25789e5": [
+          "entry",
+          "update_2x",
+          "update_6x"
+        ],
+        "756572854f85412483661858ea160909": [
           "entry",
           "update_2x",
           "update_6x"

@@ -24,8 +24,21 @@ from src.user_preferences import (
     get_monitoring_streams,
     get_timeframe as get_user_timeframe,
 )
+from src.message_replacement import clear_previous, remember_message
 
 logger = logging.getLogger(__name__)
+
+
+async def _begin_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: int, slot: str) -> None:
+    """Remove the previous manual panel for this chat and feature."""
+    await clear_previous(context.bot, chat_id, slot)
+
+
+async def _track_panel(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, slot: str, message
+) -> None:
+    """Add a sent message to the current manual panel group."""
+    await remember_message(chat_id, slot, message)
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
@@ -133,43 +146,53 @@ def _age_note(tf: str) -> str:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     name    = update.effective_user.first_name or "Trader"
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "start")
     register_user(chat_id)
-    await update.message.reply_text(
+    message = await update.message.reply_text(
         welcome_text(name),
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
+    await _track_panel(context, chat_id, "start", message)
 
 
 async def cmd_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show explicit ON/OFF controls for automatic signal notifications."""
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "alerts")
     is_on = is_registered(chat_id)
     state_text = "ON" if is_on else "OFF"
-    await update.message.reply_text(
+    message = await update.message.reply_text(
         f"<b>Automatic alerts: {state_text}</b>\n\n"
         "Choose exactly what you want. Your choice is saved immediately.\n\n"
         "You will still receive replies to commands when alerts are OFF.",
         parse_mode="HTML",
         reply_markup=alerts_keyboard(is_on),
     )
+    await _track_panel(context, chat_id, "alerts", message)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(help_text(), parse_mode="HTML")
+    chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "help")
+    message = await update.message.reply_text(help_text(), parse_mode="HTML")
+    await _track_panel(context, chat_id, "help", message)
 
 
 async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "recommend")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "recommend", message)
+        return
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(
         f"Running full market analysis on {tf}...{' (' + note + ')' if note else ''}"
     )
+    await _track_panel(context, chat_id, "recommend", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -190,14 +213,15 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                             reply_markup=refresh_keyboard("recommend", tf))
         banner = _open_trade_banner(tf, chat_id)
         if banner:
-            await update.message.reply_text(banner, parse_mode="HTML")
+            banner_message = await update.message.reply_text(banner, parse_mode="HTML")
+            await _track_panel(context, chat_id, "recommend", banner_message)
 
         # ── Part 2: Entry signal — only A/A+ setups get an entry card ────────────
         if a.action in ("BUY", "SELL"):
 
             # Grade gate — C setups should never be traded
             if a.setup_quality == "C":
-                await update.message.reply_text(
+                grade_message = await update.message.reply_text(
                     f"⚠️ <b>Grade C — Do NOT enter this trade</b>\n\n"
                     f"The engine sees a {a.action} direction but the setup quality is too low "
                     f"(win probability {a.win_probability}%, ADX {a.adx:.1f}). "
@@ -205,9 +229,11 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     f"<b>Wait for a Grade A or A+ setup.</b> Use /signal to keep scanning.",
                     parse_mode="HTML",
                 )
+                await _track_panel(context, chat_id, "recommend", grade_message)
                 return
 
-            await update.message.reply_text(entry_card(a), parse_mode="HTML")
+            entry_message = await update.message.reply_text(entry_card(a), parse_mode="HTML")
+            await _track_panel(context, chat_id, "recommend", entry_message)
 
             # Always attach the live chart for every BUY/SELL signal
             try:
@@ -217,6 +243,7 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chart_msg = await update.message.reply_text(
                     f"Generating {tf} chart..."
                 )
+                await _track_panel(context, chat_id, "recommend", chart_msg)
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
                     await chart_msg.delete()
@@ -229,10 +256,11 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         f"Limit Entry : {entry_display:,.2f}  |  SL: {a.stop_loss:,.2f}\n"
                         f"TP1: {a.tp1:,.2f} (1:{rr1})  TP3: {a.tp3:,.2f} (1:{rr3})"
                     )
-                    await update.message.reply_photo(
+                    chart_message = await update.message.reply_photo(
                         photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_entry.jpg"),
                         caption=caption,
                     )
+                    await _track_panel(context, chat_id, "recommend", chart_message)
                 else:
                     await chart_msg.delete()
             except Exception as chart_err:
@@ -240,7 +268,10 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         else:
             # Genuinely no direction — engine gated it (ranging, Asian session, HTF block, etc.)
-            await update.message.reply_text(no_entry_card(a), parse_mode="HTML")
+            no_entry_message = await update.message.reply_text(
+                no_entry_card(a), parse_mode="HTML"
+            )
+            await _track_panel(context, chat_id, "recommend", no_entry_message)
 
     except Exception as e:
         logger.error(f"recommend error: {e}")
@@ -248,15 +279,18 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "analyze")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "analyze", message)
+        return
     tf = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg = await update.message.reply_text(
         f"Analyzing {tf}...{' (' + note + ')' if note else ''}"
     )
+    await _track_panel(context, chat_id, "analyze", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -273,21 +307,27 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text(cards[0], parse_mode="HTML",
                             reply_markup=refresh_keyboard("analyze", tf))
         for continuation in cards[1:]:
-            await update.message.reply_text(continuation, parse_mode="HTML")
+            continuation_message = await update.message.reply_text(
+                continuation, parse_mode="HTML"
+            )
+            await _track_panel(context, chat_id, "analyze", continuation_message)
     except Exception as e:
         logger.error(f"analyze error: {e}")
         await msg.edit_text("Analysis failed. Please try again.")
 
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa: F811
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "signal")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "signal", message)
+        return
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Scanning for setup...{' (' + note + ')' if note else ''}")
+    await _track_panel(context, chat_id, "signal", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -307,7 +347,8 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         banner = _open_trade_banner(tf, chat_id)
         if banner:
-            await update.message.reply_text(banner, parse_mode="HTML")
+            banner_message = await update.message.reply_text(banner, parse_mode="HTML")
+            await _track_panel(context, chat_id, "signal", banner_message)
 
         # When there is an actionable signal, attach a live chart automatically
         if a.action in ("BUY", "SELL"):
@@ -318,13 +359,15 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 chart_msg = await update.message.reply_text(
                     f"Generating {tf} chart for this signal..."
                 )
+                await _track_panel(context, chat_id, "signal", chart_msg)
                 img_bytes = await generate_chart_image(tf)
                 if img_bytes:
                     await chart_msg.delete()
-                    await update.message.reply_photo(
+                    chart_message = await update.message.reply_photo(
                         photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_signal.jpg"),
                         caption=f"XAU/USD {tf} — {a.action} setup  |  Entry {a.entry:,.2f}  SL {a.stop_loss:,.2f}  TP1 {a.tp1:,.2f}",
                     )
+                    await _track_panel(context, chat_id, "signal", chart_message)
                 else:
                     await chart_msg.delete()
             except Exception as chart_err:
@@ -335,14 +378,17 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "trend")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "trend", message)
+        return
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Reading trend...{' (' + note + ')' if note else ''}")
+    await _track_panel(context, chat_id, "trend", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -354,14 +400,17 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "levels")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "levels", message)
+        return
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Calculating levels...{' (' + note + ')' if note else ''}")
+    await _track_panel(context, chat_id, "levels", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -373,14 +422,17 @@ async def cmd_levels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_outlook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_market_open():
-        await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
-        return
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "outlook")
+    if not _is_market_open():
+        message = await update.message.reply_text(_market_closed_text(), parse_mode="HTML")
+        await _track_panel(context, chat_id, "outlook", message)
+        return
     mode_name = get_user_mode(chat_id)
     tf   = _get_tf(context, chat_id)
     note = _age_note(tf)
     msg  = await update.message.reply_text(f"Generating outlook...{' (' + note + ')' if note else ''}")
+    await _track_panel(context, chat_id, "outlook", msg)
     try:
         analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
         a = await get_analysis(tf, mode=analysis_mode)
@@ -397,9 +449,11 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from src.analysis.market_data import get_gold_price
     from src.utils.formatting import active_trades_card
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "active")
     mode_name = get_user_mode(chat_id)
     timeframe = get_user_timeframe(chat_id)
     msg   = await update.message.reply_text("Fetching active trades...")
+    await _track_panel(context, chat_id, "active", msg)
     try:
         price = await get_gold_price()
     except Exception:
@@ -417,6 +471,7 @@ async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "settings")
     tf   = _get_tf(context, chat_id)
     mode = get_user_mode_config(chat_id)
     if mode.name == COMBINED_MODE:
@@ -443,15 +498,17 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "within that mode."
         )
         keyboard = settings_keyboard(tf, mode.name)
-    await update.message.reply_text(
+    message = await update.message.reply_text(
         text, parse_mode="HTML",
         reply_markup=keyboard,
     )
+    await _track_panel(context, chat_id, "settings", message)
 
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show and switch the active analysis persona."""
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "mode")
     cfg = get_user_mode_config(chat_id)
     lines = [
         f"<b>Analysis Mode</b>\nActive: {cfg.emoji} <b>{cfg.label}</b>",
@@ -467,7 +524,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if cfg.name == COMBINED_MODE
         else None
     )
-    await update.message.reply_text(
+    message = await update.message.reply_text(
         "\n".join(lines),
         parse_mode="HTML",
         reply_markup=settings_keyboard(
@@ -476,10 +533,14 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             combined_timeframes=combined,
         ),
     )
+    await _track_panel(context, chat_id, "mode", message)
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "news")
     msg = await update.message.reply_text("Fetching gold headlines...")
+    await _track_panel(context, chat_id, "news", msg)
     try:
         from src.news import fetch_gold_news
         items = await fetch_gold_news()
@@ -494,10 +555,15 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     from src import trade_tracker
     from src.utils.formatting import history_card
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "history")
     trades = trade_tracker.get_all_trades(chat_id)
     stats  = trade_tracker.get_stats(chat_id)
-    await update.message.reply_text(history_card(trades, stats), parse_mode="HTML",
-                                    reply_markup=refresh_keyboard("history", "none"))
+    message = await update.message.reply_text(
+        history_card(trades, stats),
+        parse_mode="HTML",
+        reply_markup=refresh_keyboard("history", "none"),
+    )
+    await _track_panel(context, chat_id, "history", message)
 
 
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -513,6 +579,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import io
 
     chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "chart")
     mode_name = get_user_mode(chat_id)
     tf  = _get_tf(context, chat_id)
     ms  = market_status()
@@ -520,6 +587,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Generating XAU/USD {tf} chart...",
         parse_mode="HTML",
     )
+    await _track_panel(context, chat_id, "chart", msg)
 
     # ── Step 1: Generate chart ─────────────────────────────────────────────────
     try:
@@ -538,10 +606,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for attempt in range(2):
         try:
             market_note = "" if ms["is_open"] else "  (market closed — showing last session data)"
-            await update.message.reply_photo(
+            photo_message = await update.message.reply_photo(
                 photo=InputFile(io.BytesIO(img_bytes), filename="xauusd_chart.jpg"),
                 caption=f"XAU/USD {tf}{market_note}",
             )
+            await _track_panel(context, chat_id, "chart", photo_message)
             sent_photo = True
             break
         except (NetworkError, TimedOut) as e:
@@ -584,8 +653,12 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Step 4: Send analysis card ────────────────────────────────────────────
     if gemini_ok:
         try:
-            await update.message.reply_text(_result_card(result), parse_mode="HTML",
-                                            reply_markup=refresh_keyboard("chart", tf))
+            result_message = await update.message.reply_text(
+                _result_card(result),
+                parse_mode="HTML",
+                reply_markup=refresh_keyboard("chart", tf),
+            )
+            await _track_panel(context, chat_id, "chart", result_message)
             await msg.delete()
         except Exception as e:
             logger.warning(f"cmd_chart — result card send failed: {e}")
@@ -596,9 +669,14 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             from src.utils.formatting import pro_analysis_card, entry_card
             analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
-            await update.message.reply_text(pro_analysis_card(a), parse_mode="HTML",
-                                            reply_markup=refresh_keyboard("chart", tf))
-            await update.message.reply_text(entry_card(a), parse_mode="HTML")
+            analysis_message = await update.message.reply_text(
+                pro_analysis_card(a),
+                parse_mode="HTML",
+                reply_markup=refresh_keyboard("chart", tf),
+            )
+            await _track_panel(context, chat_id, "chart", analysis_message)
+            entry_message = await update.message.reply_text(entry_card(a), parse_mode="HTML")
+            await _track_panel(context, chat_id, "chart", entry_message)
             await msg.delete()
         except Exception as e:
             logger.error(f"cmd_chart — engine fallback failed: {e}")

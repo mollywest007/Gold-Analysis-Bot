@@ -23,8 +23,32 @@ from src.user_preferences import (
     set_combined_timeframe,
     set_timeframe as set_user_timeframe,
 )
+from src.message_replacement import clear_previous, remember_message
 
 logger = logging.getLogger(__name__)
+
+
+async def _prepare_callback_panel(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    slot: str,
+    message,
+) -> None:
+    """Keep the callback's current card and remove older copies of its panel."""
+    message_id = getattr(message, "message_id", None)
+    await clear_previous(
+        context.bot,
+        chat_id,
+        slot,
+        keep_message_id=int(message_id) if message_id is not None else None,
+    )
+    await remember_message(chat_id, slot, message)
+
+
+async def _track_callback_message(
+    chat_id: int, slot: str, message
+) -> None:
+    await remember_message(chat_id, slot, message)
 
 
 def _get_tf(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:
@@ -145,6 +169,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── Explicit automatic-alert controls ──────────────────────────────────────
     if data in ("alerts:on", "alerts:off", "alerts:status"):
         chat_id = update.effective_chat.id
+        await _prepare_callback_panel(context, chat_id, "alerts", query.message)
         if data == "alerts:on":
             register_user(chat_id)
             await query.answer("Automatic alerts are now enabled.")
@@ -168,6 +193,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── Timeframe settings (always available) ─────────────────────────────────
     if data.startswith("set_tf:"):
         await query.answer()
+        await _prepare_callback_panel(context, chat_id, "settings", query.message)
         tf = data.split(":")[1]
         cfg = get_user_mode_config(chat_id)
         if tf not in cfg.scan_timeframes:
@@ -192,6 +218,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("set_combo_tf:"):
         await query.answer()
+        await _prepare_callback_panel(context, chat_id, "settings", query.message)
         _, stream, tf = data.split(":", 2)
         try:
             set_combined_timeframe(chat_id, stream, tf)
@@ -218,6 +245,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("set_mode:"):
         await query.answer()
+        await _prepare_callback_panel(context, chat_id, "settings", query.message)
         mode_name = data.split(":", 1)[1]
         try:
             cfg = set_user_mode(chat_id, mode_name)
@@ -256,6 +284,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── Back / navigation ─────────────────────────────────────────────────────
     if data in ("back:main", "settings:back"):
         await query.answer()
+        await _prepare_callback_panel(context, chat_id, "settings", query.message)
         from telegram import InlineKeyboardMarkup
         tf  = _get_tf(context, chat_id)
         ms  = market_status()
@@ -291,6 +320,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Always answer the query first so Telegram never shows a frozen button
         await query.answer()
         _invalidate_refresh_market_data(command, tf)
+        await _prepare_callback_panel(context, chat_id, command, query.message)
 
         _unchanged = False
         try:
@@ -378,8 +408,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         cards[0], parse_mode="HTML", reply_markup=kb
                     )
                     for continuation in cards[1:]:
-                        await context.bot.send_message(
+                        continuation_message = await context.bot.send_message(
                             chat_id=chat_id, text=continuation, parse_mode="HTML"
+                        )
+                        await _track_callback_message(
+                            chat_id, command, continuation_message
                         )
 
                 elif command == "signal":
@@ -485,6 +518,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     command = data.split(":")[0]          # e.g. "signal", "trend", "analyze" …
     kb      = refresh_keyboard(command, tf)
     context.user_data["timeframe"] = tf
+    await _prepare_callback_panel(context, chat_id, command, query.message)
 
     if not _is_open():
         try:
