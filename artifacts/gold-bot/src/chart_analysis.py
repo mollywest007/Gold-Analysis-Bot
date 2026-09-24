@@ -88,6 +88,10 @@ class ChartAnalysisResult:
 
     # Trade setup
     entry_type: str                     # "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT"
+    setup_status: str                   # WAIT | DEVELOPING | MODERATE ENTRY | MISSED | INVALID
+    current_confirmation: str           # what has already happened on the chart
+    moderate_entry_low: Optional[float]
+    moderate_entry_high: Optional[float]
     entry: Optional[float]
     stop_loss: Optional[float]
     take_profit_1: Optional[float]
@@ -196,7 +200,8 @@ WRITING STYLE — always use probabilistic language:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — CONFLUENCE SCORING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-List every factor supporting the trade direction. High-probability setups require 4+ confluences:
+List every factor supporting the trade direction. Record confluence clearly,
+but do not turn a fixed confluence count into a mechanical entry gate:
 - HTF and LTF trend alignment
 - Price at a key S/R level (not in the middle of nowhere)
 - Confirmed BOS or CHoCH
@@ -208,14 +213,36 @@ List every factor supporting the trade direction. High-probability setups requir
 - Session timing (London / NY overlap = highest probability, institutions active)
 - Volume spike or momentum divergence (if visible)
 
+For the entry decision, do NOT require every listed factor. Use the balanced
+moderate-entry rule: one strong confirmation OR two reasonable confirmations.
+A strong confirmation can be a clear rejection at a key level, a liquidity
+sweep followed by a reaction, a short-term break/change of structure, or a
+breakout with a reasonable retest and candle close. Reasonable confirmations
+can be a confirming candle close, aligned momentum/volume, a clean EMA/trend
+relationship, or a reaction from a meaningful support/demand or
+resistance/supply zone. Choose only evidence visible on this chart.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 7 — TRADE LEVELS & DIRECT ENTRY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Only suggest a trade if win_probability >= 65.
-If the setup is unclear or insufficient, set entry_type to WAIT.
+Do not enter only because price touched a level. Do not wait for every
+possible confirmation either. Set setup_status to one of:
+WAIT — unclear or insufficient confirmation;
+DEVELOPING — directional idea is forming but needs a little more evidence;
+MODERATE ENTRY — enough evidence supports a timely entry and price remains
+close to the setup area;
+MISSED — confirmation happened but price has moved too far, so wait for a
+pullback/retest and do not chase;
+INVALID — the setup thesis has failed.
 
-DIRECT ENTRY — use the strongest structural confluence zone available.
-This gives the best R:R while keeping the decision tied to the complete analysis.
+Before using MODERATE ENTRY, answer: "Is there enough evidence that this move
+is beginning, while price is still close enough to the setup area for a
+reasonable entry?" If not, use WAIT or DEVELOPING. If yes, give the entry
+zone now rather than waiting for perfect confirmation.
+
+MODERATE ENTRY — use the strongest visible structural zone that is still
+reasonably close to current price. Do not chase an extended move. If the
+move is extended, set MISSED and identify the pullback/retest area instead.
 Use this waterfall in order (pick the FIRST one that applies):
 
   1. Order Block (OB): enter at the OB zone LOW (buy) or HIGH (sell)
@@ -227,8 +254,8 @@ Use this waterfall in order (pick the FIRST one that applies):
   4. Fib 50%: equilibrium entry — balanced mid-range pullback
   5. Fib 38.2%: shallow pullback — safer entry, lower R:R, use only with strong candle confirmation
 
-The entry price must be INSIDE the identified zone, not at market.
-Set entry_type = "ENTRY" and explain the specific zone in entry_reason.
+The entry price must be INSIDE the identified zone. Set entry_type to the
+most appropriate setup type and explain the evidence in entry_reason.
 
 • Entry: precise price inside the best available confluence zone (OB / FVG / OTE / Fib)
 • Stop Loss: BELOW the structural low of the entry zone (BUY) or ABOVE the structural high (SELL)
@@ -308,6 +335,10 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "selling_pressure":     "<evidence of selling pressure — probabilistic language>",
   "pressure_advantage":   "BUYERS" | "SELLERS" | "NEUTRAL",
   "entry_type":           "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT",
+  "setup_status":         "WAIT" | "DEVELOPING" | "MODERATE ENTRY" | "MISSED" | "INVALID",
+  "current_confirmation": "<exact confirmation already visible, or what is still missing>",
+  "moderate_entry_low":   <float or null>,
+  "moderate_entry_high":  <float or null>,
   "entry":                <float or null>,
   "stop_loss":            <float or null>,
   "take_profit_1":        <float or null>,
@@ -329,7 +360,8 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
 
 Critical rules:
 - Gold (XAU/USD) currently trades around 3200–3500. Read EXACT prices from the Y-axis.
-- Only suggest a trade if win_probability >= 65. If unclear, set entry_type to WAIT.
+- Never force a trade. Use the balanced status rule above: one strong
+  confirmation or two reasonable confirmations, with no chasing.
 - Stop loss must be placed at a STRUCTURAL level — never an arbitrary ATR distance.
 - bullish_probability + bearish_probability should sum to approximately 100.
 - ALWAYS use probabilistic language: never "price will go up/down", always "probability favors X because…"
@@ -490,6 +522,18 @@ async def analyse_chart_bytes(
             return v
         return str(v).lower() in ("true", "1", "yes")
 
+    raw_status = str(parsed.get("setup_status", "WAIT")).upper().strip()
+    status_aliases = {
+        "MODERATE": "MODERATE ENTRY",
+        "ENTRY": "MODERATE ENTRY",
+        "CONFIRMED": "MODERATE ENTRY",
+        "NO TRADE": "WAIT",
+        "WATCH": "DEVELOPING",
+    }
+    setup_status = status_aliases.get(raw_status, raw_status)
+    if setup_status not in {"WAIT", "DEVELOPING", "MODERATE ENTRY", "MISSED", "INVALID"}:
+        setup_status = "WAIT"
+
     ot_valid_raw = parsed.get("open_trade_valid")
     if ot_valid_raw is None:
         ot_valid: Optional[bool] = None
@@ -522,6 +566,10 @@ async def analyse_chart_bytes(
         selling_pressure=str(parsed.get("selling_pressure", "")),
         pressure_advantage=str(parsed.get("pressure_advantage", "NEUTRAL")).upper(),
         entry_type=str(parsed.get("entry_type", "WAIT")).upper(),
+        setup_status=setup_status,
+        current_confirmation=str(parsed.get("current_confirmation", "")),
+        moderate_entry_low=_f("moderate_entry_low"),
+        moderate_entry_high=_f("moderate_entry_high"),
         entry=_f("entry"),
         stop_loss=_f("stop_loss"),
         take_profit_1=_f("take_profit_1"),

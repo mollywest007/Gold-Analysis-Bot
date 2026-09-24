@@ -64,6 +64,7 @@ def _result_card(r: ChartAnalysisResult) -> str:
         "╚══════════════════════════════════╝",
         "",
         f"  Timeframe  : {_esc(r.timeframe)}",
+        f"  Setup      : {_esc(r.setup_status)}",
         "",
         SEP,
         "  TREND",
@@ -144,8 +145,23 @@ def _result_card(r: ChartAnalysisResult) -> str:
             lines += _wrap(reason, width=32, indent="    • ")
 
     # Trade setup
-    lines += ["", SEP, "  TRADE SETUP", SEP]
-    has_trade = r.entry_type not in ("WAIT", "") and r.entry is not None
+    lines += ["", SEP, "  BALANCED MODERATE ENTRY", SEP]
+    has_trade = r.setup_status == "MODERATE ENTRY" and r.entry is not None
+    entry_zone = (
+        f"{r.moderate_entry_low:,.2f} – {r.moderate_entry_high:,.2f}"
+        if r.moderate_entry_low is not None and r.moderate_entry_high is not None
+        else "Not formed"
+    )
+    lines += [
+        f"  Market Bias : {_esc(r.bias.capitalize())}",
+        f"  Structure   : {_esc(ms_map)}",
+        f"  Key Zone    : "
+        f"{r.key_support[0]:,.2f} support / {r.key_resistance[0]:,.2f} resistance"
+        if r.key_support and r.key_resistance
+        else "Not clearly defined",
+        f"  Confirmation: {_esc(r.current_confirmation or r.entry_reason or 'None yet')}",
+        f"  Entry Area  : {entry_zone}",
+    ]
     if has_trade:
         rr_str = f"1:{r.rr_ratio:.1f}" if r.rr_ratio else "N/A"
         lines += [
@@ -171,8 +187,8 @@ def _result_card(r: ChartAnalysisResult) -> str:
             lines += _wrap(r.entry_reason, width=32, indent="    ")
     else:
         lines += [
-            "  WAIT — No high-probability setup",
-            "  at current price action.",
+            f"  { _esc(r.setup_status) } — no active entry at current price.",
+            "  Wait for the stated confirmation; do not chase.",
         ]
         if r.entry_reason:
             lines += _wrap(r.entry_reason, width=34, indent="  ")

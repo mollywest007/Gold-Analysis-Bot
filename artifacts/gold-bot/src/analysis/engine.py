@@ -180,6 +180,15 @@ class MarketAnalysis:
     signal_status: str = "NO TRADE"
     early_direction: str = ""
     price_action_setup: str = ""
+    # Balanced moderate-entry decision fields.  These are deliberately
+    # separate from the legacy signal fields so API clients can adopt the
+    # user-facing statuses without inferring them from action/entry.
+    setup_status: str = "WAIT"  # WAIT | DEVELOPING | MODERATE ENTRY | MISSED | INVALID
+    current_confirmation: str = ""
+    key_zone: str = ""
+    moderate_entry_low: float = 0.0
+    moderate_entry_high: float = 0.0
+
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -1586,8 +1595,135 @@ def _simple_price_action(
     return ("", False)
 
 
+def _balanced_entry_decision(
+    direction: str,
+    setup: str,
+    rsi_supports: bool,
+    price: float,
+    ema20: float,
+    ema50: float,
+    atr: float,
+    closes: List[float],
+    highs: List[float],
+    lows: List[float],
+) -> dict:
+    """Apply the balanced moderate-entry rule to one selected chart.
+
+    A strong local price-action event is enough to make an entry timely.  If
+    there is no strong event, two independent reasonable signals are required.
+    This intentionally avoids both the old immediate signal and a requirement
+    for every possible confirmation.
+    """
+    if direction not in ("BUY", "SELL"):
+        return {
+            "status": "WAIT",
+            "confirmation": "No clear directional bias; price is not offering a defined setup.",
+            "reasonable": [],
+            "strong": [],
+            "entry_low": 0.0,
+            "entry_high": 0.0,
+            "invalidation": 0.0,
+        }
+
+    volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
+    bullish = direction == "BUY"
+    reasonable: list[str] = []
+    strong: list[str] = []
+
+    if setup in ("Breakout", "Rejection"):
+        strong.append(f"Clear {setup.lower()} with a confirming candle close")
+    elif setup == "Continuation":
+        reasonable.append("Short-term continuation candles are aligned with the trend")
+    elif setup == "Pullback developing":
+        reasonable.append("Price is approaching the EMA pullback area")
+
+    if rsi_supports:
+        reasonable.append(
+            f"RSI momentum supports {'buyers' if bullish else 'sellers'}"
+        )
+    else:
+        reasonable.append("RSI has not confirmed the trend yet")
+
+    close_aligned = (
+        price >= ema20 if bullish else price <= ema20
+    )
+    if close_aligned:
+        reasonable.append(f"Price is holding {'above' if bullish else 'below'} EMA20")
+
+    if len(closes) >= 3:
+        sequence_aligned = (
+            closes[-1] > closes[-2] > closes[-3]
+            if bullish
+            else closes[-1] < closes[-2] < closes[-3]
+        )
+        if sequence_aligned:
+            reasonable.append("Recent closes show directional momentum")
+
+    # A move more than 1.5 ATR from the trend average is not an entry to chase.
+    # Keep the status visible as MISSED only after the chart supplied enough
+    # evidence; otherwise it remains DEVELOPING.
+    extended = abs(price - ema20) > volatility * 1.5
+    enough_evidence = bool(strong) or len(
+        [item for item in reasonable if "not confirmed" not in item]
+    ) >= 2
+    if not enough_evidence:
+        status = "DEVELOPING" if reasonable else "WAIT"
+    elif extended and setup == "Breakout":
+        status = "MISSED"
+    else:
+        status = "MODERATE ENTRY"
+
+    recent_low = min(lows[-8:]) if lows else price
+    recent_high = max(highs[-8:]) if highs else price
+    invalidation = (
+        round(recent_low - volatility * 0.10, 2)
+        if bullish
+        else round(recent_high + volatility * 0.10, 2)
+    )
+    entry_low = round(
+        price - volatility * 0.30 if bullish else price - volatility * 0.05,
+        2,
+    )
+    entry_high = round(
+        price + volatility * 0.05 if bullish else price + volatility * 0.30,
+        2,
+    )
+
+    confirmation_parts = strong + [
+        item for item in reasonable
+        if "not confirmed" not in item
+    ]
+    if status == "DEVELOPING":
+        confirmation = (
+            "; ".join(confirmation_parts)
+            if confirmation_parts
+            else "Directional bias exists, but confirmation is still insufficient."
+        )
+    elif status == "MISSED":
+        confirmation = (
+            "; ".join(confirmation_parts)
+            + "; confirmation arrived after price extended beyond a timely entry."
+        )
+    else:
+        confirmation = (
+            "; ".join(confirmation_parts)
+            if confirmation_parts
+            else "No usable confirmation yet."
+        )
+
+    return {
+        "status": status,
+        "confirmation": confirmation,
+        "reasonable": reasonable,
+        "strong": strong,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "invalidation": invalidation,
+    }
+
+
 def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAnalysis:
-    """Analyze XAU/USD with the intentionally small EMA/RSI/ATR framework."""
+    """Analyze XAU/USD with the EMA/RSI/ATR framework and moderate entry gate."""
     closes = data.closes
     highs = data.highs
     lows = data.lows
@@ -1604,72 +1740,95 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         direction = "NEUTRAL"
     elif ema20 > ema50:
         condition = "BULLISH"
-        direction = "BUY" if rsi >= 50 else "NEUTRAL"
+        direction = "BUY"
     else:
         condition = "BEARISH"
-        direction = "SELL" if rsi <= 50 else "NEUTRAL"
+        direction = "SELL"
 
-    rsi_supports = direction in ("BUY", "SELL")
+    rsi_supports = (
+        (direction == "BUY" and rsi >= 50)
+        or (direction == "SELL" and rsi <= 50)
+    )
     setup, confirmed_setup = _simple_price_action(
         direction, opens, highs, lows, closes, price, ema20, ema50, atr
     )
-    # A developing pullback is context, not an entry.  Only a confirmed
-    # price-action setup may produce a direction or trade plan.
-    developing_pullback = setup == "Pullback developing"
-    has_entry_opportunity = confirmed_setup
-    early_direction = ""
-    action = direction if confirmed_setup and rsi_supports else "WAIT"
+    decision = _balanced_entry_decision(
+        direction,
+        setup,
+        rsi_supports,
+        price,
+        ema20,
+        ema50,
+        atr,
+        closes,
+        highs,
+        lows,
+    )
+    setup_status = "WAIT" if data.is_simulated else decision["status"]
+    early_direction = direction if setup_status in ("DEVELOPING", "MISSED") else ""
+    action = direction if setup_status == "MODERATE ENTRY" and not data.is_simulated else "WAIT"
 
     risk = atr * 1.2
-    if action in ("BUY", "SELL"):
-        plan_direction = action
-        entry = round(price, 2)
-        stop_loss = round(
-            entry - risk if plan_direction == "BUY" else entry + risk, 2
+    plan_direction = direction
+    plan_entry = round(price, 2)
+    if plan_direction in ("BUY", "SELL"):
+        stop_loss = decision["invalidation"] or round(
+            plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
+            2,
         )
+        if (
+            plan_direction == "BUY" and stop_loss >= plan_entry
+        ) or (
+            plan_direction == "SELL" and stop_loss <= plan_entry
+        ):
+            stop_loss = round(
+                plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
+                2,
+            )
         tp1 = round(
-            entry + risk * 1.8 if plan_direction == "BUY" else entry - risk * 1.8,
+            plan_entry + risk * 1.8 if plan_direction == "BUY" else plan_entry - risk * 1.8,
             2,
         )
         tp2 = round(
-            entry + risk * 2.6 if plan_direction == "BUY" else entry - risk * 2.6,
+            plan_entry + risk * 2.6 if plan_direction == "BUY" else plan_entry - risk * 2.6,
             2,
         )
         tp3 = round(
-            entry + risk * 3.4 if plan_direction == "BUY" else entry - risk * 3.4,
+            plan_entry + risk * 3.4 if plan_direction == "BUY" else plan_entry - risk * 3.4,
             2,
         )
-        rr_ratio = 1.8
-        zone_width = atr * 0.25
-        zone_low = round(entry - zone_width, 2)
-        zone_high = round(entry + zone_width, 2)
-        signal_status = "CONFIRMED ENTRY"
-        invalidation = stop_loss
+        sl_distance = abs(plan_entry - stop_loss)
+        rr_ratio = round(abs(tp1 - plan_entry) / sl_distance, 1) if sl_distance else 0.0
+        zone_low = decision["entry_low"]
+        zone_high = decision["entry_high"]
+        entry = plan_entry if action in ("BUY", "SELL") else 0.0
+        invalidation = decision["invalidation"] or stop_loss
     else:
         entry = stop_loss = tp1 = tp2 = tp3 = rr_ratio = 0.0
         zone_low = zone_high = invalidation = 0.0
-        signal_status = "NO TRADE"
+    signal_status = setup_status
 
     if condition == "RANGING":
-        wait_reason = "NO TRADE — 20 EMA and 50 EMA are too close; market is ranging"
+        wait_reason = "Market is ranging; wait for a clearer break and reaction."
     elif not rsi_supports:
         wait_reason = (
-            f"NO TRADE — RSI 14 ({rsi:.1f}) does not support the {condition.lower()} trend"
-        )
-    elif not has_entry_opportunity:
-        wait_reason = (
-            f"NO TRADE — {condition.lower()} trend and RSI align; "
-            "waiting for a pullback, breakout, continuation, or rejection"
+            f"RSI 14 ({rsi:.1f}) has not confirmed the {condition.lower()} trend yet."
         )
     else:
-        wait_reason = f"{setup} aligned with EMA trend and RSI momentum"
+        wait_reason = decision["confirmation"]
+    if setup_status == "MISSED":
+        wait_reason = (
+            f"{wait_reason} Wait for a pullback/retest; do not chase the move."
+        )
 
     if condition == "RANGING":
         confidence = 50
     elif not rsi_supports:
         confidence = 55
-    elif confirmed_setup:
-        confidence = 78
+    elif setup_status == "MODERATE ENTRY":
+        confidence = 76
+    elif setup_status == "MISSED":
+        confidence = 72
     else:
         confidence = 60
 
@@ -1689,13 +1848,11 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     recent_low = round(min(lows[-20:]), 2)
     prior_low = round(min(lows[-40:-20]), 2) if len(lows) >= 40 else recent_low
     data_quality = "SIMULATED" if data.is_simulated else "REAL_OHLCV"
-    simple_direction = (
-        action if action in ("BUY", "SELL") else early_direction
-    )
+    simple_direction = direction if direction in ("BUY", "SELL") else "NEUTRAL"
     report = {
-        "framework": "EMA20/EMA50 + RSI14 + ATR14",
+        "framework": "EMA20/EMA50 + RSI14 + ATR14 + balanced moderate confirmation",
         "data_quality": data_quality,
-        "direction": simple_direction or "WAIT",
+        "direction": simple_direction,
         "market_condition": condition,
         "ema20": round(ema20, 2),
         "ema50": round(ema50, 2),
@@ -1703,16 +1860,18 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "atr14": round(atr, 2),
         "price_action": setup or "None",
         "signal_status": signal_status,
+        "setup_status": setup_status,
+        "current_confirmation": decision["confirmation"],
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,
         "score_breakdown": {
             "ema_trend": 35 if condition != "RANGING" else 0,
             "rsi_momentum": 25 if rsi_supports else 0,
-            "price_action": 40 if confirmed_setup else 20 if developing_pullback else 0,
+            "price_action": 40 if confirmed_setup else 20 if setup else 0,
         },
     }
-    reasons_against = [wait_reason] if signal_status != "CONFIRMED ENTRY" else []
+    reasons_against = [wait_reason] if setup_status != "MODERATE ENTRY" else []
     indicators = [
         Indicator("EMA 20/50", ema20, simple_direction or "NEUTRAL", 0.45),
         Indicator("RSI(14)", rsi, simple_direction or "NEUTRAL", 0.30),
@@ -1752,7 +1911,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         indicators=indicators,
         buy_votes=2 if simple_direction == "BUY" else 0,
         sell_votes=2 if simple_direction == "SELL" else 0,
-        wait_votes=1 if not rsi_supports else 0,
+        wait_votes=1 if setup_status != "MODERATE ENTRY" else 0,
         verdict_reason=wait_reason,
         session=session_label,
         htf_bias="Not used",
@@ -1763,12 +1922,12 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         entry_note="Market price; ATR risk plan",
         rsi_value=rsi,
         market_structure=condition,
-        win_probability=confidence if action in ("BUY", "SELL") else 0,
-        directional_indication=simple_direction or "NEUTRAL",
+        win_probability=confidence if simple_direction in ("BUY", "SELL") else 0,
+        directional_indication=simple_direction,
         confluence_list=confluence,
         tp3=tp3,
-        setup_quality="A" if action in ("BUY", "SELL") else "B" if early_direction else "WAIT",
-        setup_grade="A" if action in ("BUY", "SELL") else "B" if early_direction else "WAIT",
+        setup_quality="A" if setup_status == "MODERATE ENTRY" else "B" if setup_status == "DEVELOPING" else "WAIT",
+        setup_grade="A" if setup_status == "MODERATE ENTRY" else "B" if setup_status == "DEVELOPING" else "WAIT",
         is_simulated=data.is_simulated,
         daily_bias=condition,
         liquidity_evidence="Not used",
@@ -1792,7 +1951,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         invalidating_conditions=(
             [f"Close beyond {invalidation:.2f}"]
             if invalidation
-            else ["No trade plan until EMA trend and RSI align"]
+            else ["No directional setup is active"]
         ),
         best_entry_zone={"low": zone_low, "high": zone_high},
         recommended_rr=rr_ratio,
@@ -1808,6 +1967,15 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         signal_status=signal_status,
         early_direction=early_direction,
         price_action_setup=setup,
+        setup_status=setup_status,
+        current_confirmation=decision["confirmation"],
+        key_zone=(
+            f"Support {recent_low:,.2f} / resistance {recent_high:,.2f}"
+            if direction in ("BUY", "SELL")
+            else "No defined support/resistance zone"
+        ),
+        moderate_entry_low=zone_low,
+        moderate_entry_high=zone_high,
     )
 
 async def _analyze_single(

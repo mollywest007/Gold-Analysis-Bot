@@ -29,6 +29,19 @@ To find your `ALLOWED_USER_ID`: send `/start` to the bot and check the workflow 
 - Google Gemini API for AI-powered analysis
 - APScheduler for periodic jobs (alerts every 15s, cache refresh every 60s, market summary every 4h)
 
+## Entry strategy
+
+The bot uses a balanced moderate-entry strategy. It analyzes trend, structure,
+support/resistance, supply/demand, liquidity, price action, momentum, and
+volume when visible, then allows an entry after one strong confirmation or two
+reasonable confirmations. It does not enter on a level touch, wait for every
+possible confirmation, or chase an extended move.
+
+Every analysis uses these setup statuses: `WAIT`, `DEVELOPING`, `MODERATE
+ENTRY`, `MISSED`, or `INVALID`. Actionable cards show the market bias,
+structure, key zone, current confirmation, moderate entry area, invalidation,
+targets, and estimated risk-to-reward.
+
 ## User preferences
 
 - Keep HTTP client request logging below INFO level (httpx/httpcore set to WARNING) to avoid leaking bot token from query params in logs.

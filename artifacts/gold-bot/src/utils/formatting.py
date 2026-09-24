@@ -1168,6 +1168,20 @@ def signal_card(a: MarketAnalysis) -> str:
         if pdh > 0 and pdl > 0:
             lines.append(f"  PDH / PDL : {fmt_price(pdh)} / {fmt_price(pdl)}")
         lines.append(f"  Price     : {fmt_price(a.price)}")
+        moderate_low = getattr(a, "moderate_entry_low", 0.0) or 0.0
+        moderate_high = getattr(a, "moderate_entry_high", 0.0) or 0.0
+        moderate_zone = (
+            f"{fmt_price(moderate_low)} – {fmt_price(moderate_high)}"
+            if moderate_low and moderate_high
+            else "—"
+        )
+        lines += [
+            f"  Market Bias: {getattr(a, 'bias', 'Neutral')}",
+            f"  Setup Status: {getattr(a, 'setup_status', getattr(a, 'signal_status', 'WAIT'))}",
+            f"  Key Zone  : {getattr(a, 'key_zone', '') or '—'}",
+            f"  Moderate Entry: {moderate_zone}",
+            f"  Confirmation: {(getattr(a, 'current_confirmation', '') or a.wait_reason)[:150]}",
+        ]
 
         htf_lower = a.htf_bias.lower()
         signal_is_buy = a.action == "BUY"
@@ -1228,8 +1242,16 @@ def signal_card(a: MarketAnalysis) -> str:
             "║  XAU/USD  [ WAIT ]               ║",
             "╚══════════════════════════════════╝",
             "",
-            f"  Status    : {wait_status}",
+            f"  Market Bias: {getattr(a, 'bias', 'Neutral')}",
+            f"  Setup Status: {getattr(a, 'setup_status', wait_status)}",
             f"  Blocker   : {wait_detail}",
+            f"  Key Zone  : {getattr(a, 'key_zone', '') or '—'}",
+            f"  Moderate Entry: "
+            f"{fmt_price(getattr(a, 'moderate_entry_low', 0.0))} – "
+            f"{fmt_price(getattr(a, 'moderate_entry_high', 0.0))}"
+            if getattr(a, 'moderate_entry_low', 0.0) and getattr(a, 'moderate_entry_high', 0.0)
+            else "  Moderate Entry: —",
+            f"  Confirmation: {(getattr(a, 'current_confirmation', '') or wait_detail)[:150]}",
             f"  Institutional: {getattr(a, 'confidence_score', 0)}/100",
             f"  Legacy conf.: {a.confidence}% (supporting only)",
             "",
@@ -1369,6 +1391,14 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     status = str(getattr(a, "signal_status", "") or "").upper()
     if not status or (status == "NO TRADE" and action in ("BUY", "SELL")):
         status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "NO TRADE"
+    balanced_status = str(
+        getattr(a, "setup_status", "") or ""
+    ).upper()
+    if (
+        balanced_status in ("WAIT", "DEVELOPING", "MISSED", "INVALID")
+        and action in ("BUY", "SELL")
+    ):
+        action = "WAIT"
 
     timeframe = str(getattr(a, "timeframe", "N/A") or "N/A")
     mode = str(getattr(a, "analysis_mode", "") or "").lower()
@@ -1401,6 +1431,13 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     zone = (
         f"{fmt_price(zone_low)} – {fmt_price(zone_high)}"
         if zone_low and zone_high else "—"
+    )
+    moderate_low = float(getattr(a, "moderate_entry_low", 0.0) or 0.0)
+    moderate_high = float(getattr(a, "moderate_entry_high", 0.0) or 0.0)
+    moderate_zone = (
+        f"{fmt_price(moderate_low)} – {fmt_price(moderate_high)}"
+        if moderate_low and moderate_high
+        else zone
     )
     rsi_support = (
         "supports " + trend_bias
@@ -1455,8 +1492,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Direction : {direction}",
         f"Action    : {action}",
         f"Conflict  : {conflict}",
-        f"Bias      : {getattr(a, 'bias', 'Ranging')}  |  {condition}",
-        f"Status    : {status}",
+        f"Market Bias: {getattr(a, 'bias', 'Neutral')}  |  {condition}",
+        f"Setup Status: {getattr(a, 'setup_status', status)}",
         f"Session   : {session}",
         "──────────────────────────────────",
         "HOW IT IS ANALYZING",
@@ -1466,28 +1503,35 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Momentum  : RSI14 {rsi:.1f} → {rsi_support} | ADX {adx:.1f}",
         f"Structure : {structure}",
         f"Price act.: {setup}",
+        f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
         f"Risk      : ATR14 {fmt_price(atr)} → volatility-based levels",
         f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
         f"Regime    : {regime} | Supertrend {supertrend}",
         "──────────────────────────────────",
         "TRADE PLAN",
-        f"Zone    : {zone}",
+        f"Key zone  : {getattr(a, 'key_zone', '') or '—'}",
+        f"Moderate Entry: {moderate_zone}",
         f"Entry : {fmt_price(entry) if entry else '—'}",
         f"SL      : {fmt_price(stop) if stop else '—'}",
         f"TP1     : {fmt_price(target) if target else '—'}",
+        f"TP2     : {fmt_price(getattr(a, 'tp2', 0.0)) if getattr(a, 'tp2', 0.0) else '—'}",
+        f"TP3     : {fmt_price(getattr(a, 'tp3', 0.0)) if getattr(a, 'tp3', 0.0) else '—'}",
         f"R:R     : {f'1:{rr:g}' if rr else '—'}",
         f"Invalid : {fmt_price(invalidation) if invalidation else '—'}",
+        "──────────────────────────────────",
+        "CURRENT CONFIRMATION",
+        f"{str(getattr(a, 'current_confirmation', '') or wait_reason)[:220]}",
         "──────────────────────────────────",
         "DECISION",
         f"Alert : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",
         f"Waiting   : {wait_reason[:150]}",
         "──────────────────────────────────",
         "ENTRY CONFIRMATION",
-        f"State     : {status}",
+        f"State     : {getattr(a, 'setup_status', status)}",
         f"Waiting for: {'entry confirmation' if action not in ('BUY', 'SELL') else 'nothing — setup is active'}",
         (
             "Note      : no trade until a confirmed opportunity develops."
-            if status == "NO TRADE"
+            if getattr(a, 'setup_status', status) in ("WAIT", "DEVELOPING", "MISSED", "INVALID")
             else "Note      : active entry plan."
         ),
         "──────────────────────────────────",
