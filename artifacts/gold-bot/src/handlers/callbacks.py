@@ -141,24 +141,21 @@ _MARKET_REFRESH_COMMANDS = frozenset(
 
 
 def _invalidate_refresh_market_data(command: str, timeframe: str = "all") -> None:
-    """Refresh the selected candle set without discarding all context data."""
-    from src.analysis.market_data import invalidate_cache, invalidate_price_cache
+    """Refresh the live snapshot without blocking on a full history download.
 
-    # The active-trades panel only needs a live quote. Throwing away all
-    # timeframe history made that otherwise lightweight button unnecessarily
-    # expensive.
-    if command == "active":
-        invalidate_price_cache()
-        return
+    Manual cards should respond to the current quote immediately.  Candle
+    history is refreshed by its short timeframe-aware TTL and the background
+    cache job; deleting it here forced every button tap through a slower
+    provider request without making the current in-progress candle more
+    reliable.
+    """
+    from src.analysis.market_data import invalidate_price_cache
 
     if command in _MARKET_REFRESH_COMMANDS:
-        # Recommend is intentionally a complete multi-timeframe report.
-        # Other cards can keep their higher-timeframe context cached while the
-        # selected chart timeframe is fetched fresh.
-        if command == "recommend" or timeframe == "all":
-            invalidate_cache()
-        else:
-            invalidate_cache(timeframe)
+        # A fresh quote updates the displayed price and the current entry
+        # distance immediately.  The candle cache remains available so the
+        # card does not wait on a full provider download on every tap.
+        invalidate_price_cache()
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -15,11 +15,13 @@ from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
-    def test_refresh_analysis_commands_invalidate_market_data(self):
-        with patch.object(market_data, "invalidate_cache") as invalidate:
+    def test_refresh_analysis_commands_refresh_live_quote_without_dropping_candles(self):
+        with patch.object(market_data, "invalidate_cache") as invalidate, \
+             patch.object(market_data, "invalidate_price_cache") as refresh_price:
             callbacks._invalidate_refresh_market_data("analyze")
 
-        invalidate.assert_called_once_with()
+        invalidate.assert_not_called()
+        refresh_price.assert_called_once_with()
 
     def test_non_market_refresh_commands_keep_market_data_cache(self):
         with patch.object(market_data, "invalidate_cache") as invalidate:

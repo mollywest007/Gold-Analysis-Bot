@@ -37,12 +37,17 @@ MIN_CANDLES = 30
 
 # ─── TTL Cache ────────────────────────────────────────────────────────────────
 OHLCV_TTL  = 5 * 60   # 5 minutes
-# Fast alert timeframes need fresher candle context than report commands.
-# M15 remains based on the provider's native candles, but a one-minute cache
-# prevents a fast move from being evaluated against the same history for most
-# of the candle.
+# Fast alert and manual-refresh timeframes need fresher candle context than
+# long-horizon reports.  The live quote is refreshed separately, so keeping
+# these short TTLs does not make a button tap wait for a provider request when
+# the candle history is still recent.
 OHLCV_TTL_BY_TIMEFRAME: Dict[str, int] = {
-    "M15": 60,
+    "M1": 5,
+    "M3": 5,
+    "M5": 10,
+    "M15": 15,
+    "M30": 30,
+    "H1": 60,
 }
 # Exit monitoring uses this quote cache.  A long TTL can leave a fast SL/TP
 # move invisible while the heavier analysis scan is still running.
