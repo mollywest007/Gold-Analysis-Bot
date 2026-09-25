@@ -1596,6 +1596,29 @@ def _simple_price_action(
     return ("", False)
 
 
+def _simple_breakout_direction(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+) -> str:
+    """Infer direction from a confirmed local range break.
+
+    EMA separation can lag the first candle of a real move.  A close beyond
+    the prior range is the one strong price-action confirmation that may
+    establish direction before the averages separate.
+    """
+    if len(closes) < 3:
+        return "NEUTRAL"
+    lookback = min(10, len(closes) - 1)
+    prior_high = max(highs[-lookback - 1:-1])
+    prior_low = min(lows[-lookback - 1:-1])
+    if closes[-1] > prior_high:
+        return "BUY"
+    if closes[-1] < prior_low:
+        return "SELL"
+    return "NEUTRAL"
+
+
 def _balanced_entry_decision(
     direction: str,
     setup: str,
@@ -1745,6 +1768,15 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     else:
         condition = "BEARISH"
         direction = "SELL"
+
+    # Do not let lagging EMA separation veto a strong local breakout.  The
+    # balanced gate below still checks extension and entry timing, so this is
+    # not an invitation to buy/sell every move out of a range.
+    if direction == "NEUTRAL":
+        breakout_direction = _simple_breakout_direction(highs, lows, closes)
+        if breakout_direction in ("BUY", "SELL"):
+            direction = breakout_direction
+            condition = "BULLISH" if breakout_direction == "BUY" else "BEARISH"
 
     rsi_supports = (
         (direction == "BUY" and rsi >= 50)
