@@ -9,7 +9,7 @@ from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 3 * 60   # 3 minutes
+CACHE_TTL = 15        # Keep manually viewed cards close to the live scanner.
 
 _cache: Dict[Tuple[str, str], Tuple[object, float]] = {}   # (mode, tf) -> (analysis, ts)
 _lock  = asyncio.Lock()

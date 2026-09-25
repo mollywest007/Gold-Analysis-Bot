@@ -1,4 +1,5 @@
 import html
+from datetime import datetime, timezone
 import math
 import time
 import textwrap
@@ -1416,6 +1417,16 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             "data_quality", "REAL_OHLCV"
         )
     )
+    latest_candle_timestamp = float(
+        getattr(a, "latest_candle_timestamp", 0.0) or 0.0
+    )
+    candle_as_of = (
+        datetime.fromtimestamp(
+            latest_candle_timestamp, tz=timezone.utc
+        ).strftime("%H:%M:%S UTC")
+        if latest_candle_timestamp > 0
+        else "not available"
+    )
     price = float(getattr(a, "price", 0.0) or 0.0)
     ema20 = float(getattr(a, "ema20", 0.0) or 0.0)
     ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
@@ -1487,6 +1498,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Mode      : {mode_display}",
         f"TF        : {timeframe} only",
         f"Price     : {fmt_price(price)}  |  {data_quality}",
+        f"Candle    : latest OHLCV {candle_as_of}",
         "──────────────────────────────────",
         "WHAT TO DO",
         f"Direction : {direction}",

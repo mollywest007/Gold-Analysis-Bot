@@ -188,6 +188,7 @@ class MarketAnalysis:
     key_zone: str = ""
     moderate_entry_low: float = 0.0
     moderate_entry_high: float = 0.0
+    latest_candle_timestamp: float = 0.0
 
 
 
@@ -1976,6 +1977,11 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         ),
         moderate_entry_low=zone_low,
         moderate_entry_high=zone_high,
+        latest_candle_timestamp=(
+            float(data.timestamps[-1])
+            if getattr(data, "timestamps", None)
+            else 0.0
+        ),
     )
 
 async def _analyze_single(

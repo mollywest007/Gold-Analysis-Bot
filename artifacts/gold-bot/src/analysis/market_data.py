@@ -169,7 +169,8 @@ def _aggregate_bars(data: "OHLCVData", step: int) -> "OHLCVData":
             volumes.append(sum(v for v in data.volumes[i:i + step] if v))
     result              = OHLCVData(opens, highs, lows, closes, volumes,
                                     is_simulated=data.is_simulated,
-                                    timestamps=timestamps)
+                                    timestamps=timestamps,
+                                    fetched_at=data.fetched_at)
     result.price        = data.price
     return result
 
@@ -375,8 +376,16 @@ async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
         else:
             effective_spot = spot_price if (spot_price and spot_price > 0) else futures_last
 
-        data = OHLCVData(opens, highs, lows, closes, volumes, effective_spot,
-                         timestamps=timestamps)
+        data = OHLCVData(
+            opens,
+            highs,
+            lows,
+            closes,
+            volumes,
+            effective_spot,
+            timestamps=timestamps,
+            fetched_at=time.time(),
+        )
 
         if aggregate_h4:
             data = _aggregate_bars(data, 4)
