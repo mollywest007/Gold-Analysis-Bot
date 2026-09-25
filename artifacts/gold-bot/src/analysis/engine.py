@@ -1859,7 +1859,13 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         zone_low = zone_high = invalidation = 0.0
     signal_status = setup_status
 
-    if condition == "RANGING":
+    if setup_status == "DEVELOPING" and forming_direction:
+        wait_reason = (
+            f"Early {forming_direction} bias is forming, but the latest completed "
+            f"{timeframe} candle has not confirmed a breakout, rejection, or "
+            "two aligned momentum signals yet."
+        )
+    elif condition == "RANGING":
         wait_reason = "Market is ranging; wait for a clearer break and reaction."
     elif not rsi_supports:
         wait_reason = (
@@ -1914,7 +1920,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "price_action": setup or "None",
         "signal_status": signal_status,
         "setup_status": setup_status,
-        "current_confirmation": decision["confirmation"],
+        "current_confirmation": wait_reason,
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,
@@ -2021,10 +2027,10 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         early_direction=early_direction,
         price_action_setup=setup,
         setup_status=setup_status,
-        current_confirmation=decision["confirmation"],
+        current_confirmation=wait_reason,
         key_zone=(
             f"Support {recent_low:,.2f} / resistance {recent_high:,.2f}"
-            if direction in ("BUY", "SELL")
+            if plan_direction in ("BUY", "SELL")
             else "No defined support/resistance zone"
         ),
         moderate_entry_low=zone_low,
