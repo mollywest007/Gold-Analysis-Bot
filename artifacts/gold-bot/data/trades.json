@@ -1151,6 +1151,26 @@
       "cooldown_until": 1789732833.146013,
       "cooldown_duration_seconds": 1800.0,
       "cooldown_notification_sent_at": 1789731033.437752
+    },
+    {
+      "id": "fc3b88df22c548d4b7c26c734936651b",
+      "account_id": "8039158711",
+      "direction": "BUY",
+      "entry": 4311.4,
+      "limit_entry": 4311.4,
+      "sl": 4290.03,
+      "tp1": 4325.92,
+      "tp2": 4332.38,
+      "tp3": 4338.83,
+      "timeframe": "M15",
+      "mode": "scalp",
+      "confidence": 76,
+      "rr_ratio": 0.7,
+      "opened_at": 1790334360.3445783,
+      "status": "open",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false
     }
   ]
 }
