@@ -1167,10 +1167,26 @@
       "confidence": 76,
       "rr_ratio": 0.7,
       "opened_at": 1790334360.3445783,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "closed_at": 1790342555.3427699,
+      "close_reason": "stop_loss",
+      "exit_evidence": {
+        "source": "live_spot",
+        "timeframe": "M15",
+        "high": 4289.200195,
+        "low": 4289.200195,
+        "spot": 4289.200195,
+        "captured_at": 1790342555.342703
+      },
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1790342556.4600458,
+      "cooldown_notification_pending": false,
+      "cooldown_until": 1790344356.4619281,
+      "cooldown_duration_seconds": 1800.0,
+      "cooldown_notification_sent_at": 1790342556.6787786
     }
   ]
 }
