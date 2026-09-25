@@ -50,9 +50,17 @@
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "momentum_shift_warned": {},
-      "forming_alert_sent": {},
-      "forming_alert_last_sent": {},
-      "forming_alert_message_ids": {},
+      "forming_alert_sent": {
+        "M15": "BUY"
+      },
+      "forming_alert_last_sent": {
+        "M15": 1790318152.2695847
+      },
+      "forming_alert_message_ids": {
+        "M15": {
+          "8039158711": 6493
+        }
+      },
       "reminded_trade_ids": {
         "ae609671f72d4e03ab8495c9db47320a": [
           "entry",

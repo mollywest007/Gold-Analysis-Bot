@@ -675,7 +675,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_message.await_count, 2)
         self.assertEqual(alerts._momentum_shift_warned["M15"], "SELL")
 
-    async def test_setup_forming_alert_is_silent_on_live_scan(self):
+    async def test_setup_forming_alert_is_sent_on_live_scan(self):
         from src import market_hours
 
         forming = SimpleNamespace(
@@ -732,7 +732,10 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
              ):
             await alerts._check_and_alert_once(context)
 
-        self.assertEqual(context.application.bot.send_message.await_count, 0)
+        self.assertEqual(context.application.bot.send_message.await_count, 1)
+        text = context.application.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("PROVISIONAL EARLY ENTRY", text)
+        self.assertIn("not saved as an active trade", text)
 
     async def test_confirmed_momentum_shift_is_reached_by_live_scan(self):
         from src import market_hours
@@ -1189,9 +1192,10 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             call.kwargs["text"]
             for call in context.application.bot.send_message.await_args_list
         ]
-        self.assertEqual(len(texts), 1)
+        self.assertEqual(len(texts), 2)
+        self.assertTrue(any("PROVISIONAL EARLY ENTRY" in text and "SCALP  XAU/USD  M15" in text for text in texts))
         self.assertTrue(any("MOMENTUM SHIFT" in text and "INTRA-HOUR  XAU/USD  H1" in text for text in texts))
-        self.assertEqual(state.forming_alert_sent, {})
+        self.assertEqual(state.forming_alert_sent, {"scalp:M15": "BUY"})
         self.assertEqual(state.momentum_shift_warned, {"interval:H1": "SELL"})
 
     async def test_combined_missed_entry_alerts_keep_trade_stream_labels(self):

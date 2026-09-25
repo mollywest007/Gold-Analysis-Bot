@@ -200,7 +200,7 @@ def _balanced_early_direction(a, analysis_mode: str) -> str:
     if getattr(a, "is_simulated", False):
         return ""
     status = getattr(a, "signal_status", None)
-    if status == "EARLY ENTRY":
+    if status in {"EARLY ENTRY", "DEVELOPING", "MISSED"}:
         direction = str(getattr(a, "early_direction", "") or "").upper()
         return direction if direction in ("BUY", "SELL") else ""
 
@@ -2510,13 +2510,29 @@ async def _check_and_alert_once(
                 )
                 continue
 
-            # Developing setups are intentionally silent.  The bot only sends
-            # automatic entry notifications after a confirmed BUY/SELL setup.
-            forming_alert_sent.pop(state_key, None)
-            logger.info(
-                f"[{tf}] No confirmed entry — waiting for a confirmed "
-                "pullback, breakout, continuation, or rejection."
-            )
+            forming_dir = _balanced_early_direction(a, analysis_mode)
+            if forming_dir:
+                await _send_setup_forming_alert(
+                    bot,
+                    subs,
+                    a,
+                    tf,
+                    forming_dir,
+                    state=state,
+                    lock_key=state_key,
+                    stream_label=stream_label,
+                    early_entry_watch=True,
+                )
+                logger.info(
+                    f"[{tf}] Provisional {forming_dir} watch sent — "
+                    "confirmed entry still requires price-action confirmation."
+                )
+            else:
+                forming_alert_sent.pop(state_key, None)
+                logger.info(
+                    f"[{tf}] No confirmed entry — waiting for a confirmed "
+                    "pullback, breakout, continuation, or rejection."
+                )
             continue
 
         # Full signal fired — reset the forming-alert state for this TF

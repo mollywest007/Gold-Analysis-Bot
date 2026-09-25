@@ -1798,11 +1798,29 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         lows,
     )
     setup_status = "WAIT" if data.is_simulated else decision["status"]
-    early_direction = direction if setup_status in ("DEVELOPING", "MISSED") else ""
+
+    # A fresh move can begin while EMA20 and EMA50 are still almost
+    # overlapping.  Treat that as a developing directional opportunity when
+    # RSI and price location agree, rather than making the scanner completely
+    # silent until the averages have separated.  This is only a provisional
+    # direction; the confirmed action remains WAIT until price action qualifies.
+    forming_direction = ""
+    if not data.is_simulated:
+        near_ema = abs(price - ema20) <= atr * 1.5
+        if ema20 >= ema50 and rsi >= 50 and price >= ema20 and near_ema:
+            forming_direction = "BUY"
+        elif ema20 <= ema50 and rsi <= 50 and price <= ema20 and near_ema:
+            forming_direction = "SELL"
+        if setup_status == "WAIT" and forming_direction:
+            setup_status = "DEVELOPING"
+
+    early_direction = (
+        direction if direction in ("BUY", "SELL") else forming_direction
+    ) if setup_status in ("DEVELOPING", "MISSED") else ""
     action = direction if setup_status == "MODERATE ENTRY" and not data.is_simulated else "WAIT"
 
     risk = atr * 1.2
-    plan_direction = direction
+    plan_direction = direction if direction in ("BUY", "SELL") else forming_direction
     plan_entry = round(price, 2)
     if plan_direction in ("BUY", "SELL"):
         stop_loss = decision["invalidation"] or round(
@@ -1881,7 +1899,9 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     recent_low = round(min(lows[-20:]), 2)
     prior_low = round(min(lows[-40:-20]), 2) if len(lows) >= 40 else recent_low
     data_quality = "SIMULATED" if data.is_simulated else "REAL_OHLCV"
-    simple_direction = direction if direction in ("BUY", "SELL") else "NEUTRAL"
+    simple_direction = (
+        direction if direction in ("BUY", "SELL") else forming_direction
+    ) or "NEUTRAL"
     report = {
         "framework": "EMA20/EMA50 + RSI14 + ATR14 + balanced moderate confirmation",
         "data_quality": data_quality,
