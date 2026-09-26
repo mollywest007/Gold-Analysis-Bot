@@ -15,6 +15,23 @@ from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
+    def test_weak_ema_rsi_alignment_stays_developing_without_price_action(self):
+        result = engine._balanced_entry_decision(
+            "BUY",
+            "",
+            True,
+            price=100.0,
+            ema20=99.0,
+            ema50=98.5,
+            atr=1.0,
+            closes=[98.5, 99.2, 100.0],
+            highs=[99.0, 99.7, 100.2],
+            lows=[98.0, 98.8, 99.6],
+        )
+
+        self.assertEqual(result["status"], "DEVELOPING")
+        self.assertEqual(result["strong"], [])
+
     def test_refresh_analysis_commands_refresh_live_quote_without_dropping_candles(self):
         with patch.object(market_data, "invalidate_cache") as invalidate, \
              patch.object(market_data, "invalidate_price_cache") as refresh_price:

@@ -1690,7 +1690,18 @@ def _balanced_entry_decision(
     enough_evidence = bool(strong) or len(
         [item for item in reasonable if "not confirmed" not in item]
     ) >= 2
-    if not enough_evidence:
+    # A trend/RSI alignment by itself is not an entry.  It can support the
+    # provisional early-watch path, but a confirmed trade must also have a
+    # local price-action structure.  Without this gate, a weak EMA separation
+    # plus RSI and price-above-EMA could repeatedly enter a ranging market and
+    # get stopped on the next rotation.
+    price_action_confirmed = setup in (
+        "Breakout",
+        "Rejection",
+        "Continuation",
+        "Pullback developing",
+    )
+    if not enough_evidence or not price_action_confirmed:
         status = "DEVELOPING" if reasonable else "WAIT"
     elif extended and setup == "Breakout":
         status = "MISSED"
