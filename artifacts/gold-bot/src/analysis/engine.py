@@ -1830,7 +1830,16 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     ) if setup_status in ("DEVELOPING", "MISSED") else ""
     action = direction if setup_status == "MODERATE ENTRY" and not data.is_simulated else "WAIT"
 
-    risk = atr * 1.2
+    # Keep the fallback stop aligned with the active mode.  The structural
+    # invalidation below may be wider than this, but targets must always be
+    # calculated from the final stop distance, never from this fallback risk.
+    default_sl_mult = (
+        1.25 if timeframe in ("M1", "M3", "M5", "M15") else
+        1.5 if timeframe in ("M30", "H1") else
+        2.0
+    )
+    sl_mult = mode_cfg.sl_mult_override.get(timeframe, default_sl_mult)
+    risk = atr * sl_mult
     plan_direction = direction if direction in ("BUY", "SELL") else forming_direction
     plan_entry = round(price, 2)
     if plan_direction in ("BUY", "SELL"):
@@ -1847,20 +1856,42 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
                 plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
                 2,
             )
+        # A swing-based invalidation is useful only while it remains a
+        # reasonable distance for this timeframe.  Otherwise the plan risks
+        # too much and the old fallback creates a misleadingly small target.
+        max_structural_distance = atr * 3.5
+        stop_distance = abs(plan_entry - stop_loss)
+        if stop_distance > max_structural_distance:
+            stop_loss = round(
+                plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
+                2,
+            )
+            stop_distance = abs(plan_entry - stop_loss)
+
+        tp1_mult, tp2_mult, tp3_mult = mode_cfg.tp_mult
         tp1 = round(
-            plan_entry + risk * 1.8 if plan_direction == "BUY" else plan_entry - risk * 1.8,
+            plan_entry + stop_distance * tp1_mult
+            if plan_direction == "BUY"
+            else plan_entry - stop_distance * tp1_mult,
             2,
         )
         tp2 = round(
-            plan_entry + risk * 2.6 if plan_direction == "BUY" else plan_entry - risk * 2.6,
+            plan_entry + stop_distance * tp2_mult
+            if plan_direction == "BUY"
+            else plan_entry - stop_distance * tp2_mult,
             2,
         )
         tp3 = round(
-            plan_entry + risk * 3.4 if plan_direction == "BUY" else plan_entry - risk * 3.4,
+            plan_entry + stop_distance * tp3_mult
+            if plan_direction == "BUY"
+            else plan_entry - stop_distance * tp3_mult,
             2,
         )
-        sl_distance = abs(plan_entry - stop_loss)
-        rr_ratio = round(abs(tp1 - plan_entry) / sl_distance, 1) if sl_distance else 0.0
+        rr_ratio = (
+            round(abs(tp1 - plan_entry) / stop_distance, 1)
+            if stop_distance
+            else 0.0
+        )
         zone_low = decision["entry_low"]
         zone_high = decision["entry_high"]
         entry = plan_entry if action in ("BUY", "SELL") else 0.0

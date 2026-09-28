@@ -32,6 +32,44 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(result["status"], "DEVELOPING")
         self.assertEqual(result["strong"], [])
 
+    def test_simple_targets_use_the_final_stop_distance(self):
+        closes = [100.0 + index * 0.1 for index in range(59)] + [106.5]
+        opens = [close - 0.02 for close in closes]
+        highs = [close + 0.05 for close in closes]
+        lows = [close - 0.05 for close in closes]
+        data = market_data.OHLCVData(
+            opens,
+            highs,
+            lows,
+            closes,
+            [100.0] * len(closes),
+            spot_price=closes[-1],
+        )
+
+        from src.analysis.modes import MODES
+
+        # Keep this focused on the risk-plan calculation rather than the
+        # separate timing rule that can classify an already-extended breakout
+        # as MISSED.
+        with patch.object(
+            engine,
+            "_simple_price_action",
+            return_value=("Continuation", True),
+        ):
+            analysis = engine._analyze_simple_data(
+                data, "M15", MODES["scalp"]
+            )
+
+        self.assertEqual(analysis.action, "BUY")
+        stop_distance = abs(analysis.entry - analysis.stop_loss)
+        target_distance = abs(analysis.tp1 - analysis.entry)
+        self.assertGreater(stop_distance, 0)
+        self.assertAlmostEqual(
+            target_distance / stop_distance,
+            MODES["scalp"].tp_mult[0],
+            places=1,
+        )
+
     def test_refresh_analysis_commands_refresh_live_quote_without_dropping_candles(self):
         with patch.object(market_data, "invalidate_cache") as invalidate, \
              patch.object(market_data, "invalidate_price_cache") as refresh_price:
