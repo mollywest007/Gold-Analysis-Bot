@@ -430,36 +430,10 @@ def check_trades(current_price: float, recent_high: float = None,
             tp2_exit  = tp2
             tp3_exit  = tp3_val
 
-        # ── Break-even SL after TP1 ───────────────────────────────────────────
-        # Standard risk management: once TP1 is captured, entry becomes the
-        # effective SL. If price retraces back through entry before TP2 is
-        # hit, close at break-even rather than riding to the original SL.
-        # This prevents the bot from holding a losing trade and sending
-        # optimistic TP2/TP3 updates while the position is underwater.
-        if t.get("tp1_hit") and not t.get("tp2_hit") and not sl_hit:
-            if d == "BUY":
-                be_hit = sl_lo <= entry
-            else:
-                be_hit = sl_hi >= entry
-            if be_hit:
-                _mark_terminal(
-                    t, "tp1_sl_hit", "break_even_stop", exit_evidence
-                )
-                changed = True
-                events.append({
-                    "trade": t,
-                    "event": "TP1_SL",
-                    "exit_price": entry,
-                    "exit_evidence": exit_evidence,
-                })
-                logger.info(
-                    f"Trade {t['id']} break-even SL triggered after TP1 "
-                    f"@ {entry:.2f} (evidence={exit_evidence})"
-                )
-                continue
-
         if sl_hit:
-            # If TP1 was already captured, mark distinctly so history shows TP1→SL
+            # TP1 is a partial milestone, not a reason to move the stop. Keep
+            # the original stop level active for the remaining position and
+            # preserve the partial-win status when that original level is hit.
             if t.get("tp1_hit"):
                 _mark_terminal(
                     t, "tp1_sl_hit", "stop_loss", exit_evidence
@@ -472,7 +446,7 @@ def check_trades(current_price: float, recent_high: float = None,
                     "exit_evidence": exit_evidence,
                 })
                 logger.info(
-                    f"Trade {t['id']} SL hit after TP1 partial @ "
+                    f"Trade {t['id']} original SL hit after TP1 partial @ "
                     f"{sl_exit:.2f} (evidence={exit_evidence})"
                 )
             else:

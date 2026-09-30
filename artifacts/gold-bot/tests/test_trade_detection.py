@@ -172,6 +172,61 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["SL"])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "sl_hit")
 
+    def test_post_tp1_retrace_to_entry_does_not_close_before_original_stop(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="BUY",
+                entry=4185.20,
+                sl=4170.29,
+                tp1=4207.56,
+                tp2=4222.47,
+                tp3=4237.38,
+                timeframe="M15",
+                confidence=85,
+                rr_ratio=1.0,
+            )
+        )
+        trades = trade_tracker.get_all_trades()
+        trades[0]["status"] = "tp1_hit"
+        trades[0]["tp1_hit"] = True
+        with open(self.tmp.name, "w") as f:
+            json.dump({"trades": trades}, f)
+
+        # This reproduces the previous trade's evidence: the candle dipped
+        # below entry (4185.20), remained above the original SL (4170.29), and
+        # reached TP2 while the live quote was still profitable.
+        events = trade_tracker.check_trades(
+            4217.299805,
+            tf_extremes={"M15": (4227.3, 4184.0)},
+        )
+
+        self.assertEqual([event["event"] for event in events], ["TP2"])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "tp2_hit")
+        self.assertTrue(trade_tracker.get_all_trades()[0]["tp2_hit"])
+        self.assertTrue(
+            trade_tracker.is_active_trade(trade_tracker.get_all_trades()[0])
+        )
+
+    def test_original_stop_still_closes_trade_after_tp1(self):
+        self.assertTrue(self._open_buy(timeframe="M15"))
+        trades = trade_tracker.get_all_trades()
+        trades[0]["status"] = "tp1_hit"
+        trades[0]["tp1_hit"] = True
+        with open(self.tmp.name, "w") as f:
+            json.dump({"trades": trades}, f)
+
+        events = trade_tracker.check_trades(
+            90.0,
+            tf_extremes={"M15": (101.0, 90.0)},
+        )
+
+        self.assertEqual([event["event"] for event in events], ["TP1_SL"])
+        self.assertEqual(events[0]["exit_price"], 90.0)
+        closed_trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(closed_trade["status"], "tp1_sl_hit")
+        self.assertEqual(closed_trade["close_reason"], "stop_loss")
+        self.assertEqual(closed_trade["exit_evidence"]["low"], 90.0)
+
     def test_stop_event_closes_once_and_marks_notification_pending(self):
         self.assertTrue(self._open_buy(timeframe="M15"))
 

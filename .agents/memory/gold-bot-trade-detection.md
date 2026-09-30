@@ -17,19 +17,32 @@ Both are filtered in `alerts.py` to only include candles whose open timestamp >=
 
 **Fix:** When `indices` is empty (no post-entry candle), set `hi = lo = current_price`. SL detection waits for a real post-entry candle. File: `alerts.py`, `tf_extremes` building loop.
 
-## Break-even SL after TP1 (added)
+## Stop policy after TP1
 
-After TP1 is captured, entry becomes the effective SL. If price retraces back through entry before TP2 is hit, `check_trades` in `trade_tracker.py` fires a `TP1_SL` event at break-even. This prevents riding a full loss after a partial win.
+**Rule:** After TP1, the remaining position stays open until its original SL or
+later target is reached; do not move protection to entry or close at
+break-even. A same-candle retrace through entry must not override a reached
+TP2/TP3 target.
 
-**How to apply:** Logic runs inside `check_trades` before the original `sl_hit` check. Uses same `sl_lo`/`sl_hi` candle extremes.
+**Why:** A recent BUY had entry 4185.20 and original SL 4170.29. Its candle low
+was 4184.00, its high reached TP2, and spot was still above entry. The prior
+entry-level break-even rule closed it before recognizing TP2, although the
+original stop had not been reached. The user explicitly chose to keep the
+original stop active after TP1.
+
+**How to apply:** Keep `check_trades` stop comparisons anchored to the stored
+`sl` after TP1. A TP1-followed original-SL close retains its distinct history
+status and must say the original SL was reached; entry retraces do not close it.
 
 ## Reminder message when tp1 has retraced (fixed)
 
-When `tp1_hit=True` and price is back below entry (BUY) or above entry (SELL):
-- TP2/TP3 lines are suppressed from the reminder message
-- A clear warning is shown: "TP1 was hit but price has retraced — break-even SL active"
+When `tp1_hit=True` and price is back below entry (BUY) or above entry (SELL),
+keep TP2/TP3 visible and state that the original SL and remaining targets are
+still active.
 
-**Why:** Showing TP2/TP3 targets while the trade is underwater was confusing and made it look like a TP notification.
+**Why:** After TP1, retracing through entry no longer closes the remaining
+position; suppressing its targets or claiming a break-even stop is active is
+inconsistent with the user's selected stop policy.
 
 ## Near-entry reminder threshold
 
@@ -43,7 +56,8 @@ Tightened from 0.5% (≈$20 on gold) to 0.15% (≈$6 on gold) for the "entry sti
 
 **How to apply:** Use the shared `is_active_trade` definition for alert suppression, duplicate-entry checks, and open-trade counts. Require a strictly ordered target ladder before persisting a trade.
 
-**Partial targets do not release locks:** TP1 and TP2-with-TP3 are milestones; only SL, break-even SL, terminal TP2, TP3, or expiry releases the timeframe lock.
+**Partial targets do not release locks:** TP1 and TP2-with-TP3 are milestones;
+only original SL, terminal TP2, TP3, or expiry releases the timeframe lock.
 
 ## Opposite-signal warnings
 
@@ -147,7 +161,8 @@ validation.
 After a trade reaches its final TP3 target, entry alerts on that timeframe pause
 for 10 minutes while the scanner continues re-analyzing the market. The same
 direction is eligible again after the cooldown; TP1, TP2, SL, and break-even
-events use their existing behavior.
+events use their existing behavior. New trades after TP1 use only the original
+SL; historical break-even exits remain valid persisted outcomes.
 
 **Why:** Immediately reopening after a completed full move can chase an
 unchanged setup and create low-quality repeat entries.

@@ -541,6 +541,36 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         send_result.assert_awaited_once()
         mark_sent.assert_called_once_with("closed-sl")
 
+    async def test_tp1_original_stop_result_is_not_mislabeled_break_even(self):
+        bot = AsyncMock()
+        closed_trade = {
+            "id": "tp1-original-sl",
+            "direction": "BUY",
+            "entry": 100.0,
+            "sl": 90.0,
+            "tp1": 110.0,
+            "tp2": 120.0,
+            "timeframe": "M15",
+            "status": "tp1_sl_hit",
+            "closed_at": 200.0,
+            "close_reason": "stop_loss",
+            "tp1_hit": True,
+        }
+
+        with patch.object(
+            alerts,
+            "generate_result_image",
+            return_value=b"image",
+        ):
+            sent = await alerts._send_result_image(
+                bot, {123}, closed_trade, "TP1_SL", 90.0
+            )
+
+        self.assertTrue(sent)
+        caption = bot.send_photo.await_args.kwargs["caption"]
+        self.assertIn("ORIGINAL STOP LOSS HIT AFTER TP1", caption)
+        self.assertNotIn("BREAK-EVEN EXIT", caption)
+
     async def test_status_only_sl_record_is_not_notified(self):
         bot = AsyncMock()
         stale_trade = {

@@ -1526,11 +1526,23 @@ async def _send_result_image(
                    f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
                    f"Profit: +{abs(entry - exit_price):,.2f} pts{watching}")
     elif event == "TP1_SL":
-        result  = "LOSS"
-        caption = (f"{alert_prefix}🟠 BREAK-EVEN EXIT (after TP1)  |  XAU/USD  |  {timeframe}\n"
-                   f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
-                   f"TP1 {tp1:,.2f} was hit — protection moved to entry; "
-                   f"the original SL was {sl:,.2f}")
+        result = "LOSS"
+        if trade.get("close_reason") == "stop_loss":
+            caption = (
+                f"{alert_prefix}🔴 ORIGINAL STOP LOSS HIT AFTER TP1  |  "
+                f"XAU/USD  |  {timeframe}\n"
+                f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
+                f"TP1 {tp1:,.2f} was reached; the remaining position closed "
+                f"at the original SL {sl:,.2f}"
+            )
+        else:
+            caption = (
+                f"{alert_prefix}🟠 BREAK-EVEN EXIT (after TP1)  |  "
+                f"XAU/USD  |  {timeframe}\n"
+                f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
+                f"TP1 {tp1:,.2f} was hit — protection moved to entry; "
+                f"the original SL was {sl:,.2f}"
+            )
     else:
         result  = "WIN_TP1"
         tp3_val = trade.get("tp3")
@@ -1753,7 +1765,15 @@ async def _send_sl_cooldown_notification(
         else f"about {remaining_minutes} min remaining"
     )
 
-    if event == "TP1_SL":
+    if event == "TP1_SL" and persisted.get("close_reason") == "stop_loss":
+        title = "ORIGINAL STOP LOSS HIT AFTER TP1"
+        reason = (
+            "TP1 had been reached; price later touched the original stop "
+            "for the remaining position."
+        )
+    elif event == "TP1_SL":
+        # Retain accurate messaging for break-even exits persisted by older
+        # versions; new trades no longer close at entry after TP1.
         title = "BREAK-EVEN SL TRIGGERED"
         reason = "TP1 had already been reached; protection closed the trade at entry."
     else:
@@ -3196,32 +3216,25 @@ async def _send_trade_reminder_once(
 
             # Detect post-TP1 retrace — affects what we show in the message
             tp1_was_hit     = trade.get("tp1_hit", False)
-            tp1_retraced    = False
             tp1_retrace_warning = ""
             if tp1_was_hit:
                 if direction == "BUY" and current_price <= entry:
-                    tp1_retraced = True
                     tp1_retrace_warning = (
                         f"\n⚠️ <b>TP1 was hit but price has since fallen below entry.</b>\n"
-                        f"   Break-even SL is now active at {entry:,.2f}.\n"
-                        f"   Consider closing manually to protect the TP1 gain.\n"
+                        f"   Trade remains open; original SL at {sl:,.2f} "
+                        f"and TP2/TP3 targets are still active.\n"
                     )
                 elif direction == "SELL" and current_price >= entry:
-                    tp1_retraced = True
                     tp1_retrace_warning = (
                         f"\n⚠️ <b>TP1 was hit but price has since risen above entry.</b>\n"
-                        f"   Break-even SL is now active at {entry:,.2f}.\n"
-                        f"   Consider closing manually to protect the TP1 gain.\n"
+                        f"   Trade remains open; original SL at {sl:,.2f} "
+                        f"and TP2/TP3 targets are still active.\n"
                     )
 
-            # Only show TP2/TP3 targets when the trade is still moving in profit.
-            # After a retrace below entry, showing optimistic targets is misleading.
-            if tp1_retraced:
-                tp2_line = ""
-                tp3_line = ""
-            else:
-                tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
-                tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
+            # A retrace to entry does not close the remaining position: its
+            # original SL and remaining targets stay active after TP1.
+            tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
+            tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
 
             if label == "entry":
                 header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
