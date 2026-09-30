@@ -1,143 +1,39 @@
 {
   "accounts": {
-    "7354092356": {
-      "mode": "scalp",
-      "timeframe": "M15",
-      "active_signal": {},
-      "closed_signal": {},
-      "last_fired": {},
-      "pending_signal": {},
-      "sl_cooldown_until": {
-        "M15": 1788425711.623456
-      },
-      "tp_cooldown_until": {},
-      "forming_alert_sent": {},
-      "momentum_shift_warned": {},
-      "reminded_trade_ids": {
-        "5e9ceaecf45442538370058162aad61e": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "a5f5ba8ab954488c8873f3bc4bc4a733": [
-          "entry"
-        ],
-        "72baba585dfb4c479e043021d6429a3d": [
-          "entry",
-          "update_2x"
-        ],
-        "c5177f4d6f7d400db6093e2bf64f8b0f": [
-          "entry",
-          "update_2x"
-        ]
-      }
-    },
     "8039158711": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
-        "M15": "SELL"
+      "active_signal": {},
+      "closed_signal": {
+        "M15": "BUY"
       },
-      "closed_signal": {},
       "last_fired": {
-        "M15": 1790607411.5515118
+        "M15": 1790772431.3206935
       },
       "pending_signal": {},
-      "sl_cooldown_until": {},
+      "sl_cooldown_until": {
+        "M15": 1790774231.3206964
+      },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "momentum_shift_warned": {},
-      "forming_alert_sent": {
-        "M15": "SELL"
-      },
+      "forming_alert_sent": {},
       "forming_alert_last_sent": {
-        "M15": 1790608231.8130486
+        "M15": 1790774144.0040348
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 6591
+          "8039158711": 6732
         }
       },
       "reminded_trade_ids": {
-        "ae609671f72d4e03ab8495c9db47320a": [
-          "entry",
-          "update_2x"
-        ],
-        "ca15cfcb0c87460a973913eff2b98cb5": [
-          "entry",
-          "update_2x"
-        ],
-        "fd60423bb2b04ad29680c8ab0066f1db": [
-          "entry",
-          "update_2x"
-        ],
-        "56a51c9c1f02471ab0b5409f52926b2f": [
-          "entry",
-          "update_2x"
-        ],
-        "fe8d4ba11f2e42dc9d3d9d9dab3adf02": [
-          "entry"
-        ],
-        "520c93dd74fd4899a7d10fd8a1fc2943": [
+        "30cdf56c35b042e699c19d0c2a19fbf7": [
           "entry",
           "update_2x",
           "update_6x"
         ],
-        "129b2877e2de4e9bb0e763fb19b100c7": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "a1d0f876c4e8499e805ad160ba4579d1": [
-          "entry"
-        ],
-        "6c788be5652840a0ae0b452f33920cc0": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "5f87978ce3b748d997a60a15d93a1630": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "214d8b13856f46008b42ccba744ebd57": [
-          "entry"
-        ],
-        "f37bdda858e14686ab8c7dd1e1e7fece": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "48855bf74e8a49a9b731ab7e6dcf25a5": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "512d14756b4f4bcd91f521a57efe1cca": [
-          "entry",
-          "update_2x"
-        ],
-        "774c4b6ddb374e1db0b828a3c25789e5": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "756572854f85412483661858ea160909": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "26432d0b5dce43b89ef176cc7a834007": [
-          "entry"
-        ],
-        "fc3b88df22c548d4b7c26c734936651b": [
-          "entry",
-          "update_2x",
-          "update_6x"
-        ],
-        "466530954e724bf6836f9be129fc010a": [
+        "72f5a6f27b2c4ef2a0eb8258731fb2ec": [
           "entry",
           "update_2x",
           "update_6x"
