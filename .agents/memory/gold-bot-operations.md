@@ -24,3 +24,15 @@ incorrect early "missed alert" notification.
 
 **How to apply:** Use the trade's stored timeframe when calculating reminder
 windows, while keeping the scheduler cadence independent of those windows.
+
+The workflow's `running` state alone does not prove the scheduled scanners are
+making progress. If scheduler logs stop while the process remains alive, restart
+the single bot workflow and verify that fresh fast-exit and alert-scan jobs run.
+
+**Why:** A live Python process can remain idle after scheduled-job output stops,
+leaving an open trade without confirmed monitoring even though the workflow UI
+still reports it as running.
+
+**How to apply:** Compare the newest scheduled-job timestamps with the active
+trade's opening time; after recovery, verify new scan logs and recheck persisted
+trade status before concluding that a price level was or was not reached.

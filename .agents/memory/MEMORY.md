@@ -1,5 +1,5 @@
 - [Gold Bot Engine v4 Upgrade](gold-bot-engine-v4.md) — v4 adds CCI, VWAP, BB bandwidth, chart patterns, hidden divergence, market regime; proper iterative Supertrend; 8 core indicators; expanded candlestick patterns
-- [Gold Bot Operations](gold-bot-operations.md) — Telegram long polling allows only one active instance; keep HTTP client request logging below INFO
+- [Gold Bot Operations](gold-bot-operations.md) — one Telegram poller; keep request logs safe and verify scanner progress, not just workflow status
 - [Gold Bot Trade Detection Bugs](gold-bot-trade-detection.md) — false immediate SL (pre-entry candle), TP candle-extreme detection, original SL remains active after TP1
 - [Gold Bot News Sources](gold-bot-news-sources.md) — only clearly relevant, recent gold headlines from filtered financial publishers should be labeled gold news
 - [Gold Bot Notification Delivery](gold-bot-notification-delivery.md) — only consume alert deduplication state after Telegram delivery succeeds; failed sends remain retryable
