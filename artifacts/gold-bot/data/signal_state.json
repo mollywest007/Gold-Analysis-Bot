@@ -8,23 +8,25 @@
         "M15": "BUY"
       },
       "last_fired": {
-        "M15": 1790860236.468304
+        "M15": 1790862081.8168864
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1790862036.468308
+        "M15": 1790863881.8168905
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
       "tp_reanalysis_start_sent": {},
       "momentum_shift_warned": {},
-      "forming_alert_sent": {},
+      "forming_alert_sent": {
+        "M15": "BUY"
+      },
       "forming_alert_last_sent": {
-        "M15": 1790859698.4748392
+        "M15": 1790862313.380429
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 6886
+          "8039158711": 6902
         }
       },
       "reminded_trade_ids": {
