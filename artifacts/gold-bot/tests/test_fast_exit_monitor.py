@@ -30,7 +30,11 @@ class FastExitMonitorTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(alerts, "_load", return_value={123}), \
              patch.object(alerts, "_load_account_state", return_value=alerts.AccountAlertState()), \
              patch.object(alerts.trade_tracker, "get_active_trades", return_value=[trade]), \
-             patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=94.8)), \
+             patch.object(
+                 alerts,
+                 "get_gold_price",
+                 new=AsyncMock(return_value=94.8),
+             ) as get_price, \
              patch.object(alerts, "_save_signal_state"), \
              patch.object(
                  __import__("src.market_hours", fromlist=["market_status"]),
@@ -40,6 +44,7 @@ class FastExitMonitorTests(unittest.IsolatedAsyncioTestCase):
              check_trades as checked:
             await alerts.check_open_trades_fast(context)
 
+        get_price.assert_awaited_once_with(force_refresh=True)
         checked.assert_called_once_with(94.8, account_id=123)
 
 

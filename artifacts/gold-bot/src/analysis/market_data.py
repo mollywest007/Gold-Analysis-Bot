@@ -258,12 +258,16 @@ async def _fetch_yf_last_close(session: aiohttp.ClientSession) -> Optional[float
     return None
 
 
-async def get_gold_price() -> float:
-    """XAU/USD spot price with 30-second TTL cache."""
+async def get_gold_price(force_refresh: bool = False) -> float:
+    """Return XAU/USD spot, optionally bypassing the short-lived quote cache."""
     global _price_cache
     async with _cache_lock:
         cached_price, cached_ts = _price_cache
-        if cached_price > 0 and (time.time() - cached_ts) < PRICE_TTL:
+        if (
+            not force_refresh
+            and cached_price > 0
+            and (time.time() - cached_ts) < PRICE_TTL
+        ):
             return cached_price
 
     async with aiohttp.ClientSession() as session:

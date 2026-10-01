@@ -2896,7 +2896,11 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         try:
-            current_price = _safe_float(await get_gold_price())
+            # The scheduled exit check must not reuse a quote cached during the
+            # previous check; otherwise a brief stop touch can be missed.
+            current_price = _safe_float(
+                await get_gold_price(force_refresh=True)
+            )
         except Exception as error:
             logger.warning("Fast exit scan could not fetch spot price: %s", error)
             return

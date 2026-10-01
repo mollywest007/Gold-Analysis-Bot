@@ -314,6 +314,30 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
 
 class CachedPriceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_force_refresh_bypasses_recent_cached_spot(self):
+        with patch.object(
+            market_data,
+            "_price_cache",
+            (4177.0, time.time()),
+        ), patch.object(
+            market_data,
+            "_fetch_goldapi",
+            new=AsyncMock(return_value=4178.0),
+        ) as goldapi, patch.object(
+            market_data,
+            "_fetch_swissquote",
+            new=AsyncMock(return_value=4178.2),
+        ) as swissquote, patch.object(
+            market_data,
+            "_first_valid_spot",
+            return_value=4178.1,
+        ):
+            result = await market_data.get_gold_price(force_refresh=True)
+
+        self.assertEqual(result, 4178.1)
+        goldapi.assert_awaited_once()
+        swissquote.assert_awaited_once()
+
     async def test_inconsistent_spot_sources_fall_back_without_returning_outlier(self):
         with patch.object(
             market_data,
