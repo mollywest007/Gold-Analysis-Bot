@@ -15,59 +15,125 @@ from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
-    def test_weak_ema_rsi_alignment_stays_developing_without_price_action(self):
-        result = engine._balanced_entry_decision(
-            "BUY",
-            "",
-            True,
-            price=100.0,
-            ema20=99.0,
-            ema50=98.5,
-            atr=1.0,
-            closes=[98.5, 99.2, 100.0],
-            highs=[99.0, 99.7, 100.2],
-            lows=[98.0, 98.8, 99.6],
-        )
-
-        self.assertEqual(result["status"], "DEVELOPING")
-        self.assertEqual(result["strong"], [])
-
-    def test_simple_targets_use_the_final_stop_distance(self):
-        closes = [100.0 + index * 0.1 for index in range(59)] + [106.5]
+    def test_ema_and_rsi_alignment_without_swings_cannot_create_a_trade(self):
+        closes = [100.0 + index * 0.1 for index in range(24)]
         opens = [close - 0.02 for close in closes]
         highs = [close + 0.05 for close in closes]
         lows = [close - 0.05 for close in closes]
-        data = market_data.OHLCVData(
-            opens,
-            highs,
-            lows,
-            closes,
-            [100.0] * len(closes),
-            spot_price=closes[-1],
-        )
 
-        from src.analysis.modes import MODES
-
-        # Keep this focused on the risk-plan calculation rather than the
-        # separate timing rule that can classify an already-extended breakout
-        # as MISSED.
-        with patch.object(
-            engine,
-            "_simple_price_action",
-            return_value=("Continuation", True),
-        ):
-            analysis = engine._analyze_simple_data(
-                data, "M15", MODES["scalp"]
+        with patch.object(engine, "_local_swings", return_value=([], [])):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, closes[-1],
+                ema20=closes[-1] - 0.1,
+                ema50=closes[-1] - 0.2,
+                atr=1.0,
+                rsi=60.0,
+                previous_rsi=58.0,
             )
 
-        self.assertEqual(analysis.action, "BUY")
-        stop_distance = abs(analysis.entry - analysis.stop_loss)
-        target_distance = abs(analysis.tp1 - analysis.entry)
-        self.assertGreater(stop_distance, 0)
-        self.assertAlmostEqual(
-            target_distance / stop_distance,
-            MODES["scalp"].tp_mult[0],
-            places=1,
+        self.assertEqual(result["status"], "WAIT")
+        self.assertEqual(result["direction"], "NEUTRAL")
+        self.assertEqual(result["tp1"], 0.0)
+
+    @staticmethod
+    def _bullish_pullback_candles():
+        size = 40
+        closes = [109.8] * size
+        opens = [109.7] * size
+        highs = [110.0] * size
+        lows = [109.5] * size
+        highs[32], lows[32] = 112.55, 109.0
+        opens[32], closes[32] = 110.4, 111.2
+        lows[31] = 105.0
+        opens[35], closes[35] = 110.7, 110.5
+        opens[36], closes[36] = 110.4, 110.2
+        highs[36], lows[36] = 110.3, 109.85
+        opens[37], closes[37] = 109.95, 110.05
+        highs[37], lows[37] = 110.2, 109.68
+        opens[38], closes[38] = 110.1, 110.0
+        highs[38], lows[38] = 110.25, 109.8
+        opens[39], closes[39] = 110.0, 110.4
+        highs[39], lows[39] = 110.6, 109.9
+        return opens, highs, lows, closes
+
+    def test_momentum_pullback_uses_structure_and_never_invents_targets(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes,
+                price=110.4,
+                ema20=110.0,
+                ema50=111.5,  # EMA50 opposition must not veto local structure.
+                atr=2.5,
+                rsi=55.0,
+                previous_rsi=54.0,
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertLess(result["stop_loss"], 110.4)
+        self.assertGreater(result["tp1"], 110.4)
+        self.assertEqual(result["tp2"], 0.0)
+        self.assertEqual(result["tp3"], 0.0)
+        self.assertGreaterEqual(result["rr"], 1.0)
+
+    def test_pullback_without_minor_swing_close_stays_developing(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        closes[-1] = 110.25
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.25, 110.0, 111.5,
+                2.5, 55.0, 54.0,
+            )
+
+        self.assertEqual(result["status"], "DEVELOPING")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertEqual(result["tp1"], 0.0)
+
+    def test_strong_rsi_disagreement_vetoes_the_entry(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.4, 110.0, 111.5,
+                2.5, 40.0, 42.0,
+            )
+
+        self.assertEqual(result["status"], "WAIT")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertIn("disagrees", result["setup"])
+
+    def test_neutral_rsi_does_not_add_a_second_entry_confirmation_gate(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.4, 110.0, 111.5,
+                2.5, 47.0, 46.0,
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertTrue(
+            any("no strong disagreement" in item for item in result["quality_checks"])
         )
 
     def test_refresh_analysis_commands_refresh_live_quote_without_dropping_candles(self):
@@ -155,6 +221,30 @@ class AnalysisIntegrityTests(unittest.TestCase):
             market_data._first_valid_spot([2350.0, 4480.0], reference=4480.0),
             4480.0,
         )
+
+    def test_executable_gold_quote_requires_a_fresh_spread_consistent_bbo(self):
+        snapshot_time = time.time()
+        with patch.object(
+            market_data,
+            "_price_bbo_cache",
+            (4455.0, 4455.2, snapshot_time),
+        ):
+            quote = market_data.get_cached_gold_quote(4455.1)
+
+        self.assertEqual(quote["symbol"], "XAU/USD")
+        self.assertEqual(quote["bid"], 4455.0)
+        self.assertEqual(quote["ask"], 4455.2)
+        self.assertTrue(quote["spread_available"])
+
+        with patch.object(
+            market_data,
+            "_price_bbo_cache",
+            (4455.0, 4455.2, snapshot_time - market_data.PRICE_TTL - 3),
+        ):
+            stale = market_data.get_cached_gold_quote(4455.1)
+        self.assertIsNone(stale["bid"])
+        self.assertIsNone(stale["ask"])
+        self.assertFalse(stale["spread_available"])
 
     def test_support_one_is_nearest_support(self):
         highs = [101.0] * 25

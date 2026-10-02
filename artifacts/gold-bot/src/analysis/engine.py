@@ -167,9 +167,8 @@ class MarketAnalysis:
     recommended_rr: float = 0.0
     macro_status: str = "UNAVAILABLE"
     intermarket_status: str = "UNAVAILABLE"
-    # Simple EMA/RSI/ATR framework fields.  These are intentionally separate
-    # from the legacy compatibility fields above so API clients can migrate
-    # without having to infer the new decision from the old report.
+    # Selected-timeframe momentum-pullback fields. EMA values remain exposed
+    # for compatibility and context; they do not set the entry direction.
     ema20: float = 0.0
     ema50: float = 0.0
     market_condition: str = "RANGING"
@@ -180,9 +179,7 @@ class MarketAnalysis:
     signal_status: str = "NO TRADE"
     early_direction: str = ""
     price_action_setup: str = ""
-    # Balanced moderate-entry decision fields.  These are deliberately
-    # separate from the legacy signal fields so API clients can adopt the
-    # user-facing statuses without inferring them from action/entry.
+    # Structural setup statuses remain distinct from action/entry for clients.
     setup_status: str = "WAIT"  # WAIT | DEVELOPING | MODERATE ENTRY | MISSED | INVALID
     current_confirmation: str = ""
     key_zone: str = ""
@@ -1526,8 +1523,95 @@ def _select_direction(
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 
-def _simple_price_action(
+def _local_swings(
+    highs: List[float],
+    lows: List[float],
+    lookback: int = 48,
+) -> Tuple[List[Tuple[int, float]], List[Tuple[int, float]]]:
+    """Return confirmed one-candle pivots from the selected timeframe only."""
+    end = len(highs) - 1  # the live/latest candle is not a confirmed pivot
+    start = max(1, end - lookback)
+    swing_highs = []
+    swing_lows = []
+    for index in range(start, end):
+        if (
+            highs[index] >= highs[index - 1]
+            and highs[index] > highs[index + 1]
+        ):
+            swing_highs.append((index, float(highs[index])))
+        if (
+            lows[index] <= lows[index - 1]
+            and lows[index] < lows[index + 1]
+        ):
+            swing_lows.append((index, float(lows[index])))
+    return swing_highs, swing_lows
+
+
+def _ema_series(values: List[float], period: int) -> List[float]:
+    if not values:
+        return []
+    alpha = 2.0 / (period + 1.0)
+    result = [float(values[0])]
+    for value in values[1:]:
+        result.append(float(value) * alpha + result[-1] * (1.0 - alpha))
+    return result
+
+
+def _structure_targets(
     direction: str,
+    entry: float,
+    stop: float,
+    atr: float,
+    swing_highs: List[Tuple[int, float]],
+    swing_lows: List[Tuple[int, float]],
+) -> Tuple[float, float, float, str]:
+    """Place profit targets just before real opposing pivots; never invent them."""
+    risk = abs(entry - stop)
+    buffer = max(atr * 0.10, entry * 0.00002, 0.02)
+    if direction == "BUY":
+        levels = sorted(
+            {level for _, level in swing_highs if level > entry + buffer}
+        )
+        targets = [round(level - buffer, 2) for level in levels]
+    else:
+        levels = sorted(
+            {level for _, level in swing_lows if level < entry - buffer},
+            reverse=True,
+        )
+        targets = [round(level + buffer, 2) for level in levels]
+
+    targets = [
+        target for target in targets
+        if (target > entry if direction == "BUY" else target < entry)
+    ]
+    if not targets:
+        return 0.0, 0.0, 0.0, "No confirmed opposing swing/liquidity target is ahead."
+
+    first = targets[0]
+    reward = abs(first - entry)
+    if reward < max(risk, atr * 0.75):
+        return (
+            0.0,
+            0.0,
+            0.0,
+            "The nearest opposing structure leaves too little room for the structural stop.",
+        )
+
+    # Ignore clustered pivots that do not form distinct objectives. Additional
+    # targets are optional and are never extended by an arbitrary R multiple.
+    separated = []
+    for target in targets:
+        if not separated or abs(target - separated[-1]) >= max(atr * 0.45, risk * 0.35):
+            separated.append(target)
+    return (
+        first,
+        separated[1] if len(separated) > 1 else 0.0,
+        separated[2] if len(separated) > 2 else 0.0,
+        "",
+    )
+
+
+def _momentum_pullback_decision(
     opens: List[float],
     highs: List[float],
     lows: List[float],
@@ -1536,229 +1620,269 @@ def _simple_price_action(
     ema20: float,
     ema50: float,
     atr: float,
-) -> Tuple[str, bool]:
-    """Classify only the local opportunity needed by the simple framework.
-
-    This deliberately avoids the former indicator stack, ICT/SMC evidence,
-    volume, Fibonacci, and multi-timeframe confirmations.  A setup can be a
-    breakout, continuation, rejection, or a developing pullback.
-    """
-    if direction not in ("BUY", "SELL") or len(closes) < 3:
-        return "", False
+    rsi: float,
+    previous_rsi: float,
+) -> dict:
+    """Fast selected-timeframe trend → pullback → rejection → minor-break gate."""
+    empty = {
+        "status": "WAIT",
+        "direction": "NEUTRAL",
+        "setup": "No confirmed short-term swing direction",
+        "confirmation": "Waiting for clear local swing structure.",
+        "entry_low": 0.0,
+        "entry_high": 0.0,
+        "invalidation": 0.0,
+        "stop_loss": 0.0,
+        "tp1": 0.0,
+        "tp2": 0.0,
+        "tp3": 0.0,
+        "rr": 0.0,
+        "quality_checks": [],
+    }
+    if len(closes) < 18 or min(len(opens), len(highs), len(lows)) < len(closes):
+        return {**empty, "confirmation": "Not enough valid candles to confirm local swings."}
 
     volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
-    lookback = min(10, len(closes) - 1)
-    prior_high = max(highs[-lookback - 1:-1])
-    prior_low = min(lows[-lookback - 1:-1])
-    last_open = opens[-1]
-    last_close = closes[-1]
-    last_high = highs[-1]
-    last_low = lows[-1]
-    body = abs(last_close - last_open)
-    lower_wick = min(last_open, last_close) - last_low
-    upper_wick = last_high - max(last_open, last_close)
+    swing_highs, swing_lows = _local_swings(highs, lows)
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return {**empty, "confirmation": "Waiting for two confirmed swing highs and lows."}
 
-    breakout = (
-        direction == "BUY" and last_close > prior_high
-    ) or (
-        direction == "SELL" and last_close < prior_low
+    prior_high, last_high = swing_highs[-2][1], swing_highs[-1][1]
+    prior_low, last_low = swing_lows[-2][1], swing_lows[-1][1]
+    bullish = (
+        last_high > prior_high + volatility * 0.03
+        and last_low > prior_low + volatility * 0.03
     )
-    continuation = (
-        direction == "BUY"
-        and closes[-1] > closes[-2] > closes[-3]
-        and last_close >= ema20
-    ) or (
-        direction == "SELL"
-        and closes[-1] < closes[-2] < closes[-3]
-        and last_close <= ema20
+    bearish = (
+        last_high < prior_high - volatility * 0.03
+        and last_low < prior_low - volatility * 0.03
     )
-    near_ema = min(abs(price - ema20), abs(price - ema50)) <= volatility * 0.8
-    rejection = (
-        direction == "BUY"
-        and near_ema
-        and lower_wick >= max(body * 0.8, volatility * 0.15)
-        and last_close >= last_open
-    ) or (
-        direction == "SELL"
-        and near_ema
-        and upper_wick >= max(body * 0.8, volatility * 0.15)
-        and last_close <= last_open
-    )
-
-    if breakout:
-        return ("Breakout", True)
-    if rejection:
-        return ("Rejection", True)
-    if continuation:
-        return ("Continuation", True)
-    if near_ema:
-        return ("Pullback developing", False)
-    return ("", False)
-
-
-def _simple_breakout_direction(
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
-) -> str:
-    """Infer direction from a confirmed local range break.
-
-    EMA separation can lag the first candle of a real move.  A close beyond
-    the prior range is the one strong price-action confirmation that may
-    establish direction before the averages separate.
-    """
-    if len(closes) < 3:
-        return "NEUTRAL"
-    lookback = min(10, len(closes) - 1)
-    prior_high = max(highs[-lookback - 1:-1])
-    prior_low = min(lows[-lookback - 1:-1])
-    if closes[-1] > prior_high:
-        return "BUY"
-    if closes[-1] < prior_low:
-        return "SELL"
-    return "NEUTRAL"
-
-
-def _balanced_entry_decision(
-    direction: str,
-    setup: str,
-    rsi_supports: bool,
-    price: float,
-    ema20: float,
-    ema50: float,
-    atr: float,
-    closes: List[float],
-    highs: List[float],
-    lows: List[float],
-) -> dict:
-    """Apply the balanced moderate-entry rule to one selected chart.
-
-    A strong local price-action event is enough to make an entry timely.  If
-    there is no strong event, two independent reasonable signals are required.
-    This intentionally avoids both the old immediate signal and a requirement
-    for every possible confirmation.
-    """
-    if direction not in ("BUY", "SELL"):
+    if not bullish and not bearish:
         return {
-            "status": "WAIT",
-            "confirmation": "No clear directional bias; price is not offering a defined setup.",
-            "reasonable": [],
-            "strong": [],
-            "entry_low": 0.0,
-            "entry_high": 0.0,
-            "invalidation": 0.0,
+            **empty,
+            "setup": "Mixed or ranging short-term swing structure",
+            "confirmation": "Recent swing highs and lows do not form a clear HH/HL or LH/LL sequence.",
         }
 
-    volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
-    bullish = direction == "BUY"
-    reasonable: list[str] = []
-    strong: list[str] = []
-
-    if setup in ("Breakout", "Rejection"):
-        strong.append(f"Clear {setup.lower()} with a confirming candle close")
-    elif setup == "Continuation":
-        reasonable.append("Short-term continuation candles are aligned with the trend")
-    elif setup == "Pullback developing":
-        reasonable.append("Price is approaching the EMA pullback area")
-
+    direction = "BUY" if bullish else "SELL"
+    checks = ["Selected-timeframe swing structure is directional"]
+    strong_rsi_conflict = (bullish and rsi < 44.0) or (bearish and rsi > 56.0)
+    if strong_rsi_conflict:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "RSI strongly disagrees with price structure",
+            "confirmation": f"RSI {rsi:.1f} strongly conflicts with the {direction} structure; skipping.",
+            "quality_checks": checks,
+        }
+    rsi_supports = (
+        (bullish and rsi >= 48.0 and rsi >= previous_rsi - 1.0)
+        or (bearish and rsi <= 52.0 and rsi <= previous_rsi + 1.0)
+    )
     if rsi_supports:
-        reasonable.append(
-            f"RSI momentum supports {'buyers' if bullish else 'sellers'}"
-        )
+        checks.append("RSI momentum is recovering/falling with price")
     else:
-        reasonable.append("RSI has not confirmed the trend yet")
+        checks.append("RSI shows no strong disagreement with price structure")
 
-    close_aligned = (
-        price >= ema20 if bullish else price <= ema20
-    )
-    if close_aligned:
-        reasonable.append(f"Price is holding {'above' if bullish else 'below'} EMA20")
-
-    if len(closes) >= 3:
-        sequence_aligned = (
-            closes[-1] > closes[-2] > closes[-3]
-            if bullish
-            else closes[-1] < closes[-2] < closes[-3]
-        )
-        if sequence_aligned:
-            reasonable.append("Recent closes show directional momentum")
-
-    # A move more than 1.5 ATR from the trend average is not an entry to chase.
-    # Keep the status visible as MISSED only after the chart supplied enough
-    # evidence; otherwise it remains DEVELOPING.
-    extended = abs(price - ema20) > volatility * 1.5
-    enough_evidence = bool(strong) or len(
-        [item for item in reasonable if "not confirmed" not in item]
-    ) >= 2
-    # A trend/RSI alignment by itself is not an entry.  It can support the
-    # provisional early-watch path, but a confirmed trade must also have a
-    # local price-action structure.  Without this gate, a weak EMA separation
-    # plus RSI and price-above-EMA could repeatedly enter a ranging market and
-    # get stopped on the next rotation.
-    price_action_confirmed = setup in (
-        "Breakout",
-        "Rejection",
-        "Continuation",
-        "Pullback developing",
-    )
-    if not enough_evidence or not price_action_confirmed:
-        status = "DEVELOPING" if reasonable else "WAIT"
-    elif extended and setup == "Breakout":
-        status = "MISSED"
-    else:
-        status = "MODERATE ENTRY"
-
-    recent_low = min(lows[-8:]) if lows else price
-    recent_high = max(highs[-8:]) if highs else price
-    invalidation = (
-        round(recent_low - volatility * 0.10, 2)
-        if bullish
-        else round(recent_high + volatility * 0.10, 2)
-    )
-    entry_low = round(
-        price - volatility * 0.30 if bullish else price - volatility * 0.05,
-        2,
-    )
-    entry_high = round(
-        price + volatility * 0.05 if bullish else price + volatility * 0.30,
-        2,
-    )
-
-    confirmation_parts = strong + [
-        item for item in reasonable
-        if "not confirmed" not in item
+    # Reject quiet rotations and repeated EMA crossings; EMA alignment itself
+    # never establishes a trade direction.
+    signs = [
+        1 if closes[index] > opens[index]
+        else -1 if closes[index] < opens[index]
+        else 0
+        for index in range(max(0, len(closes) - 8), len(closes))
     ]
-    if status == "DEVELOPING":
-        confirmation = (
-            "; ".join(confirmation_parts)
-            if confirmation_parts
-            else "Directional bias exists, but confirmation is still insufficient."
+    nonzero_signs = [sign for sign in signs if sign]
+    alternations = sum(
+        left != right for left, right in zip(nonzero_signs, nonzero_signs[1:])
+    )
+    recent_range = max(highs[-10:]) - min(lows[-10:])
+    recent_drift = abs(closes[-1] - closes[-10])
+    ema20_series = _ema_series(closes, 20)
+    ema50_series = _ema_series(closes, 50)
+    recent_crosses = 0
+    for index in range(max(1, len(closes) - 20), len(closes)):
+        before = ema20_series[index - 1] - ema50_series[index - 1]
+        after = ema20_series[index] - ema50_series[index]
+        if before * after <= 0 and abs(before) + abs(after) > 0:
+            recent_crosses += 1
+    choppy = (
+        (alternations >= 5 and recent_drift < volatility * 0.65)
+        or (recent_range < volatility * 1.15)
+        or (
+            recent_crosses >= 3
+            and abs(ema20 - ema50) < volatility * 0.30
+            and recent_drift < volatility
         )
-    elif status == "MISSED":
-        confirmation = (
-            "; ".join(confirmation_parts)
-            + "; confirmation arrived after price extended beyond a timely entry."
-        )
-    else:
-        confirmation = (
-            "; ".join(confirmation_parts)
-            if confirmation_parts
-            else "No usable confirmation yet."
-        )
+    )
+    if choppy:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Ranging/choppy conditions",
+            "confirmation": "Recent candles alternate or remain compressed; waiting for cleaner movement.",
+            "quality_checks": checks,
+        }
 
+    # The last 3 completed pre-break candles are the pullback window; the
+    # newest candle must close beyond their minor swing in the trend direction.
+    pullback_start = max(2, len(closes) - 4)
+    pullback_end = len(closes) - 1
+    pullback_indices = list(range(pullback_start, pullback_end))
+    pullback_low = min(lows[index] for index in pullback_indices)
+    pullback_high = max(highs[index] for index in pullback_indices)
+    impulse_start = max(0, pullback_start - 7)
+    impulse_high = max(highs[impulse_start:pullback_start])
+    impulse_low = min(lows[impulse_start:pullback_start])
+    pullback_depth = impulse_high - pullback_low if bullish else pullback_high - impulse_low
+    controlled = volatility * 0.08 <= pullback_depth <= volatility * 1.15
+    structure_holds = (
+        pullback_low >= last_low - volatility * 0.10
+        if bullish
+        else pullback_high <= last_high + volatility * 0.10
+    )
+    had_counter_move = any(
+        closes[index] < closes[index - 1] if bullish
+        else closes[index] > closes[index - 1]
+        for index in pullback_indices
+    )
+
+    # A pullback may test EMA20, the latest protected swing, or a former
+    # breakout/breakdown level. EMA50 is not used as a directional gate.
+    old_range = range(max(1, pullback_start - 20), max(1, pullback_start - 3))
+    if bullish:
+        prior_breakout = max((highs[index] for index in old_range), default=ema20)
+        support_levels = [ema20, last_low, prior_breakout]
+        nearest_support = min(support_levels, key=lambda level: abs(pullback_low - level))
+        support_held = (
+            abs(pullback_low - nearest_support) <= volatility * 0.55
+            and nearest_support <= pullback_low + volatility * 0.15
+        )
+        rejection = any(
+            closes[index] > opens[index]
+            and min(opens[index], closes[index]) - lows[index]
+            >= max(volatility * 0.08, abs(closes[index] - opens[index]) * 0.25)
+            and abs(lows[index] - nearest_support) <= volatility * 0.65
+            for index in pullback_indices
+        )
+        minor_level = max(highs[pullback_start:pullback_end])
+        minor_break = closes[-1] > minor_level
+    else:
+        prior_breakdown = min((lows[index] for index in old_range), default=ema20)
+        resistance_levels = [ema20, last_high, prior_breakdown]
+        nearest_support = min(resistance_levels, key=lambda level: abs(pullback_high - level))
+        support_held = (
+            abs(pullback_high - nearest_support) <= volatility * 0.55
+            and nearest_support >= pullback_high - volatility * 0.15
+        )
+        rejection = any(
+            closes[index] < opens[index]
+            and highs[index] - max(opens[index], closes[index])
+            >= max(volatility * 0.08, abs(closes[index] - opens[index]) * 0.25)
+            and abs(highs[index] - nearest_support) <= volatility * 0.65
+            for index in pullback_indices
+        )
+        minor_level = min(lows[pullback_start:pullback_end])
+        minor_break = closes[-1] < minor_level
+
+    breakout_range = highs[-1] - lows[-1]
+    breakout_body = abs(closes[-1] - opens[-1])
+    extended = (
+        breakout_range > volatility * 1.65
+        or breakout_body > volatility * 1.15
+        or abs(price - ema20) > volatility * 1.60
+    )
+    if not (controlled and structure_holds and had_counter_move and support_held):
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Waiting for a controlled pullback to hold support/resistance",
+            "confirmation": "Direction is clear, but the pullback is missing, too deep, or not holding a nearby level.",
+            "quality_checks": checks,
+        }
+    checks.append("Controlled pullback held nearby support/resistance")
+    if not rejection or not minor_break:
+        return {
+            **empty,
+            "status": "DEVELOPING",
+            "direction": direction,
+            "setup": "Pullback held; waiting for rejection and minor structure break",
+            "confirmation": (
+                "Waiting for a rejection candle and close beyond the latest minor "
+                f"{'high' if bullish else 'low'}."
+            ),
+            "quality_checks": checks,
+        }
+    checks.append("Rejection and minor structure break confirmed")
+
+    if extended:
+        return {
+            **empty,
+            "status": "MISSED",
+            "direction": direction,
+            "setup": "Confirmed move is extended; wait for another retest",
+            "confirmation": "The break candle or distance from EMA20 is too extended to chase.",
+            "quality_checks": checks,
+        }
+
+    entry = float(price)
+    swing_extreme = pullback_low if bullish else pullback_high
+    stop_buffer = max(volatility * 0.10, entry * 0.00002, 0.02)
+    minimum_noise_distance = volatility * 0.35
+    if bullish:
+        stop = min(swing_extreme - stop_buffer, entry - minimum_noise_distance)
+    else:
+        stop = max(swing_extreme + stop_buffer, entry + minimum_noise_distance)
+    risk = abs(entry - stop)
+    if risk > volatility * 2.5:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Structural stop is too wide for the expected move",
+            "confirmation": "The pullback swing requires excessive risk; skipping instead of widening or compressing the stop.",
+            "quality_checks": checks,
+        }
+
+    tp1, tp2, tp3, target_issue = _structure_targets(
+        direction, entry, stop, volatility, swing_highs, swing_lows
+    )
+    if target_issue:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Insufficient room to opposing structure",
+            "confirmation": target_issue,
+            "quality_checks": checks,
+        }
+
+    checks.extend([
+        "Stop is beyond the pullback swing with an ATR noise buffer",
+        "Nearest structural target offers at least 1R of clear room",
+    ])
+    rr = round(abs(tp1 - entry) / risk, 2)
+    half_zone = volatility * 0.12
     return {
-        "status": status,
-        "confirmation": confirmation,
-        "reasonable": reasonable,
-        "strong": strong,
-        "entry_low": entry_low,
-        "entry_high": entry_high,
-        "invalidation": invalidation,
+        "status": "MODERATE ENTRY",
+        "direction": direction,
+        "setup": "Fast momentum pullback: rejection + minor structure break",
+        "confirmation": (
+            f"Short-term {direction.lower()} structure; controlled pullback held; "
+            f"rejection and minor swing break confirmed. RSI {rsi:.1f} supports momentum."
+        ),
+        "entry_low": round(entry - half_zone, 2),
+        "entry_high": round(entry + half_zone, 2),
+        "invalidation": round(stop, 2),
+        "stop_loss": round(stop, 2),
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "rr": rr,
+        "quality_checks": checks,
     }
 
 
 def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAnalysis:
-    """Analyze XAU/USD with the EMA/RSI/ATR framework and moderate entry gate."""
+    """Analyze only the selected chart with a fast momentum-pullback strategy."""
     closes = data.closes
     highs = data.highs
     lows = data.lows
@@ -1767,169 +1891,50 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     ema20 = _ema(closes, 20)
     ema50 = _ema(closes, 50)
     rsi = compute_rsi(closes, 14)
+    previous_rsi = compute_rsi(closes[:-1], 14) if len(closes) > 15 else rsi
     atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
-    ema_gap = abs(ema20 - ema50)
-
-    if ema_gap <= atr * 0.15:
-        condition = "RANGING"
-        direction = "NEUTRAL"
-    elif ema20 > ema50:
-        condition = "BULLISH"
-        direction = "BUY"
-    else:
-        condition = "BEARISH"
-        direction = "SELL"
-
-    # Do not let lagging EMA separation veto a strong local breakout.  The
-    # balanced gate below still checks extension and entry timing, so this is
-    # not an invitation to buy/sell every move out of a range.
-    if direction == "NEUTRAL":
-        breakout_direction = _simple_breakout_direction(highs, lows, closes)
-        if breakout_direction in ("BUY", "SELL"):
-            direction = breakout_direction
-            condition = "BULLISH" if breakout_direction == "BUY" else "BEARISH"
-
-    rsi_supports = (
-        (direction == "BUY" and rsi >= 50)
-        or (direction == "SELL" and rsi <= 50)
+    decision = _momentum_pullback_decision(
+        opens, highs, lows, closes, price, ema20, ema50, atr, rsi, previous_rsi
     )
-    setup, confirmed_setup = _simple_price_action(
-        direction, opens, highs, lows, closes, price, ema20, ema50, atr
-    )
-    decision = _balanced_entry_decision(
-        direction,
-        setup,
-        rsi_supports,
-        price,
-        ema20,
-        ema50,
-        atr,
-        closes,
-        highs,
-        lows,
-    )
+    direction = decision["direction"]
+    setup = decision["setup"]
     setup_status = "WAIT" if data.is_simulated else decision["status"]
-
-    # A fresh move can begin while EMA20 and EMA50 are still almost
-    # overlapping.  Treat that as a developing directional opportunity when
-    # RSI and price location agree, rather than making the scanner completely
-    # silent until the averages have separated.  This is only a provisional
-    # direction; the confirmed action remains WAIT until price action qualifies.
-    forming_direction = ""
-    if not data.is_simulated:
-        near_ema = abs(price - ema20) <= atr * 1.5
-        if ema20 >= ema50 and rsi >= 50 and price >= ema20 and near_ema:
-            forming_direction = "BUY"
-        elif ema20 <= ema50 and rsi <= 50 and price <= ema20 and near_ema:
-            forming_direction = "SELL"
-        if setup_status == "WAIT" and forming_direction:
-            setup_status = "DEVELOPING"
-
-    early_direction = (
-        direction if direction in ("BUY", "SELL") else forming_direction
-    ) if setup_status in ("DEVELOPING", "MISSED") else ""
-    action = direction if setup_status == "MODERATE ENTRY" and not data.is_simulated else "WAIT"
-
-    # Keep the fallback stop aligned with the active mode.  The structural
-    # invalidation below may be wider than this, but targets must always be
-    # calculated from the final stop distance, never from this fallback risk.
-    default_sl_mult = (
-        1.25 if timeframe in ("M1", "M3", "M5", "M15") else
-        1.5 if timeframe in ("M30", "H1") else
-        2.0
+    condition = (
+        "BULLISH" if direction == "BUY"
+        else "BEARISH" if direction == "SELL"
+        else "RANGING"
     )
-    sl_mult = mode_cfg.sl_mult_override.get(timeframe, default_sl_mult)
-    risk = atr * sl_mult
-    plan_direction = direction if direction in ("BUY", "SELL") else forming_direction
+    rsi_supports = (
+        (direction == "BUY" and rsi >= 48.0 and rsi >= previous_rsi - 1.0)
+        or (direction == "SELL" and rsi <= 52.0 and rsi <= previous_rsi + 1.0)
+    )
+    action = (
+        direction
+        if setup_status == "MODERATE ENTRY" and not data.is_simulated
+        else "WAIT"
+    )
+    plan_direction = direction if direction in ("BUY", "SELL") else ""
     plan_entry = round(price, 2)
-    if plan_direction in ("BUY", "SELL"):
-        stop_loss = decision["invalidation"] or round(
-            plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
-            2,
-        )
-        if (
-            plan_direction == "BUY" and stop_loss >= plan_entry
-        ) or (
-            plan_direction == "SELL" and stop_loss <= plan_entry
-        ):
-            stop_loss = round(
-                plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
-                2,
-            )
-        # A swing-based invalidation is useful only while it remains a
-        # reasonable distance for this timeframe.  Otherwise the plan risks
-        # too much and the old fallback creates a misleadingly small target.
-        max_structural_distance = atr * 3.5
-        stop_distance = abs(plan_entry - stop_loss)
-        if stop_distance > max_structural_distance:
-            stop_loss = round(
-                plan_entry - risk if plan_direction == "BUY" else plan_entry + risk,
-                2,
-            )
-            stop_distance = abs(plan_entry - stop_loss)
-
-        tp1_mult, tp2_mult, tp3_mult = mode_cfg.tp_mult
-        tp1 = round(
-            plan_entry + stop_distance * tp1_mult
-            if plan_direction == "BUY"
-            else plan_entry - stop_distance * tp1_mult,
-            2,
-        )
-        tp2 = round(
-            plan_entry + stop_distance * tp2_mult
-            if plan_direction == "BUY"
-            else plan_entry - stop_distance * tp2_mult,
-            2,
-        )
-        tp3 = round(
-            plan_entry + stop_distance * tp3_mult
-            if plan_direction == "BUY"
-            else plan_entry - stop_distance * tp3_mult,
-            2,
-        )
-        rr_ratio = (
-            round(abs(tp1 - plan_entry) / stop_distance, 1)
-            if stop_distance
-            else 0.0
-        )
-        zone_low = decision["entry_low"]
-        zone_high = decision["entry_high"]
-        entry = plan_entry if action in ("BUY", "SELL") else 0.0
-        invalidation = decision["invalidation"] or stop_loss
+    if action in ("BUY", "SELL"):
+        entry = plan_entry
+        stop_loss = decision["stop_loss"]
+        tp1, tp2, tp3 = decision["tp1"], decision["tp2"], decision["tp3"]
+        rr_ratio = decision["rr"]
+        zone_low, zone_high = decision["entry_low"], decision["entry_high"]
+        invalidation = stop_loss
     else:
         entry = stop_loss = tp1 = tp2 = tp3 = rr_ratio = 0.0
         zone_low = zone_high = invalidation = 0.0
     signal_status = setup_status
-
-    if setup_status == "DEVELOPING" and forming_direction:
-        wait_reason = (
-            f"Early {forming_direction} bias is forming, but the latest completed "
-            f"{timeframe} candle has not confirmed a breakout, rejection, or "
-            "two aligned momentum signals yet."
-        )
-    elif condition == "RANGING":
-        wait_reason = "Market is ranging; wait for a clearer break and reaction."
-    elif not rsi_supports:
-        wait_reason = (
-            f"RSI 14 ({rsi:.1f}) has not confirmed the {condition.lower()} trend yet."
-        )
-    else:
-        wait_reason = decision["confirmation"]
-    if setup_status == "MISSED":
-        wait_reason = (
-            f"{wait_reason} Wait for a pullback/retest; do not chase the move."
-        )
-
-    if condition == "RANGING":
-        confidence = 50
-    elif not rsi_supports:
-        confidence = 55
-    elif setup_status == "MODERATE ENTRY":
-        confidence = 76
-    elif setup_status == "MISSED":
-        confidence = 72
-    else:
-        confidence = 60
+    wait_reason = decision["confirmation"]
+    if data.is_simulated:
+        wait_reason = "Simulated candles are not actionable. " + wait_reason
+    confidence = (
+        78 if setup_status == "MODERATE ENTRY"
+        else 68 if setup_status == "MISSED"
+        else 61 if plan_direction
+        else 50
+    )
 
     bias = {
         "BULLISH": "Bullish",
@@ -1937,7 +1942,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "RANGING": "Ranging",
     }[condition]
     trend = bias
-    strength = "Strong" if ema_gap >= atr * 0.5 else "Moderate"
+    strength = "Strong" if plan_direction else "Unclear"
     momentum = (
         "Bullish" if rsi > 50 else "Bearish" if rsi < 50 else "Neutral"
     )
@@ -1947,11 +1952,9 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     recent_low = round(min(lows[-20:]), 2)
     prior_low = round(min(lows[-40:-20]), 2) if len(lows) >= 40 else recent_low
     data_quality = "SIMULATED" if data.is_simulated else "REAL_OHLCV"
-    simple_direction = (
-        direction if direction in ("BUY", "SELL") else forming_direction
-    ) or "NEUTRAL"
+    simple_direction = plan_direction or "NEUTRAL"
     report = {
-        "framework": "EMA20/EMA50 + RSI14 + ATR14 + balanced moderate confirmation",
+        "framework": "selected-timeframe swing momentum + pullback rejection + minor structure break",
         "data_quality": data_quality,
         "direction": simple_direction,
         "market_condition": condition,
@@ -1963,24 +1966,24 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "signal_status": signal_status,
         "setup_status": setup_status,
         "current_confirmation": wait_reason,
+        "quality_checks": decision["quality_checks"],
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,
         "score_breakdown": {
-            "ema_trend": 35 if condition != "RANGING" else 0,
-            "rsi_momentum": 25 if rsi_supports else 0,
-            "price_action": 40 if confirmed_setup else 20 if setup else 0,
+            "local_structure": 40 if plan_direction else 0,
+            "rsi_momentum": 15 if rsi_supports else 0,
+            "pullback_confirmation": 45 if setup_status == "MODERATE ENTRY" else 0,
         },
     }
     reasons_against = [wait_reason] if setup_status != "MODERATE ENTRY" else []
     indicators = [
-        Indicator("EMA 20/50", ema20, simple_direction or "NEUTRAL", 0.45),
-        Indicator("RSI(14)", rsi, simple_direction or "NEUTRAL", 0.30),
-        Indicator("ATR(14)", atr, "RISK", 0.25),
+        Indicator("Local swing structure", price, simple_direction, 0.55),
+        Indicator("RSI(14)", rsi, simple_direction, 0.20),
+        Indicator("ATR(14)", atr, "RISK", 0.15),
+        Indicator("EMA20 (support only)", ema20, simple_direction, 0.10),
     ]
-    confluence = []
-    if condition != "RANGING":
-        confluence.append(f"20 EMA {'above' if condition == 'BULLISH' else 'below'} 50 EMA")
+    confluence = [f"Local swing structure: {simple_direction}"] if plan_direction else []
     if rsi_supports:
         confluence.append(f"RSI 14 {rsi:.1f} supports {simple_direction}")
     if setup:
@@ -2005,8 +2008,8 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         resistance2=prior_high,
         support1=recent_low,
         support2=prior_low,
-        breakout=setup == "Breakout",
-        reversal=setup == "Rejection",
+        breakout=setup_status == "MODERATE ENTRY",
+        reversal="rejection" in setup.lower(),
         liquidity_zone="Not used",
         atr=atr,
         indicators=indicators,
@@ -2020,9 +2023,18 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         trade_type=mode_cfg.trade_type_label,
         analysis_mode=mode_cfg.name,
         limit_entry=entry,
-        entry_note="Market price; ATR risk plan",
+        entry_note="Market price; pullback-swing stop; opposing-structure target",
         rsi_value=rsi,
-        market_structure=condition,
+        market_structure=(
+            "HH_HL" if direction == "BUY"
+            else "LH_LL" if direction == "SELL"
+            else "RANGING"
+        ),
+        structure_detail=(
+            f"{direction} local swing structure"
+            if plan_direction
+            else "No clear selected-timeframe swing sequence"
+        ),
         win_probability=confidence if simple_direction in ("BUY", "SELL") else 0,
         directional_indication=simple_direction,
         confluence_list=confluence,
@@ -2063,10 +2075,10 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         market_condition=condition,
         entry_zone_low=zone_low,
         entry_zone_high=zone_high,
-        early_entry=entry if early_direction else 0.0,
+        early_entry=entry if action in ("BUY", "SELL") else 0.0,
         invalidation=invalidation,
         signal_status=signal_status,
-        early_direction=early_direction,
+        early_direction=direction if setup_status in ("DEVELOPING", "MISSED") else "",
         price_action_setup=setup,
         setup_status=setup_status,
         current_confirmation=wait_reason,
@@ -2117,8 +2129,9 @@ async def _analyze_single(
         logger.error(f"Insufficient data for {timeframe}")
         raise RuntimeError(f"Could not fetch enough market data for {timeframe}")
 
-    # The active decision engine is intentionally small: EMA20/EMA50 trend,
-    # RSI14 momentum, local price action, and ATR14 risk.  The former
+    # The active decision engine uses selected-timeframe swing structure,
+    # a controlled pullback, RSI14 as a supporting filter, and ATR as a
+    # volatility sanity check. The former
     # institutional/indicator stack remains below only as compatibility
     # reference code; it is no longer reachable from the live analysis path.
     return _analyze_simple_data(data, timeframe, mode_cfg)

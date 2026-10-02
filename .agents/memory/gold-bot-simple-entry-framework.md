@@ -1,18 +1,18 @@
 ---
-name: Gold Bot Simple Entry Framework
-description: The active XAU/USD entry decision framework and its intentional confirmation boundary.
+name: Gold Bot Momentum-Pullback Framework
+description: The production XAU/USD selected-timeframe momentum-pullback rules and backtest evidence boundary.
 ---
 
-The production XAU/USD decision should remain simple: EMA20 versus EMA50 defines the market direction, RSI14 only checks directional momentum support, local price action identifies a breakout, continuation, rejection, or developing pullback, and ATR14 sets the risk distance. Use a balanced moderate-entry gate: one strong local confirmation or two reasonable confirmations; do not require every indicator, higher timeframe, or institutional factor.
+Production XAU/USD entries use clear local HH/HL or LH/LL swing structure on the selected timeframe. Require a controlled pullback near EMA20, the protected swing, or a prior breakout/breakdown level, followed by rejection and a close through the minor pullback swing. RSI is a momentum disagreement filter; EMA20/EMA50 do not define direction, and higher-timeframe confirmation is not required.
 
-**Why:** The former institutional evidence chain could withhold alerts for days even when a usable directional setup existed, and its R:R display could differ from the R:R used by the final gate. The user explicitly chose a middle ground: enough confirmation to avoid premature entries, but a timely opportunity before most of the move is gone.
+**Why:** The user chose a fast, selective pullback strategy and explicitly rejected waiting for full trend completion or multiple higher-timeframe confirmations.
 
-**How to apply:** A `MODERATE ENTRY` requires real data, a directional EMA context, and either one strong local event (rejection/breakout) or two reasonable aligned signals. `WAIT`/`DEVELOPING` keeps scanning, `MISSED` waits for a pullback/retest, and `INVALID` cancels the thesis. The selected timeframe remains the only entry decision source.
+**How to apply:** Reject chop, extension, strong RSI disagreement, structural risk above 2.5 ATR, or less than 1R to the nearest real opposing pivot. Put the stop beyond the pullback extreme with an ATR noise buffer. Use only actual opposing swing/liquidity pivots for targets; extra targets are optional, and a lone credible TP1 is final. Incomplete plans must not invent stops or targets.
 
-## Risk-plan consistency
+## Backtest evidence boundary
 
-The simple path must calculate TP1/TP2/TP3 from the final stop distance actually assigned to the trade, using the active mode's target multipliers. A structural stop that exceeds the timeframe's ATR cap must fall back to the mode's ATR stop.
+Existing trade summaries without historical OHLCV cannot replay this strategy.
 
-**Why:** The prior path used a structural invalidation for SL but an ATR fallback for targets, which could produce a TP1 smaller than the real SL distance (including a recorded M15 plan at roughly 0.68R).
+**Why:** The user explicitly said not to claim this strategy is profitable or superior without evidence; old entry/exit summaries are not a strategy backtest.
 
-**How to apply:** Validate the final `entry → SL` distance before building the target ladder, cap oversized structural stops, and keep the displayed R:R equal to the persisted trade plan.
+**How to apply:** Only report backtest metrics from suitable historical candle data and at least 50 replayable prior setups. If candles are missing, label the metrics unavailable instead of substituting old trade outcomes.

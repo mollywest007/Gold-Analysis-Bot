@@ -31,34 +31,40 @@ To find your `ALLOWED_USER_ID`: send `/start` to the bot and check the workflow 
 
 ## Entry strategy
 
-The bot uses a balanced moderate-entry strategy. It analyzes trend, structure,
-support/resistance, supply/demand, liquidity, price action, momentum, and
-volume when visible, then allows an entry after one strong confirmation or two
-reasonable confirmations. It does not enter on a level touch, wait for every
-possible confirmation, or chase an extended move.
+Production entries use the selected chart only. The bot requires clear local
+HH/HL or LH/LL swings, a controlled pullback near EMA20, the protected swing,
+or a prior breakout/breakdown level, and a rejection candle followed by a
+close beyond the minor pullback swing. RSI is a momentum conflict filter;
+EMA20/EMA50 alignment does not set the trade direction, and higher-timeframe
+confirmation is not required.
 
-Every analysis uses these setup statuses: `WAIT`, `DEVELOPING`, `MODERATE
-ENTRY`, `MISSED`, or `INVALID`. Actionable cards show the market bias,
-structure, key zone, current confirmation, moderate entry area, invalidation,
-targets, and estimated risk-to-reward.
+The bot skips choppy conditions, extended breaks, structural stops wider than
+2.5 ATR, and setups without at least 1R of room to an actual opposing swing.
+Stops are placed beyond the pullback extreme with an ATR noise buffer.
+Targets come only from nearby opposing swing/liquidity pivots; TP2/TP3 are
+optional, and one credible TP1 is tracked as the final target. A provisional
+or incomplete setup must not receive invented stop or target levels.
+
+Analysis statuses remain `WAIT`, `DEVELOPING`, `MODERATE ENTRY`, `MISSED`, or
+`INVALID`. Alerts must distinguish a confirmed entry from an incomplete setup.
+
+The saved trade history does not include the OHLCV candles needed to replay this
+strategy. Do not present the old trade summaries as a backtest of the new
+strategy, and do not claim profitability or superiority without suitable
+historical evidence.
 
 ## User preferences
 
 - Keep HTTP client request logging below INFO level (httpx/httpcore set to WARNING) to avoid leaking bot token from query params in logs.
 
-## Institutional analysis engine
+## Analysis data boundary
 
-The bot analyzes only the timeframe selected in the active mode/settings for each
-entry decision. It does not wait for, require, or use higher- or lower-timeframe
-confirmation. Single-timeframe results include a serializable institutional report
-covering market structure,
-liquidity/SMC, Wyckoff, Fibonacci, volume profile, volatility, momentum, sessions,
-macro-event gating, and optional intermarket confirmation.
+The bot analyzes only the timeframe selected in the active mode/settings for
+each entry decision. It does not wait for, require, or use higher- or
+lower-timeframe confirmation. Legacy report fields remain for client
+compatibility; they must not create synthetic macro, intermarket, or
+institutional conviction.
 
-The engine uses real OHLCV data for actionable conclusions; simulated candles are
-retained for diagnostics and cannot create a final bias. Other timeframe reports
-may be requested for explicit diagnostics, but never gate a normal entry.
-Cross-asset data is fetched from Yahoo Finance with a short cache. An economic
-calendar is intentionally not invented: to enable the imminent-event gate, set
-`HIGH_IMPACT_EVENTS_UTC` to comma-separated `ISO-8601 timestamp|event name` values,
-for example `2026-09-07T12:30:00Z|CPI`.
+Only real OHLCV data can create an actionable entry. Simulated candles are
+diagnostic only. Other timeframe reports may be requested for explicit
+diagnostics but never gate a normal entry.

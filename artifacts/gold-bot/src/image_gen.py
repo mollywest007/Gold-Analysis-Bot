@@ -59,12 +59,12 @@ def _price_bar(
     exit_price: float,
     sl: float,
     tp1: float,
-    tp2: float,
+    tp2: float | None,
     x: int, y: int, bw: int, bh: int,
     accent: str,
 ) -> None:
     """Draw a compact horizontal price journey bar."""
-    prices = sorted([entry, exit_price, sl, tp1, tp2])
+    prices = sorted([entry, exit_price, sl, tp1] + ([tp2] if tp2 else []))
     lo, hi = prices[0], prices[-1]
     span = hi - lo or 1.0
 
@@ -90,7 +90,8 @@ def _price_bar(
     marker(entry,      "ENTRY", WHITE,      up=True)
     marker(sl,         "SL",    LOSS_RED,   up=False)
     marker(tp1,        "TP1",   WIN_GREEN,  up=True)
-    marker(tp2,        "TP2",   WIN_GREEN,  up=False)
+    if tp2:
+        marker(tp2,        "TP2",   WIN_GREEN,  up=False)
     marker(exit_price, "EXIT",  accent,     up=True)
 
 
@@ -99,7 +100,7 @@ def generate_result_image(
     entry: float,
     sl: float,
     tp1: float,
-    tp2: float,
+    tp2: float | None,
     exit_price: float,
     result: str,       # "WIN_TP1" | "WIN_TP2" | "LOSS"
     confidence: int,
@@ -152,7 +153,7 @@ def generate_result_image(
         ("Direction", direction),
         ("Entry",     f"{entry:,.2f}"),
         ("TP1",       f"{tp1:,.2f}"),
-        ("TP2",       f"{tp2:,.2f}"),
+        ("TP2",       f"{tp2:,.2f}" if tp2 else "—"),
     ]
     rows_right = [
         ("SL",         f"{sl:,.2f}"),

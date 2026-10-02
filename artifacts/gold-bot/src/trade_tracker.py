@@ -30,7 +30,7 @@ _TF_MAX_AGE = {
     "MN1": 540 * 24 * 3600, # 18 months
 }
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
-_TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp3_hit"}
+_TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp1_final_hit", "tp3_hit"}
 _POST_TP_REANALYSIS_SECONDS = 10 * 60
 # XAU/USD cannot move tens of percent between two 15-second scans. This guard
 # protects a live trade when a syntactically valid provider quote is stale or
@@ -44,6 +44,14 @@ def _account_key(account_id: int | str | None) -> str | None:
     if account_id is None:
         return None
     return str(int(account_id))
+
+
+def _normalized_symbol(symbol: Any) -> str:
+    return "".join(character for character in str(symbol or "").upper() if character.isalnum())
+
+
+def _is_gold_symbol(symbol: Any) -> bool:
+    return _normalized_symbol(symbol) == "XAUUSD"
 
 
 def _belongs_to_account(trade: Dict[str, Any], account_id: int | str | None) -> bool:
@@ -122,6 +130,7 @@ def open_trade(
     limit_entry: float = None,
     account_id: int | str | None = None,
     allow_same_timeframe_mode: bool = False,
+    symbol: str = "XAU/USD",
 ) -> bool:
     trades = _load()
 
@@ -132,8 +141,16 @@ def open_trade(
         entry = float(entry)
         sl = float(sl)
         tp1 = float(tp1)
-        tp2 = float(tp2)
-        tp3 = float(tp3) if tp3 is not None else None
+        tp2 = (
+            float(tp2)
+            if tp2 is not None and float(tp2) > 0
+            else None
+        )
+        tp3 = (
+            float(tp3)
+            if tp3 is not None and float(tp3) > 0
+            else None
+        )
         limit_entry = (
             float(limit_entry)
             if limit_entry is not None and float(limit_entry) > 0
@@ -144,15 +161,24 @@ def open_trade(
         return False
 
     if direction == "BUY":
-        valid = sl < entry < tp1 < tp2 and (tp3 is None or tp2 < tp3)
+        valid = (
+            sl < entry < tp1
+            and (tp2 is None or tp1 < tp2)
+            and (tp3 is None or (tp2 is not None and tp2 < tp3))
+        )
     elif direction == "SELL":
-        valid = sl > entry > tp1 > tp2 and (tp3 is None or tp2 > tp3)
+        valid = (
+            sl > entry > tp1
+            and (tp2 is None or tp1 > tp2)
+            and (tp3 is None or (tp2 is not None and tp2 > tp3))
+        )
     else:
         valid = False
-    if not valid:
+    if not valid or not _is_gold_symbol(symbol):
         logger.error(
-            f"[{timeframe}] Trade open rejected — invalid {direction} levels: "
-            f"entry={entry:.2f} sl={sl:.2f} tp1={tp1:.2f} tp2={tp2:.2f} tp3={tp3}"
+            f"[{timeframe}] Trade open rejected — invalid symbol or {direction} levels: "
+            f"entry={entry:.2f} sl={sl:.2f} tp1={tp1:.2f} "
+            f"tp2={tp2 if tp2 is not None else 'none'} tp3={tp3}"
         )
         return False
 
@@ -185,6 +211,7 @@ def open_trade(
     trade = {
         "id":          uuid4().hex,
         "account_id":  account_key,
+        "symbol":      "XAU/USD",
         "direction":   direction,
         "entry":       entry,
         # Optional pullback/limit level shown in the alert. ``entry`` remains
@@ -207,8 +234,15 @@ def open_trade(
     }
     trades.append(trade)
     _save(trades)
-    tp3_str = f"  TP3={tp3:.2f}" if tp3 else ""
-    logger.info(f"Trade opened: {direction} @ {entry:.2f}  SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}{tp3_str}")
+    targets = f"TP1={tp1:.2f}"
+    if tp2 is not None:
+        targets += f"  TP2={tp2:.2f}"
+    if tp3:
+        targets += f"  TP3={tp3:.2f}"
+    logger.info(
+        f"Trade opened: XAU/USD {direction} @ {entry:.2f}  "
+        f"SL={sl:.2f}  {targets}"
+    )
     return True
 
 
@@ -250,7 +284,10 @@ def cancel_trade(
 def check_trades(current_price: float, recent_high: float = None,
                   recent_low: float = None,
                   tf_extremes: Dict[str, Any] = None,
-                  account_id: int | str | None = None) -> List[Dict[str, Any]]:
+                  account_id: int | str | None = None,
+                  bid: float = None,
+                  ask: float = None,
+                  symbol: str = "XAU/USD") -> List[Dict[str, Any]]:
     """
     Evaluate all open trades against current_price.
 
@@ -276,6 +313,23 @@ def check_trades(current_price: float, recent_high: float = None,
     if current_price <= 0:
         logger.warning("Trade check skipped — current price is unavailable.")
         return []
+    if not _is_gold_symbol(symbol):
+        logger.warning("Trade check skipped — unsupported live symbol %r.", symbol)
+        return []
+    try:
+        bid = float(bid) if bid is not None else None
+        ask = float(ask) if ask is not None else None
+    except (TypeError, ValueError):
+        bid = ask = None
+    if (
+        bid is None
+        or ask is None
+        or bid <= 0
+        or ask < bid
+        or ask - bid > max(1.0, current_price * 0.0005)
+        or abs((bid + ask) / 2 - current_price) > _MAX_LIVE_QUOTE_DEVIATION
+    ):
+        bid = ask = None
 
     trades  = _load()
     account_key = _account_key(account_id)
@@ -310,7 +364,12 @@ def check_trades(current_price: float, recent_high: float = None,
             entry = float(t["entry"])
             sl = float(t["sl"])
             tp1 = float(t["tp1"])
-            tp2 = float(t["tp2"])
+            tp2_value = t.get("tp2")
+            tp2 = (
+                float(tp2_value)
+                if tp2_value is not None and float(tp2_value) > 0
+                else None
+            )
         except (TypeError, ValueError):
             logger.warning(f"Trade {t.get('id')} skipped — invalid numeric levels.")
             continue
@@ -326,6 +385,17 @@ def check_trades(current_price: float, recent_high: float = None,
                 current_price,
                 entry,
                 max_quote_deviation,
+            )
+            continue
+        if not _is_gold_symbol(t.get("symbol", "XAU/USD")) or (
+            _normalized_symbol(t.get("symbol", "XAU/USD"))
+            != _normalized_symbol(symbol)
+        ):
+            logger.warning(
+                "Trade %s exit check skipped — stored symbol %r does not match live %r.",
+                t.get("id"),
+                t.get("symbol", "XAU/USD"),
+                symbol,
             )
             continue
         if (
@@ -364,6 +434,12 @@ def check_trades(current_price: float, recent_high: float = None,
             )
             tf_hi = tf_lo = None
 
+        executable_price = (
+            bid if d == "BUY" and bid is not None
+            else ask if d == "SELL" and ask is not None
+            else current_price
+        )
+
         # SL detection uses verified candle extremes when supplied (catching
         # brief wicks through the stop that retraced before the next spot
         # poll).  Do not fall back to caller-provided historical highs/lows:
@@ -371,11 +447,11 @@ def check_trades(current_price: float, recent_high: float = None,
         # falsely close a still-live trade.  With no verified candle, use the
         # current spot snapshot only.
         if tf_hi is not None and tf_lo is not None:
-            sl_hi = max(tf_hi, current_price)
-            sl_lo = min(tf_lo, current_price)
+            sl_hi = max(tf_hi, executable_price)
+            sl_lo = min(tf_lo, executable_price)
         else:
-            sl_hi = current_price
-            sl_lo = current_price
+            sl_hi = executable_price
+            sl_lo = executable_price
 
         # Persist the exact evidence used for a terminal decision. This is
         # intentionally assembled here, after validation, so the record can
@@ -383,11 +459,16 @@ def check_trades(current_price: float, recent_high: float = None,
         exit_evidence = {
             "source": "verified_candle"
             if tf_hi is not None and tf_lo is not None
+            else "live_bid_ask" if bid is not None and ask is not None
             else "live_spot",
+            "symbol": "XAU/USD",
             "timeframe": t.get("timeframe"),
             "high": tf_hi if tf_hi is not None else current_price,
             "low": tf_lo if tf_lo is not None else current_price,
             "spot": current_price,
+            "bid": bid,
+            "ask": ask,
+            "spread": round(ask - bid, 5) if bid is not None and ask is not None else None,
             "captured_at": time.time(),
         }
 
@@ -401,18 +482,18 @@ def check_trades(current_price: float, recent_high: float = None,
         # alerts.py sets tf_extremes[tf] = (current_price, current_price)),
         # this collapses back to current_price — safe.
         if tf_hi is not None:
-            tp_hi = max(tf_hi, current_price)
-            tp_lo = min(tf_lo, current_price)
+            tp_hi = max(tf_hi, executable_price)
+            tp_lo = min(tf_lo, executable_price)
         else:
-            tp_hi = current_price
-            tp_lo = current_price
+            tp_hi = executable_price
+            tp_lo = executable_price
 
         tp3_val = t.get("tp3") or 0.0
 
         if d == "BUY":
             sl_hit    = sl_lo <= sl
             tp1_hit   = tp_hi >= tp1
-            tp2_hit   = tp_hi >= tp2
+            tp2_hit   = tp2 is not None and tp_hi >= tp2
             tp3_hit   = bool(tp3_val) and tp_hi >= tp3_val
             # Exit price = the level itself (what would actually have filled),
             # not current_price, since a wick may have already retraced.
@@ -423,7 +504,7 @@ def check_trades(current_price: float, recent_high: float = None,
         else:  # SELL
             sl_hit    = sl_hi >= sl
             tp1_hit   = tp_lo <= tp1
-            tp2_hit   = tp_lo <= tp2
+            tp2_hit   = tp2 is not None and tp_lo <= tp2
             tp3_hit   = bool(tp3_val) and tp_lo <= tp3_val
             sl_exit   = sl
             tp1_exit  = tp1
@@ -493,6 +574,19 @@ def check_trades(current_price: float, recent_high: float = None,
             events.append({"trade": t, "event": "TP2", "exit_price": tp2_exit})
             logger.info(f"Trade {t['id']} TP2 hit @ {tp2_exit:.2f}")
 
+        elif tp1_hit and tp2 is None and not t.get("tp1_hit"):
+            t["tp1_hit"] = True
+            _mark_terminal(t, "tp1_final_hit", "take_profit", exit_evidence)
+            t["completion_label"] = "FINAL STRUCTURAL TP1 HIT"
+            t["tp_reanalysis_until"] = time.time() + _POST_TP_REANALYSIS_SECONDS
+            changed = True
+            events.append({
+                "trade": t,
+                "event": "TP1_FINAL",
+                "exit_price": tp1_exit,
+                "exit_evidence": exit_evidence,
+            })
+            logger.info(f"Trade {t['id']} final structural TP1 hit @ {tp1_exit:.2f}")
         elif tp1_hit and not t.get("tp1_hit"):
             t["tp1_hit"] = True
             t["status"]  = "tp1_hit"   # record partial win; trade stays tracked for TP2/TP3
@@ -684,7 +778,12 @@ def get_active_trades_for_account(
 def get_stats(account_id: int | str | None = None) -> Dict[str, Any]:
     """Return win/loss/open counts and win rate for one account."""
     trades = get_all_trades(account_id)
-    wins   = sum(1 for t in trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
+    wins   = sum(
+        1 for t in trades
+        if t.get("status") in (
+            "tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit", "tp1_final_hit"
+        )
+    )
     losses = sum(1 for t in trades if t.get("status") == "sl_hit")
     open_  = sum(1 for t in trades if is_active_trade(t))
     expired = sum(1 for t in trades if t.get("status") in ("expired", "replaced"))

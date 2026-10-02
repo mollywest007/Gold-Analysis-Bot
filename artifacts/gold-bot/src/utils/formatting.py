@@ -1432,6 +1432,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
     rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
     atr = float(getattr(a, "atr", 0.0) or 0.0)
+    report = getattr(a, "institutional_report", {}) or {}
+    quality_checks = report.get("quality_checks", []) or []
     entry = float(getattr(a, "entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     target = float(getattr(a, "tp1", 0.0) or 0.0)
@@ -1452,9 +1454,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     )
     rsi_support = (
         "supports " + trend_bias
-        if (trend_bias == "BUY" and rsi >= 50)
-        or (trend_bias == "SELL" and rsi <= 50)
-        else "does not support bias"
+        if "RSI momentum is recovering/falling with price" in quality_checks
+        else "not confirmed"
     )
     setup = str(getattr(a, "price_action_setup", "") or "None detected")
     wait_reason = str(
@@ -1462,7 +1463,6 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         or getattr(a, "verdict_reason", "")
         or "No additional conditions are currently blocking the plan."
     )
-    report = getattr(a, "institutional_report", {}) or {}
     legacy = report.get("legacy", {}) or {}
     legacy_state = str(
         legacy.get("confirmation", getattr(a, "legacy_confirmation", "NEUTRAL"))
@@ -1510,15 +1510,14 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "──────────────────────────────────",
         "HOW IT IS ANALYZING",
         f"Data      : {data_quality} candles ({timeframe} only)",
-        f"Trend     : EMA20 {fmt_price(ema20)} / EMA50 {fmt_price(ema50)}",
-        f"            → {trend_bias} | {trend}",
+        f"Trend     : Local swings → {trend_bias} | {trend}",
         f"Momentum  : RSI14 {rsi:.1f} → {rsi_support} | ADX {adx:.1f}",
-        f"Structure : {structure}",
+        f"Structure : {structure} | EMA20 {fmt_price(ema20)} is pullback context",
         f"Price act.: {setup}",
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
-        f"Risk      : ATR14 {fmt_price(atr)} → volatility-based levels",
+        f"Risk      : ATR14 {fmt_price(atr)} | pullback-swing stop, 2.5 ATR max",
         f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
-        f"Regime    : {regime} | Supertrend {supertrend}",
+        f"Setup checks: {len(quality_checks)} confirmed",
         "──────────────────────────────────",
         "TRADE PLAN",
         f"Key zone  : {getattr(a, 'key_zone', '') or '—'}",
@@ -3949,6 +3948,7 @@ def history_card(trades: list, stats: dict) -> str:
         s = t.get("status", "")
         if s == "open":         return "OPEN     "
         if s == "tp3_hit":      return "ALL TP HIT"
+        if s == "tp1_final_hit": return "FINAL TP1"
         if s == "tp2_hit":      return "WIN   TP2"
         if s == "tp1_hit":      return "WIN   TP1"
         if s == "tp1_sl_hit":   return "TP1 / SL "
@@ -3983,7 +3983,12 @@ def history_card(trades: list, stats: dict) -> str:
     ]
 
     # Today-only stats
-    wins         = sum(1 for t in today_trades if t.get("status") in ("tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit"))
+    wins         = sum(
+        1 for t in today_trades
+        if t.get("status") in (
+            "tp1_hit", "tp2_hit", "tp3_hit", "tp1_sl_hit", "tp1_final_hit"
+        )
+    )
     losses       = sum(1 for t in today_trades if t.get("status") == "sl_hit")
     open_today   = sum(1 for t in today_trades if t.get("status") in ("open", "tp1_hit", "tp2_hit"))
     total_closed = wins + losses
@@ -4054,6 +4059,7 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
         return {
             "open":        "OPEN",
             "tp3_hit":     "ALL TP HIT",
+            "tp1_final_hit": "FINAL TP1",
             "tp2_hit":     "WIN  TP2",
             "tp1_hit":     "WIN  TP1",
             "tp1_sl_hit":  "TP1 / SL",
@@ -4097,7 +4103,8 @@ def restart_summary_card(open_trades: list, recent_trades: list, stats: dict) ->
                 f"  {d}  {tf}   opened {opened}",
                 f"  Entry : {entry:,.2f}   Conf: {conf}%",
                 f"  SL    : {sl:,.2f}",
-                f"  TP1   : {tp1:,.2f}   TP2: {tp2:,.2f}",
+                f"  TP1   : {tp1:,.2f}"
+                + (f"   TP2: {tp2:,.2f}" if tp2 else ""),
                 "  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·",
             ]
     else:

@@ -11,7 +11,12 @@ from telegram import InputFile
 from telegram.ext import ContextTypes
 
 from src.analysis import analyze
-from src.analysis.market_data import get_gold_price, invalidate_cache, fetch_ohlcv
+from src.analysis.market_data import (
+    fetch_ohlcv,
+    get_cached_gold_quote,
+    get_gold_price,
+    invalidate_cache,
+)
 from src.analysis.modes import MODES
 from src.mode_manager import get_mode_config
 from src.user_preferences import (
@@ -1080,10 +1085,14 @@ def _entry_price_is_currently_valid(
         stop = float(analysis.stop_loss)
         tp1 = float(analysis.tp1)
         tp3 = float(getattr(analysis, "tp3", 0.0) or 0.0)
+        atr = float(getattr(analysis, "atr", 0.0) or 0.0)
     except (AttributeError, TypeError, ValueError):
         return False
 
     if price <= 0 or entry <= 0 or stop <= 0 or tp1 <= 0:
+        return False
+    near_entry_distance = max(abs(entry) * 0.00015, atr * 0.35, 0.05)
+    if abs(price - entry) > near_entry_distance:
         return False
 
     if analysis.action == "BUY":
@@ -1223,27 +1232,29 @@ async def _send_setup_forming_alert(
              or (forming_dir == "SELL" and stop_loss > provisional_entry))
     )
     if not valid_stop:
-        atr = _safe_float(getattr(a, "atr", 0.0), 0.0)
-        # Analysis objects from the live engine normally include a stop. Keep
-        # the provisional card usable for partial/test objects without turning
-        # a missing stop into a multi-thousand-point synthetic risk.
-        fallback_risk = max(abs(market_entry) * 0.001, 0.01)
-        risk = max(atr * 2.0, fallback_risk)
-        stop_loss = provisional_entry - risk if forming_dir == "BUY" else provisional_entry + risk
-    base_risk = max(abs(provisional_entry - stop_loss), 0.01)
-
-    def _target_or_default(value: float, multiple: float) -> float:
-        valid = (
-            value > 0
-            and ((forming_dir == "BUY" and value > market_entry)
-                 or (forming_dir == "SELL" and value < market_entry))
+        stop_loss = 0.0
+    targets_are_ordered = (
+        tp1 > market_entry and (not tp2 or tp2 > tp1) and (not tp3 or tp3 > (tp2 or tp1))
+        if forming_dir == "BUY"
+        else tp1 < market_entry and (not tp2 or tp2 < tp1) and (not tp3 or tp3 < (tp2 or tp1))
+    )
+    if not targets_are_ordered:
+        tp1 = tp2 = tp3 = 0.0
+    else:
+        tp2_is_ordered = tp2 > tp1 if forming_dir == "BUY" else 0 < tp2 < tp1
+        tp3_is_ordered = (
+            tp3 > (tp2 or tp1)
+            if forming_dir == "BUY"
+            else 0 < tp3 < (tp2 or tp1)
         )
-        distance = abs(value - market_entry) if valid else base_risk * multiple
-        return provisional_entry + distance if forming_dir == "BUY" else provisional_entry - distance
+        if not tp2_is_ordered:
+            tp2 = 0.0
+            tp3 = 0.0
+        elif not tp3_is_ordered:
+            tp3 = 0.0
 
-    tp1 = _target_or_default(tp1, 1.5)
-    tp2 = _target_or_default(tp2, 2.5)
-    tp3 = _target_or_default(tp3, 3.5)
+    def _provisional_level(value: float) -> str:
+        return f"{value:,.2f}" if value else "Not established"
 
     if early_entry_watch:
         alert_title = "⚠️  PROVISIONAL EARLY ENTRY  (SETUP FORMING)"
@@ -1255,10 +1266,10 @@ async def _send_setup_forming_alert(
             watch_line = f"  Entry      : {provisional_entry:,.2f}\n"
         plan_lines = (
             f"  Entry      : {provisional_entry:,.2f}\n"
-            f"  Stop Loss  : {stop_loss:,.2f}\n"
-            f"  TP1        : {tp1:,.2f}\n"
-            f"  TP2        : {tp2:,.2f}\n"
-            f"  TP3        : {tp3:,.2f}\n"
+            f"  Stop Loss  : {_provisional_level(stop_loss)}\n"
+            f"  TP1        : {_provisional_level(tp1)}\n"
+            f"  TP2        : {_provisional_level(tp2)}\n"
+            f"  TP3        : {_provisional_level(tp3)}\n"
             "  Risk       : HIGH — provisional, manual review only\n"
         )
         status_line = "  Signal Status : EARLY ENTRY — provisional review only\n"
@@ -1499,7 +1510,7 @@ async def _send_result_image(
     entry      = trade["entry"]
     sl         = trade["sl"]
     tp1        = trade["tp1"]
-    tp2        = trade["tp2"]
+    tp2        = trade.get("tp2")
     confidence = trade.get("confidence", 80)
     timeframe  = trade.get("timeframe", "H1")
     rr_ratio   = trade.get("rr_ratio", 2.0)
@@ -1518,6 +1529,14 @@ async def _send_result_image(
         caption = (f"{alert_prefix}🔄 ALL TP HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP3: {tp3_val:,.2f}\n"
                    f"Full run profit: +{abs(entry - exit_price):,.2f} pts")
+    elif event == "TP1_FINAL":
+        result = "WIN_TP1"
+        caption = (
+            f"{alert_prefix}✅ FINAL STRUCTURAL TARGET HIT  |  "
+            f"XAU/USD  |  {timeframe}\n"
+            f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
+            f"Profit: +{abs(entry - exit_price):,.2f} pts"
+        )
     elif event == "TP2":
         result  = "WIN_TP2"
         tp3_val = trade.get("tp3")
@@ -1592,6 +1611,7 @@ async def _send_result_image(
 _RESULT_EVENT_STATUS = {
     "SL": "sl_hit",
     "TP1_SL": "tp1_sl_hit",
+    "TP1_FINAL": "tp1_final_hit",
     "TP3": "tp3_hit",
 }
 
@@ -1620,6 +1640,11 @@ def _is_verified_terminal_result(trade: dict, event: str) -> bool:
         return (
             _safe_float(trade.get("closed_at")) > 0
             and trade.get("close_reason") in {"stop_loss", "break_even_stop"}
+        )
+    if event == "TP1_FINAL":
+        return (
+            _safe_float(trade.get("closed_at")) > 0
+            and trade.get("close_reason") == "take_profit"
         )
     return True
 
@@ -2262,6 +2287,7 @@ async def _check_and_alert_once(
     try:
         current_price = await get_gold_price()
         if current_price > 0:
+            exit_quote = get_cached_gold_quote(current_price)
             # Include tp2_hit trades that are still watching for TP3
             active_trades = [
                 t for t in _get_active_trades()
@@ -2341,7 +2367,12 @@ async def _check_and_alert_once(
 
             async with _trade_exit_lock:
                 events = trade_tracker.check_trades(
-                    current_price, tf_extremes=tf_extremes, account_id=account_id
+                    current_price,
+                    tf_extremes=tf_extremes,
+                    account_id=account_id,
+                    bid=exit_quote.get("bid"),
+                    ask=exit_quote.get("ask"),
+                    symbol=exit_quote.get("symbol", "XAU/USD"),
                 )
             event_trade_ids: set[str] = set()
             cooldown_event_trade_ids: set[str] = set()
@@ -2373,7 +2404,7 @@ async def _check_and_alert_once(
                 # Only terminal events release the entry lock.
                 if closed_tf and not trade_tracker.is_active_trade(ev["trade"]):
                     is_loss = ev["event"] in ("SL", "TP1_SL")
-                    is_final_target = ev["event"] == "TP3"
+                    is_final_target = ev["event"] in ("TP3", "TP1_FINAL")
                     closed_key = _trade_state_key(
                         ev["trade"],
                         combined=account_scan and mode_name == COMBINED_MODE,
@@ -2907,6 +2938,8 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_price <= 0:
             logger.warning("Fast exit scan skipped — live spot unavailable.")
             return
+        exit_quote = get_cached_gold_quote(current_price)
+        exit_quote = get_cached_gold_quote(current_price)
 
         bot = context.application.bot
         for account_id in sorted(subscribers):
@@ -2917,7 +2950,11 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             async with _trade_exit_lock:
                 events = trade_tracker.check_trades(
-                    current_price, account_id=account_id
+                    current_price,
+                    account_id=account_id,
+                    bid=exit_quote.get("bid"),
+                    ask=exit_quote.get("ask"),
+                    symbol=exit_quote.get("symbol", "XAU/USD"),
                 )
 
             subs = {account_id}
@@ -2948,7 +2985,7 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
                     event_name = event.get("event", "")
                     state_key = _trade_state_key(trade, combined=combined)
                     is_loss = event_name in ("SL", "TP1_SL")
-                    is_final_target = event_name == "TP3"
+                    is_final_target = event_name in ("TP3", "TP1_FINAL")
                     cooldown_until = clear_signal_lock(
                         state_key,
                         after_sl=is_loss,

@@ -151,6 +151,94 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual(evidence["low"], 89.0)
         self.assertEqual(evidence["spot"], 89.0)
 
+    def test_single_structural_target_closes_as_final_tp1_using_buy_bid(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="BUY",
+                entry=4400.0,
+                sl=4390.0,
+                tp1=4410.0,
+                tp2=None,
+                tp3=None,
+                timeframe="M15",
+                confidence=80,
+                rr_ratio=1.0,
+            )
+        )
+
+        # The midpoint is through TP1, but the executable sell-side bid is not.
+        self.assertEqual(
+            trade_tracker.check_trades(
+                4410.0, bid=4409.9, ask=4410.1, tf_extremes={}
+            ),
+            [],
+        )
+        events = trade_tracker.check_trades(
+            4410.2, bid=4410.1, ask=4410.3, tf_extremes={}
+        )
+
+        self.assertEqual([event["event"] for event in events], ["TP1_FINAL"])
+        trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(trade["status"], "tp1_final_hit")
+        self.assertEqual(trade["close_reason"], "take_profit")
+        self.assertIsNone(trade["tp2"])
+        self.assertEqual(trade["exit_evidence"]["source"], "live_bid_ask")
+
+    def test_single_structural_target_uses_sell_ask_and_gold_symbol_only(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="SELL",
+                entry=4400.0,
+                sl=4410.0,
+                tp1=4390.0,
+                tp2=None,
+                timeframe="M15",
+                confidence=80,
+                rr_ratio=1.0,
+            )
+        )
+        trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(trade["symbol"], "XAU/USD")
+
+        self.assertEqual(
+            trade_tracker.check_trades(
+                4389.8,
+                bid=4389.7,
+                ask=4389.9,
+                symbol="BTC/USD",
+                tf_extremes={"M15": (4389.0, 4388.0)},
+            ),
+            [],
+        )
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
+        # SELL positions exit at ask; a bid alone crossing TP1 is insufficient.
+        self.assertEqual(
+            trade_tracker.check_trades(
+                4389.8, bid=4389.7, ask=4390.1, tf_extremes={}
+            ),
+            [],
+        )
+        events = trade_tracker.check_trades(
+            4389.8, bid=4389.6, ask=4389.9, tf_extremes={}
+        )
+        self.assertEqual([event["event"] for event in events], ["TP1_FINAL"])
+
+    def test_trade_open_rejects_non_gold_symbol(self):
+        self.assertFalse(
+            trade_tracker.open_trade(
+                direction="BUY",
+                entry=100.0,
+                sl=90.0,
+                tp1=110.0,
+                tp2=None,
+                timeframe="M15",
+                confidence=80,
+                rr_ratio=1.0,
+                symbol="BTC/USD",
+            )
+        )
+
     def test_stop_wick_triggers_stop_for_sell(self):
         self.assertTrue(
             trade_tracker.open_trade(

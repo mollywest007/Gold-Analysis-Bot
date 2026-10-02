@@ -45,7 +45,13 @@ class FastExitMonitorTests(unittest.IsolatedAsyncioTestCase):
             await alerts.check_open_trades_fast(context)
 
         get_price.assert_awaited_once_with(force_refresh=True)
-        checked.assert_called_once_with(94.8, account_id=123)
+        checked.assert_called_once_with(
+            94.8,
+            account_id=123,
+            bid=None,
+            ask=None,
+            symbol="XAU/USD",
+        )
 
 
 if __name__ == "__main__":

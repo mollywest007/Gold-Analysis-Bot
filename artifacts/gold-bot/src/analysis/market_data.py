@@ -57,6 +57,7 @@ MAX_FUTURES_SPOT_DEVIATION = 100.0
 
 _ohlcv_cache: Dict[str, Tuple["OHLCVData", float]] = {}
 _price_cache: Tuple[float, float] = (0.0, 0.0)   # (price, timestamp)
+_price_bbo_cache: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # bid, ask, timestamp
 _cache_lock = asyncio.Lock()
 
 
@@ -192,6 +193,7 @@ async def _fetch_goldapi(session: aiohttp.ClientSession) -> Optional[float]:
 
 
 async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
+    global _price_bbo_cache
     try:
         async with session.get(SWISSQUOTE, headers=HEADERS,
                                timeout=aiohttp.ClientTimeout(total=6)) as r:
@@ -202,8 +204,11 @@ async def _fetch_swissquote(session: aiohttp.ClientSession) -> Optional[float]:
                     if profiles:
                         bid = profiles[0].get("bid", 0)
                         ask = profiles[0].get("ask", 0)
-                        mid = (float(bid) + float(ask)) / 2
-                        if 500 < mid < 25000:
+                        bid = float(bid)
+                        ask = float(ask)
+                        mid = (bid + ask) / 2
+                        if 500 < bid <= ask < 25000:
+                            _price_bbo_cache = (bid, ask, time.time())
                             return mid
     except Exception as e:
         logger.warning(f"swissquote fetch failed: {e}")
@@ -260,7 +265,7 @@ async def _fetch_yf_last_close(session: aiohttp.ClientSession) -> Optional[float
 
 async def get_gold_price(force_refresh: bool = False) -> float:
     """Return XAU/USD spot, optionally bypassing the short-lived quote cache."""
-    global _price_cache
+    global _price_cache, _price_bbo_cache
     async with _cache_lock:
         cached_price, cached_ts = _price_cache
         if (
@@ -270,6 +275,9 @@ async def get_gold_price(force_refresh: bool = False) -> float:
         ):
             return cached_price
 
+    # Do not reuse an old executable quote when the matching spot snapshot is
+    # being refreshed; a failed BBO fetch safely falls back to validated spot.
+    _price_bbo_cache = (0.0, 0.0, 0.0)
     async with aiohttp.ClientSession() as session:
         # Race the two spot sources, fall back to futures
         tasks = [_fetch_goldapi(session), _fetch_swissquote(session)]
@@ -295,6 +303,34 @@ async def get_gold_price(force_refresh: bool = False) -> float:
 
     logger.error("All price sources failed")
     return 0.0
+
+
+def get_cached_gold_quote(mid_price: float) -> dict:
+    """Pair a validated spot snapshot with a fresh bid/ask when available.
+
+    If Swissquote's executable quote is missing or inconsistent, callers use
+    the validated spot as a conservative fallback rather than stale sides.
+    """
+    try:
+        mid_price = float(mid_price)
+    except (TypeError, ValueError):
+        mid_price = 0.0
+    bid, ask, captured_at = _price_bbo_cache
+    quote_is_fresh = (
+        mid_price > 0
+        and captured_at > 0
+        and time.time() - captured_at <= PRICE_TTL + 2
+        and 0 < bid <= ask
+        and ask - bid <= MAX_SOURCE_SPREAD
+        and abs((bid + ask) / 2 - mid_price) <= MAX_SOURCE_SPREAD
+    )
+    return {
+        "symbol": "XAU/USD",
+        "mid": mid_price,
+        "bid": bid if quote_is_fresh else None,
+        "ask": ask if quote_is_fresh else None,
+        "spread_available": bool(quote_is_fresh),
+    }
 
 
 # ─── Historical OHLCV ─────────────────────────────────────────────────────────
@@ -494,15 +530,17 @@ def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":
 
 def invalidate_cache(timeframe: str = None) -> None:
     """Force-expire OHLCV cache — call after a trade alert or hard refresh."""
-    global _price_cache
+    global _price_cache, _price_bbo_cache
     if timeframe:
         _ohlcv_cache.pop(timeframe, None)
     else:
         _ohlcv_cache.clear()
     _price_cache = (0.0, 0.0)
+    _price_bbo_cache = (0.0, 0.0, 0.0)
 
 
 def invalidate_price_cache() -> None:
     """Force the next request to read a fresh live spot quote."""
-    global _price_cache
+    global _price_cache, _price_bbo_cache
     _price_cache = (0.0, 0.0)
+    _price_bbo_cache = (0.0, 0.0, 0.0)

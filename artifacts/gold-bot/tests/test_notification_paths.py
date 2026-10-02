@@ -71,13 +71,17 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             stop_loss=90.0,
             tp1=110.0,
             tp3=130.0,
+            atr=5.0,
         )
 
         self.assertFalse(
             alerts._entry_price_is_currently_valid(analysis, 111.0)
         )
         self.assertTrue(
-            alerts._entry_price_is_currently_valid(analysis, 105.0)
+            alerts._entry_price_is_currently_valid(analysis, 101.0)
+        )
+        self.assertFalse(
+            alerts._entry_price_is_currently_valid(analysis, 108.0)
         )
 
     def test_stale_sell_entry_is_rejected_after_live_price_crosses_target(self):
@@ -87,14 +91,26 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             stop_loss=110.0,
             tp1=90.0,
             tp3=70.0,
+            atr=5.0,
         )
 
         self.assertFalse(
             alerts._entry_price_is_currently_valid(analysis, 89.0)
         )
         self.assertTrue(
-            alerts._entry_price_is_currently_valid(analysis, 95.0)
+            alerts._entry_price_is_currently_valid(analysis, 99.0)
         )
+
+    def test_single_structural_tp_result_requires_verified_terminal_evidence(self):
+        trade = {
+            "status": "tp1_final_hit",
+            "closed_at": 123.0,
+            "close_reason": "take_profit",
+        }
+
+        self.assertTrue(alerts._is_verified_terminal_result(trade, "TP1_FINAL"))
+        trade["close_reason"] = "stop_loss"
+        self.assertFalse(alerts._is_verified_terminal_result(trade, "TP1_FINAL"))
 
     def test_exit_extremes_ignore_old_post_entry_wicks(self):
         data = SimpleNamespace(
