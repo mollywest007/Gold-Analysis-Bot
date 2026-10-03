@@ -48,6 +48,14 @@ or incomplete setup must not receive invented stop or target levels.
 Analysis statuses remain `WAIT`, `DEVELOPING`, `MODERATE ENTRY`, `MISSED`, or
 `INVALID`. Alerts must distinguish a confirmed entry from an incomplete setup.
 
+The momentum-pullback sequence is shared, but its thresholds and risk rules are
+selected from the user's active mode before analysis begins. Scalp, Intraday,
+Swing, and Position each keep their own sensitivity, pullback window, rejection
+strictness, ATR limits, structural target requirements, and response timeframe.
+Combined mode must resolve each stream to its own profile. Never fall back to a
+different mode when an explicit mode is invalid, and show the active mode on
+setup cards.
+
 The saved trade history does not include the OHLCV candles needed to replay this
 strategy. Do not present the old trade summaries as a backtest of the new
 strategy, and do not claim profitability or superiority without suitable

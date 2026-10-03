@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.analysis import engine
 from src.analysis import market_data
+from src.analysis.modes import MODES
 from src.analysis.engine import MarketAnalysis
 from src.handlers import callbacks
 from src.utils import formatting
@@ -66,12 +67,13 @@ class AnalysisIntegrityTests(unittest.TestCase):
         with patch.object(engine, "_local_swings", return_value=swings):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes,
-                price=110.4,
+                price=110.35,
                 ema20=110.0,
                 ema50=111.5,  # EMA50 opposition must not veto local structure.
                 atr=2.5,
                 rsi=55.0,
                 previous_rsi=54.0,
+                mode_cfg=MODES["intraday"],
             )
 
         self.assertEqual(result["status"], "MODERATE ENTRY")
@@ -94,6 +96,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.25, 110.0, 111.5,
                 2.5, 55.0, 54.0,
+                mode_cfg=MODES["intraday"],
             )
 
         self.assertEqual(result["status"], "DEVELOPING")
@@ -109,8 +112,9 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
         with patch.object(engine, "_local_swings", return_value=swings):
             result = engine._momentum_pullback_decision(
-                opens, highs, lows, closes, 110.4, 110.0, 111.5,
+                opens, highs, lows, closes, 110.35, 110.0, 111.5,
                 2.5, 40.0, 42.0,
+                mode_cfg=MODES["intraday"],
             )
 
         self.assertEqual(result["status"], "WAIT")
@@ -126,8 +130,9 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
         with patch.object(engine, "_local_swings", return_value=swings):
             result = engine._momentum_pullback_decision(
-                opens, highs, lows, closes, 110.4, 110.0, 111.5,
+                opens, highs, lows, closes, 110.35, 110.0, 111.5,
                 2.5, 47.0, 46.0,
+                mode_cfg=MODES["intraday"],
             )
 
         self.assertEqual(result["status"], "MODERATE ENTRY")

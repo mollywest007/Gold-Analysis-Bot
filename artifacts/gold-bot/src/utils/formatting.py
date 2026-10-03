@@ -428,7 +428,11 @@ def timeframe_rank(timeframe: str) -> int:
 
 def _mode_config_for_analysis(a: MarketAnalysis = None):
     mode_name = getattr(a, "analysis_mode", None) if a is not None else None
-    return MODES.get(mode_name, get_mode_config())
+    if mode_name:
+        if mode_name not in MODES:
+            raise ValueError(f"Unknown analysis mode on report: '{mode_name}'")
+        return MODES[mode_name]
+    return get_mode_config()
 
 
 def _mode_line(a: MarketAnalysis = None) -> str:

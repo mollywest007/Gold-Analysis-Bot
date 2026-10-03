@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src import alerts
+from src.analysis import engine
 from src.analysis.engine import _momentum_pullback_decision, _structure_targets
 from src.analysis.modes import MODES
 from src.chart_analysis import _mode_prompt_instructions, _resolve_chart_scope
@@ -145,6 +146,58 @@ class ModeScopedBroadcastTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(combined_texts), 1)
         self.assertIn("scalp:M15", combined_texts[0])
         self.assertIn("intraday:H1", combined_texts[0])
+
+
+class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_analysis_loads_the_requested_mode_profile_before_scanning(self):
+        class CandleData:
+            def __len__(self):
+                return 40
+
+        data = CandleData()
+        seen = []
+
+        def analyze_with_profile(candles, timeframe, mode_cfg):
+            seen.append((timeframe, mode_cfg.name, mode_cfg.momentum_pullback))
+            return mode_cfg
+
+        with (
+            patch.object(engine, "fetch_ohlcv", new=AsyncMock(return_value=data)),
+            patch.object(
+                engine, "_analyze_simple_data", side_effect=analyze_with_profile
+            ),
+        ):
+            for mode, timeframe in (
+                ("scalp", "M15"),
+                ("intraday", "H1"),
+                ("swing", "H4"),
+                ("position", "D1"),
+            ):
+                result = await engine._analyze_single(timeframe, mode=mode)
+                self.assertEqual(result.name, mode)
+
+        self.assertEqual(
+            seen,
+            [
+                (timeframe, mode, MODES[mode].momentum_pullback)
+                for mode, timeframe in (
+                    ("scalp", "M15"),
+                    ("intraday", "H1"),
+                    ("swing", "H4"),
+                    ("position", "D1"),
+                )
+            ],
+        )
+
+    async def test_unknown_or_combined_mode_stops_before_market_fetch(self):
+        with patch.object(engine, "fetch_ohlcv", new=AsyncMock()) as fetch:
+            with self.assertRaisesRegex(ValueError, "Unknown analysis mode"):
+                await engine._analyze_single("H1", mode="intraday_typo")
+            fetch.assert_not_awaited()
+
+            with self.assertRaisesRegex(ValueError, "no standalone"):
+                await engine._analyze_single("M15", mode="scalp_interval")
+            fetch.assert_not_awaited()
 
 
 if __name__ == "__main__":

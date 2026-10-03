@@ -2189,7 +2189,12 @@ async def _analyze_single(
     """
     from src.mode_manager import get_mode_config
 
-    mode_cfg = get_mode_config(mode) if mode else get_mode_config()
+    mode_cfg = get_mode_config(mode)
+    if mode_cfg.momentum_pullback is None:
+        raise ValueError(
+            f"Mode '{mode_cfg.name}' has no standalone momentum-pullback profile; "
+            "resolve a combined mode to its stream first."
+        )
 
     # The selected chart is the only candle series used by this analysis.
     # Keep the old context fields serializable for clients that still display

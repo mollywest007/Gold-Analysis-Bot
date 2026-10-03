@@ -49,9 +49,14 @@ def get_mode() -> str:
 
 
 def get_mode_config(mode: Optional[str] = None) -> ModeConfig:
-    """Return a mode config, using global persisted mode when omitted."""
-    mode_name = mode if mode in MODES else _load()
-    return MODES.get(mode_name, MODES[DEFAULT_MODE])
+    """Return an explicit mode config, or the persisted mode when omitted."""
+    if mode is None:
+        mode_name = _load()
+    elif mode in MODES:
+        mode_name = mode
+    else:
+        raise ValueError(f"Unknown analysis mode '{mode}'. Valid: {list(MODES)}")
+    return MODES[mode_name]
 
 
 def get_timeframe() -> str:

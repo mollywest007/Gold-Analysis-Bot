@@ -14,11 +14,16 @@ class ChartAnalysisPromptTests(unittest.TestCase):
         self.assertIn("models/gemini-3.6-flash:generateContent", _GEMINI_URL)
 
     def test_json_schema_braces_survive_prompt_formatting(self):
-        prompt = _PROMPT.format(open_trade_section="")
+        prompt = _PROMPT.format(
+            mode_instructions="Selected mode: Intraday",
+            open_trade_section="",
+        )
 
         self.assertIn('"bias"', prompt)
         self.assertIn('"open_trade_notes"', prompt)
+        self.assertIn("Selected mode: Intraday", prompt)
         self.assertIn("Return ONLY a single valid JSON object", prompt)
+        self.assertNotIn("{mode_instructions}", prompt)
         self.assertNotIn("{open_trade_section}", prompt)
 
 
