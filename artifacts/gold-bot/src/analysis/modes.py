@@ -12,7 +12,37 @@ The rest of the system picks it up automatically.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class MomentumPullbackProfile:
+    """Entry and risk thresholds for one selected-timeframe pullback strategy."""
+
+    swing_change_atr: float
+    pullback_candles: int
+    minimum_pullback_depth_atr: float
+    maximum_pullback_depth_atr: float
+    structure_hold_tolerance_atr: float
+    level_tolerance_atr: float
+    rejection_wick_min_atr: float
+    rejection_wick_body_ratio: float
+    chop_lookback_candles: int
+    chop_minimum_range_atr: float
+    chop_max_alternations: int
+    chop_max_drift_atr: float
+    impulse_lookback_candles: int
+    maximum_breakout_range_atr: float
+    maximum_breakout_body_atr: float
+    maximum_ema_distance_atr: float
+    buy_rsi_veto_below: float
+    sell_rsi_veto_above: float
+    stop_buffer_atr: float
+    minimum_stop_distance_atr: float
+    maximum_stop_distance_atr: float
+    target_buffer_atr: float
+    minimum_target_room_atr: float
+    entry_zone_atr: float
 
 
 @dataclass
@@ -54,6 +84,7 @@ class ModeConfig:
     # Mode-specific trade-plan policy.  These are deliberately explicit so a
     # new mode can tune the strategy without adding branches to the engine.
     risk_note: str = ""
+    momentum_pullback: Optional[MomentumPullbackProfile] = None
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
     # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default
@@ -70,6 +101,114 @@ class ModeConfig:
 
     # ── Tip shown after mode switch ────────────────────────────────────────────
     tip: str = ""
+
+
+MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
+    "scalp": MomentumPullbackProfile(
+        swing_change_atr=0.015,
+        pullback_candles=2,
+        minimum_pullback_depth_atr=0.03,
+        maximum_pullback_depth_atr=0.95,
+        structure_hold_tolerance_atr=0.08,
+        level_tolerance_atr=0.65,
+        rejection_wick_min_atr=0.04,
+        rejection_wick_body_ratio=0.18,
+        chop_lookback_candles=6,
+        chop_minimum_range_atr=0.95,
+        chop_max_alternations=4,
+        chop_max_drift_atr=0.75,
+        impulse_lookback_candles=4,
+        maximum_breakout_range_atr=1.90,
+        maximum_breakout_body_atr=1.20,
+        maximum_ema_distance_atr=1.75,
+        buy_rsi_veto_below=40.0,
+        sell_rsi_veto_above=60.0,
+        stop_buffer_atr=0.08,
+        minimum_stop_distance_atr=0.25,
+        maximum_stop_distance_atr=1.75,
+        target_buffer_atr=0.08,
+        minimum_target_room_atr=0.60,
+        entry_zone_atr=0.08,
+    ),
+    "intraday": MomentumPullbackProfile(
+        swing_change_atr=0.03,
+        pullback_candles=3,
+        minimum_pullback_depth_atr=0.08,
+        maximum_pullback_depth_atr=1.15,
+        structure_hold_tolerance_atr=0.10,
+        level_tolerance_atr=0.55,
+        rejection_wick_min_atr=0.08,
+        rejection_wick_body_ratio=0.25,
+        chop_lookback_candles=8,
+        chop_minimum_range_atr=1.15,
+        chop_max_alternations=5,
+        chop_max_drift_atr=0.65,
+        impulse_lookback_candles=7,
+        maximum_breakout_range_atr=1.65,
+        maximum_breakout_body_atr=1.15,
+        maximum_ema_distance_atr=1.60,
+        buy_rsi_veto_below=44.0,
+        sell_rsi_veto_above=56.0,
+        stop_buffer_atr=0.10,
+        minimum_stop_distance_atr=0.35,
+        maximum_stop_distance_atr=2.00,
+        target_buffer_atr=0.10,
+        minimum_target_room_atr=0.75,
+        entry_zone_atr=0.12,
+    ),
+    "swing": MomentumPullbackProfile(
+        swing_change_atr=0.05,
+        pullback_candles=3,
+        minimum_pullback_depth_atr=0.10,
+        maximum_pullback_depth_atr=1.25,
+        structure_hold_tolerance_atr=0.12,
+        level_tolerance_atr=0.50,
+        rejection_wick_min_atr=0.10,
+        rejection_wick_body_ratio=0.30,
+        chop_lookback_candles=10,
+        chop_minimum_range_atr=0.95,
+        chop_max_alternations=5,
+        chop_max_drift_atr=0.75,
+        impulse_lookback_candles=10,
+        maximum_breakout_range_atr=1.90,
+        maximum_breakout_body_atr=1.40,
+        maximum_ema_distance_atr=1.90,
+        buy_rsi_veto_below=46.0,
+        sell_rsi_veto_above=54.0,
+        stop_buffer_atr=0.12,
+        minimum_stop_distance_atr=0.45,
+        maximum_stop_distance_atr=2.25,
+        target_buffer_atr=0.12,
+        minimum_target_room_atr=0.90,
+        entry_zone_atr=0.16,
+    ),
+    "position": MomentumPullbackProfile(
+        swing_change_atr=0.07,
+        pullback_candles=4,
+        minimum_pullback_depth_atr=0.12,
+        maximum_pullback_depth_atr=1.35,
+        structure_hold_tolerance_atr=0.15,
+        level_tolerance_atr=0.45,
+        rejection_wick_min_atr=0.12,
+        rejection_wick_body_ratio=0.35,
+        chop_lookback_candles=12,
+        chop_minimum_range_atr=0.85,
+        chop_max_alternations=4,
+        chop_max_drift_atr=0.85,
+        impulse_lookback_candles=12,
+        maximum_breakout_range_atr=2.10,
+        maximum_breakout_body_atr=1.50,
+        maximum_ema_distance_atr=2.20,
+        buy_rsi_veto_below=48.0,
+        sell_rsi_veto_above=52.0,
+        stop_buffer_atr=0.15,
+        minimum_stop_distance_atr=0.50,
+        maximum_stop_distance_atr=2.50,
+        target_buffer_atr=0.15,
+        minimum_target_room_atr=1.00,
+        entry_zone_atr=0.20,
+    ),
+}
 
 
 # ─── Mode definitions ─────────────────────────────────────────────────────────
@@ -123,6 +262,7 @@ MODES: Dict[str, ModeConfig] = {
             "monitor the trade closely and be ready to exit quickly."
         ),
         risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
+        momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
     ),
 
     "intraday": ModeConfig(
@@ -163,6 +303,7 @@ MODES: Dict[str, ModeConfig] = {
             "Targets are realistic for same-session trades."
         ),
         risk_note = "Balanced intraday stop; TP1 targets 2R and TP2 extends the day move.",
+        momentum_pullback = MOMENTUM_PULLBACK_PROFILES["intraday"],
     ),
 
     "swing": ModeConfig(
@@ -207,6 +348,7 @@ MODES: Dict[str, ModeConfig] = {
             "Expect fewer signals — only high-quality setups fire."
         ),
         risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",
+        momentum_pullback = MOMENTUM_PULLBACK_PROFILES["swing"],
     ),
 
     "position": ModeConfig(
@@ -251,6 +393,7 @@ MODES: Dict[str, ModeConfig] = {
             "Stops are wide; targets are large. This is a long-term strategy."
         ),
         risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
+        momentum_pullback = MOMENTUM_PULLBACK_PROFILES["position"],
     ),
 
     # This is a coordinator profile for the UI and persistence layer.  The

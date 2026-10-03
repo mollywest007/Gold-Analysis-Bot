@@ -22,6 +22,8 @@ from typing import Optional
 
 import aiohttp
 
+from src.analysis.modes import MODES
+
 logger = logging.getLogger(__name__)
 
 # Keep the vision model configurable because Google retires model aliases.
@@ -115,6 +117,7 @@ class ChartAnalysisResult:
     open_trade_notes: str               # detailed trade-validity narrative
 
     raw: dict = field(default_factory=dict, repr=False)
+    analysis_mode: str = "intraday"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,18 +129,19 @@ You are an expert institutional market analyst specializing in XAU/USD (Gold).
 Your job is to analyze this chart objectively using price action and market structure.
 Never guess or claim certainty. Every conclusion must be supported by evidence from the chart.
 
+ACTIVE MODE RULES — OVERRIDE ANY GENERIC EXAMPLES BELOW
+{mode_instructions}
+
 Work through the following analysis steps IN ORDER:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 1 — TREND IDENTIFICATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Identify the overall trend on the higher timeframe (H4, D1):
-• Is the dominant structure BULLISH, BEARISH, or NEUTRAL?
-• Evidence: macro swing highs, swing lows, and overall direction from the leftmost portion of the chart.
-
-Identify the current trend on the lower timeframe (H1, M30, M15):
-• Recent swing structure from the last 20–30 candles.
-Set htf_trend and ltf_trend accordingly.
+Read the chart's displayed timeframe and analyze only that chart's local swing
+structure. Do not infer or use another timeframe as confirmation. Identify recent
+HH/HL, LH/LL, or unclear structure; do not wait for a complete long-term trend.
+The legacy htf_trend and ltf_trend fields must not imply that other timeframe
+data was analyzed.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2 — MARKET STRUCTURE
@@ -202,31 +206,22 @@ STEP 6 — CONFLUENCE SCORING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 List every factor supporting the trade direction. Record confluence clearly,
 but do not turn a fixed confluence count into a mechanical entry gate:
-- HTF and LTF trend alignment
-- Price at a key S/R level (not in the middle of nowhere)
-- Confirmed BOS or CHoCH
-- Candlestick confirmation at the level
-- Order Block / FVG alignment
-- Fibonacci retracement level (38.2%, 50%, 61.8% OTE zone)
-- EMA confluence (price above/below key EMAs if visible)
-- Liquidity sweep before the move (stop hunt complete = real move begins)
-- Session timing (London / NY overlap = highest probability, institutions active)
-- Volume spike or momentum divergence (if visible)
+- Selected-timeframe swing structure
+- Pullback to a nearby swing, EMA20 context, or prior local level
+- Rejection and minor-swing close that complete the entry sequence
+- Visible volume or momentum behavior as supporting context
 
-For the entry decision, do NOT require every listed factor. Use the balanced
-moderate-entry rule: one strong confirmation OR two reasonable confirmations.
-A strong confirmation can be a clear rejection at a key level, a liquidity
-sweep followed by a reaction, a short-term break/change of structure, or a
-breakout with a reasonable retest and candle close. Reasonable confirmations
-can be a confirming candle close, aligned momentum/volume, a clean EMA/trend
-relationship, or a reaction from a meaningful support/demand or
-resistance/supply zone. Choose only evidence visible on this chart.
+Do not wait for multiple confirmations or higher-timeframe alignment. Use only
+the selected mode's fast momentum-pullback sequence and ONE strong price-action
+confirmation: a controlled pullback, rejection at a nearby level, and a close
+beyond the latest minor swing. Indicator alignment and other timeframes are
+context only; they are not additional entry gates.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 7 — TRADE LEVELS & DIRECT ENTRY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Do not enter only because price touched a level. Do not wait for every
-possible confirmation either. Set setup_status to one of:
+Do not enter only because price touched a level. Do not wait for a complete
+trend or multiple confirmations. Set setup_status to one of:
 WAIT — unclear or insufficient confirmation;
 DEVELOPING — directional idea is forming but needs a little more evidence;
 MODERATE ENTRY — enough evidence supports a timely entry and price remains
@@ -235,46 +230,30 @@ MISSED — confirmation happened but price has moved too far, so wait for a
 pullback/retest and do not chase;
 INVALID — the setup thesis has failed.
 
-Before using MODERATE ENTRY, answer: "Is there enough evidence that this move
-is beginning, while price is still close enough to the setup area for a
-reasonable entry?" If not, use WAIT or DEVELOPING. If yes, give the entry
-zone now rather than waiting for perfect confirmation.
+Before using MODERATE ENTRY, verify the selected mode's local swing, controlled
+pullback, nearby-level rejection, and minor-swing close are visible. One strong
+price-action sequence is enough; do not wait for extra indicators or timeframes.
+If the pullback or rejection is still forming, use DEVELOPING. If the sequence
+is complete but price is extended, use MISSED and do not chase. If screenshot
+quality prevents reliable price or structure reading, use WAIT.
 
-MODERATE ENTRY — use the strongest visible structural zone that is still
-reasonably close to current price. Do not chase an extended move. If the
-move is extended, set MISSED and identify the pullback/retest area instead.
-Use this waterfall in order (pick the FIRST one that applies):
-
-  1. Order Block (OB): enter at the OB zone LOW (buy) or HIGH (sell)
-     — tightest SL (just beyond the OB), best R:R, institutional demand/supply zone
-  2. Fair Value Gap (FVG): enter at the FVG base (buy) or FVG top (sell)
-     — institutions actively fill imbalances; price is drawn to these zones
-  3. OTE zone (Fib 61.8%): Optimal Trade Entry — deepest structured pullback before move resumes
-     — highest R:R of the Fibonacci entries
-  4. Fib 50%: equilibrium entry — balanced mid-range pullback
-  5. Fib 38.2%: shallow pullback — safer entry, lower R:R, use only with strong candle confirmation
-
-The entry price must be INSIDE the identified zone. Set entry_type to the
-most appropriate setup type and explain the evidence in entry_reason.
-
-• Entry: precise price inside the best available confluence zone (OB / FVG / OTE / Fib)
-• Stop Loss: BELOW the structural low of the entry zone (BUY) or ABOVE the structural high (SELL)
-  — OB entries: SL beyond the full OB candle low/high with a small buffer
-  — FVG entries: SL just beyond the nearest confirmed swing low/high
-  — SL must be at a STRUCTURAL level — not an arbitrary ATR distance, not a round number guess
-• TP1: first liquidity pocket / minor S/R (minimum 1:1.5 R:R)
-• TP2: next major S/R level (minimum 1:2.5 R:R)
-• TP3: measured move / key HTF level / Previous Day High or Low (minimum 1:3.5 R:R)
+• Entry: current price after the selected timeframe's pullback rejection and minor swing break
+• Stop Loss: beyond the pullback swing with the active mode's buffer; never widen a
+  stop to force a trade. Reject the setup if structural risk exceeds 2.5 ATR.
+• TP1: the nearest real opposing swing/liquidity level, with the active mode's
+  minimum R:R and clearance. If it fails either test, use WAIT.
+• TP2 / TP3: only farther, distinct opposing structural levels visible on this chart.
+  Never invent measured-move, higher-timeframe, or fixed-R targets.
 • Invalidation: the specific candle CLOSE that definitively cancels the setup thesis
 • Trade Quality:
-     Excellent — 4+ confluences, A+ structure, entry at OB/FVG/OTE
-    Good      — 3 confluences, clean S/R, structural entry
-    Average   — 2 confluences, some ambiguity
-    Poor      — fewer than 2 confluences, or choppy/ranging structure
+     Excellent — clear selected-timeframe structure and complete entry sequence
+    Good      — valid sequence with ordinary uncertainty
+    Average   — setup is developing or evidence is incomplete
+    Poor      — choppy/ranging structure or ambiguous levels
 • Risk Level:
-     Low    — OB/FVG direct entry + HTF aligned + SL at confirmed structural level
-    Medium — 2 of 3 above conditions met
-    High   — choppy structure, counter-trend trade, or SL placement is ambiguous
+     Low    — clear pullback swing and structural stop within the mode's risk limit
+    Medium — structural plan is valid with moderate volatility
+    High   — choppy structure, excessive risk, or ambiguous stop placement
 
 {open_trade_section}
 
@@ -283,7 +262,7 @@ STEP 8 — RISK ASSESSMENT & FINAL SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Always include:
   Current Bias: Bullish / Bearish / Neutral
-  Probability: Bullish XX% / Bearish XX%
+  Directional estimate (not a backtest): Bullish XX% / Bearish XX%
   Key Resistance: [level]
   Key Support: [level]
   Trade Quality: Excellent / Good / Average / Poor
@@ -299,8 +278,8 @@ End with: "This analysis is based solely on current price action and cannot guar
 movement. Always use proper risk management and stop losses."
 
 Assign confidence (0–100): how clean, clear, and well-supported is the entire analysis?
-  90–100: textbook setup, multiple confirming timeframes, crystal-clear structure
-  70–89:  solid setup with most confluence factors present
+  90–100: unusually clear selected-timeframe structure and entry evidence
+  70–89:  clear local setup with the active mode's entry sequence
   50–69:  workable setup but with notable ambiguities
   Below 50: do not suggest a trade
 
@@ -360,9 +339,13 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
 
 Critical rules:
 - Gold (XAU/USD) currently trades around 3200–3500. Read EXACT prices from the Y-axis.
-- Never force a trade. Use the balanced status rule above: one strong
-  confirmation or two reasonable confirmations, with no chasing.
-- Stop loss must be placed at a STRUCTURAL level — never an arbitrary ATR distance.
+- Never force a trade. Require the selected mode's pullback-rejection-minor-break
+  sequence and one strong price-action confirmation; do not substitute a stack
+  of weaker confirmations.
+- Keep the stop beyond the structural pullback swing. Never widen it to force a
+  trade, and reject plans above the 2.5 ATR structural-risk ceiling.
+- Targets must be real opposing levels from this chart. Never claim profitability
+  or present an untested win probability as a historical statistic.
 - bullish_probability + bearish_probability should sum to approximately 100.
 - ALWAYS use probabilistic language: never "price will go up/down", always "probability favors X because…"
 - Never tell the user to close an open trade simply because it is in drawdown — assess the STRUCTURE.
@@ -393,17 +376,142 @@ Set open_trade_valid = true if the original thesis is still intact, false if str
 # Main function
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _profile_instructions(mode_name: str, timeframe: str) -> str:
+    config = MODES.get(mode_name)
+    profile = getattr(config, "momentum_pullback", None) if config else None
+    if profile is None:
+        raise ValueError(
+            f"Mode '{mode_name}' does not have a standalone analysis profile."
+        )
+    return (
+        f"Selected mode: {config.label}; selected timeframe: "
+        f"{timeframe or 'read the chart label'}. Local swing change must be at "
+        f"least {profile.swing_change_atr:g} ATR. Use {profile.pullback_candles} "
+        f"completed pullback candle(s), depth {profile.minimum_pullback_depth_atr:g}–"
+        f"{profile.maximum_pullback_depth_atr:g} ATR, and a rejection wick of at "
+        f"least {profile.rejection_wick_min_atr:g} ATR or "
+        f"{profile.rejection_wick_body_ratio:g} of candle body. Do not chase a "
+        f"breakout range over {profile.maximum_breakout_range_atr:g} ATR or price "
+        f"more than {profile.maximum_ema_distance_atr:g} ATR from EMA20. RSI is a "
+        f"veto only below {profile.buy_rsi_veto_below:g} for BUY or above "
+        f"{profile.sell_rsi_veto_above:g} for SELL. Place the structural stop "
+        f"beyond the pullback swing with a {profile.stop_buffer_atr:g} ATR buffer "
+        f"and at least {profile.minimum_stop_distance_atr:g} ATR noise distance; "
+        f"reject risk above {profile.maximum_stop_distance_atr:g} ATR. TP1 must "
+        f"be a real opposing level with at least 1:{config.min_rr_ratio:g} R:R and "
+        f"{profile.minimum_target_room_atr:g} ATR of room. Do not wait for a "
+        "complete trend or higher-timeframe confirmation."
+    )
+
+
+def _mode_prompt_instructions(
+    analysis_mode: str,
+    selected_timeframe: str | None,
+    allowed_streams: list[tuple[str, str]] | None,
+) -> str:
+    if analysis_mode != "scalp_interval":
+        return _profile_instructions(analysis_mode, selected_timeframe or "")
+    if not allowed_streams:
+        raise ValueError(
+            "Combined chart analysis requires the selected Scalp and Intra-hour streams."
+        )
+    stream_rules = [
+        _profile_instructions(mode, timeframe)
+        for mode, timeframe in allowed_streams
+    ]
+    return (
+        "Combined mode is a coordinator, not a third strategy. Read the chart's "
+        "displayed timeframe and use only its matching stream. Never mix "
+        "thresholds. If the timeframe is unreadable or matches neither stream, "
+        "return WAIT and provide no entry, stop, or targets.\n"
+        + "\n".join(f"- {rule}" for rule in stream_rules)
+    )
+
+
+def _canonical_timeframe(value: str) -> str:
+    normalized = str(value or "").upper().replace(" ", "")
+    aliases = {
+        "1H": "H1",
+        "60M": "H1",
+        "4H": "H4",
+        "240M": "H4",
+        "1D": "D1",
+        "1W": "W1",
+        "1MO": "MN1",
+        "15M": "M15",
+        "30M": "M30",
+        "5M": "M5",
+        "3M": "M3",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _resolve_chart_scope(
+    analysis_mode: str,
+    reported_timeframe: str,
+    selected_timeframe: str | None,
+    allowed_streams: list[tuple[str, str]] | None,
+) -> tuple[str, str | None]:
+    reported = _canonical_timeframe(reported_timeframe)
+    unknown = reported in ("", "UNKNOWN", "N/A", "NOT VISIBLE")
+    if analysis_mode == "scalp_interval":
+        matches = [
+            mode
+            for mode, timeframe in (allowed_streams or [])
+            if not unknown and _canonical_timeframe(timeframe) == reported
+        ]
+        if matches:
+            return ("scalp" if "scalp" in matches else matches[0]), None
+        return analysis_mode, (
+            "The chart timeframe could not be matched to a selected combined-mode "
+            "stream. No trade setup is issued."
+        )
+    if analysis_mode not in MODES or MODES[analysis_mode].momentum_pullback is None:
+        raise ValueError(f"Invalid standalone analysis mode '{analysis_mode}'.")
+    expected = _canonical_timeframe(selected_timeframe or "")
+    if expected and not unknown and reported != expected:
+        return analysis_mode, (
+            f"The chart shows {reported}, but the selected timeframe is {expected}. "
+            "No trade setup is issued."
+        )
+    return analysis_mode, None
+
+
+def _suppress_unscoped_setup(parsed: dict, reason: str) -> None:
+    parsed.update(
+        {
+            "setup_status": "WAIT",
+            "entry_type": "WAIT",
+            "current_confirmation": reason,
+            "entry_reason": reason,
+            "entry": None,
+            "stop_loss": None,
+            "take_profit_1": None,
+            "take_profit_2": None,
+            "take_profit_3": None,
+            "invalidation": None,
+            "rr_ratio": None,
+            "moderate_entry_low": None,
+            "moderate_entry_high": None,
+        }
+    )
+
+
 async def analyse_chart_bytes(
     img_bytes: bytes,
     *,
     open_trade: Optional[dict] = None,
     timeout: int = 90,
+    analysis_mode: str = "intraday",
+    selected_timeframe: str | None = None,
+    allowed_streams: list[tuple[str, str]] | None = None,
 ) -> ChartAnalysisResult:
     """
     Send img_bytes to Gemini Vision and return a ChartAnalysisResult.
 
     open_trade: optional dict with keys direction, entry, sl, tp1, tp2, tp3,
                 timeframe, confidence — passed to the prompt for trade-validity analysis.
+    Combined mode requires allowed_streams as (analysis mode, timeframe) pairs.
     """
     mime = "image/jpeg"
     if img_bytes[:4] == b"\x89PNG":
@@ -436,7 +544,13 @@ async def analyse_chart_bytes(
     else:
         open_section = ""
 
-    prompt = _PROMPT.format(open_trade_section=open_section)
+    mode_instructions = _mode_prompt_instructions(
+        analysis_mode, selected_timeframe, allowed_streams
+    )
+    prompt = _PROMPT.format(
+        mode_instructions=mode_instructions,
+        open_trade_section=open_section,
+    )
 
     payload = {
         "contents": [
@@ -522,6 +636,16 @@ async def analyse_chart_bytes(
             return v
         return str(v).lower() in ("true", "1", "yes")
 
+    resolved_mode, scope_issue = _resolve_chart_scope(
+        analysis_mode,
+        str(parsed.get("timeframe", "Unknown")),
+        selected_timeframe,
+        allowed_streams,
+    )
+    if scope_issue:
+        _suppress_unscoped_setup(parsed, scope_issue)
+    parsed["analysis_mode"] = resolved_mode
+
     raw_status = str(parsed.get("setup_status", "WAIT")).upper().strip()
     status_aliases = {
         "MODERATE": "MODERATE ENTRY",
@@ -588,4 +712,5 @@ async def analyse_chart_bytes(
         open_trade_valid=ot_valid,
         open_trade_notes=str(parsed.get("open_trade_notes", "")),
         raw=parsed,
+        analysis_mode=resolved_mode,
     )

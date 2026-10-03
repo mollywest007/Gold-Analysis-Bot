@@ -46,9 +46,14 @@ def _result_card(r: ChartAnalysisResult) -> str:
         "TRANSITION": "Structure break in progress",
     }.get(r.market_structure, r.market_structure)
 
-    htf_label = {"BULLISH": "Bullish ↑", "BEARISH": "Bearish ↓", "NEUTRAL": "Neutral —"}.get(r.htf_trend, r.htf_trend)
-    ltf_label = {"BULLISH": "Bullish ↑", "BEARISH": "Bearish ↓", "NEUTRAL": "Neutral —"}.get(r.ltf_trend, r.ltf_trend)
     adv_label = {"BUYERS": "Buyers ↑", "SELLERS": "Sellers ↓", "NEUTRAL": "Neutral"}.get(r.pressure_advantage, r.pressure_advantage)
+    mode_label = {
+        "scalp": "SCALP",
+        "intraday": "INTRADAY",
+        "swing": "SWING",
+        "position": "POSITION",
+        "scalp_interval": "SCALP / INTRA-HOUR — UNRESOLVED",
+    }.get(r.analysis_mode, str(r.analysis_mode).upper())
 
     # Probability bars
     bp = r.bullish_probability
@@ -63,14 +68,14 @@ def _result_card(r: ChartAnalysisResult) -> str:
         "║  XAU/USD  INSTITUTIONAL ANALYSIS ║",
         "╚══════════════════════════════════╝",
         "",
+        f"  Mode       : {_esc(mode_label)}",
         f"  Timeframe  : {_esc(r.timeframe)}",
         f"  Setup      : {_esc(r.setup_status)}",
         "",
         SEP,
         "  TREND",
         SEP,
-        f"  HTF (H4/D1): {htf_label}",
-        f"  LTF (H1-M15): {ltf_label}",
+        f"  Selected TF: {_esc(r.trend)}",
         "",
         SEP,
         "  MARKET STRUCTURE",
@@ -131,7 +136,7 @@ def _result_card(r: ChartAnalysisResult) -> str:
     lines += [
         "",
         SEP,
-        "  PROBABILITY",
+        "  DIRECTIONAL ESTIMATES — NOT BACKTESTED",
         SEP,
         f"  Bullish [{bull_bar}] {bp}%",
         f"  Bearish [{bear_bar}] {br}%",
@@ -278,7 +283,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception:
             pass
 
-        result = await analyse_chart_bytes(img_bytes, open_trade=open_trade_ctx)
+        from src.user_preferences import get_mode as get_user_mode, get_monitoring_streams
+
+        chat_id = update.effective_chat.id
+        selected_mode = get_user_mode(chat_id)
+        streams = get_monitoring_streams(chat_id)
+        if selected_mode == "scalp_interval":
+            allowed_streams = [
+                (analysis_mode, timeframe)
+                for _, timeframe, analysis_mode in streams
+            ]
+            selected_timeframe = None
+        else:
+            allowed_streams = None
+            selected_timeframe = streams[0][1]
+
+        result = await analyse_chart_bytes(
+            img_bytes,
+            open_trade=open_trade_ctx,
+            analysis_mode=selected_mode,
+            selected_timeframe=selected_timeframe,
+            allowed_streams=allowed_streams,
+        )
 
         await message.reply_text(_result_card(result), parse_mode="HTML")
 

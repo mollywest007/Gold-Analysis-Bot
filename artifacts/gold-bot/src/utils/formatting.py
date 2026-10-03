@@ -1433,7 +1433,17 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
     atr = float(getattr(a, "atr", 0.0) or 0.0)
     report = getattr(a, "institutional_report", {}) or {}
+    mode_rules = report.get("mode_rules", {}) or {}
     quality_checks = report.get("quality_checks", []) or []
+    mode_rules_line = (
+        f"{int(mode_rules['pullback_candles'])} pullback bars · "
+        f"depth ≤{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
+        f"SL cap {float(mode_rules['maximum_stop_atr']):g} ATR · "
+        f"structural target ≥1:{float(mode_rules['minimum_target_rr']):g}"
+        if mode_rules.get("pullback_candles") is not None
+        else "Mode-specific pullback and structural-target rules"
+    )
+    maximum_stop_atr = float(mode_rules.get("maximum_stop_atr", 2.5))
     entry = float(getattr(a, "entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     target = float(getattr(a, "tp1", 0.0) or 0.0)
@@ -1496,6 +1506,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "║       XAU/USD ANALYSIS CARD      ║",
         "╚══════════════════════════════════╝",
         f"Mode      : {mode_display}",
+        f"Mode rules: {mode_rules_line}",
         f"TF        : {timeframe} only",
         f"Price     : {fmt_price(price)}  |  {data_quality}",
         f"Candle    : latest OHLCV {candle_as_of}",
@@ -1515,7 +1526,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Structure : {structure} | EMA20 {fmt_price(ema20)} is pullback context",
         f"Price act.: {setup}",
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
-        f"Risk      : ATR14 {fmt_price(atr)} | pullback-swing stop, 2.5 ATR max",
+        f"Risk      : ATR14 {fmt_price(atr)} | pullback-swing stop, {maximum_stop_atr:g} ATR max",
         f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
         f"Setup checks: {len(quality_checks)} confirmed",
         "──────────────────────────────────",
@@ -3577,6 +3588,7 @@ def market_open_card(a: MarketAnalysis) -> str:
     lines = ["<pre>",
         "MARKET NOW OPEN  |  XAU/USD",
         "=" * 32,
+        f"Mode      : {str(getattr(a, 'analysis_mode', '') or a.trade_type).upper()} | TF {a.timeframe}",
         f"Price     : {fmt_price(a.price)}",
         f"Structure : {_struct_label(a.market_structure)}",
         f"CHoCH     : {_choch_label(a.choch)}",
@@ -3876,6 +3888,7 @@ def market_conditions_card(a: MarketAnalysis) -> str:
         "╚══════════════════════════════════╝",
         "",
         f"  {now}",
+        f"  Mode      : {str(getattr(a, 'analysis_mode', '') or a.trade_type).upper()} | TF {a.timeframe}",
         f"  Price     : {fmt_price(a.price)}",
         f"  Session   : {a.session or 'N/A'}",
         "",

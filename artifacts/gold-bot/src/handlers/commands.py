@@ -65,13 +65,12 @@ def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:
     if mode != COMBINED_MODE:
         return mode
     combined = get_combined_timeframes(chat_id)
-    # If both streams intentionally use the same timeframe, prefer Scalp for
-    # the single-timeframe command; /analyze and /recommend still run both.
-    return (
-        "intraday"
-        if timeframe == combined["interval"]
-        and timeframe != combined["scalp"]
-        else "scalp"
+    if timeframe == combined["scalp"]:
+        return "scalp"
+    if timeframe == combined["interval"]:
+        return "intraday"
+    raise ValueError(
+        f"{timeframe} is not selected in either stream of combined mode."
     )
 
 
@@ -580,8 +579,8 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     chat_id = update.effective_chat.id
     await _begin_panel(context, chat_id, "chart")
-    mode_name = get_user_mode(chat_id)
     tf  = _get_tf(context, chat_id)
+    analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
     ms  = market_status()
     msg = await update.message.reply_text(
         f"Generating XAU/USD {tf} chart...",
@@ -633,7 +632,11 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.edit_text("Analysing chart with AI... this takes 15-30 seconds.")
     gemini_ok = False
     try:
-        result = await analyse_chart_bytes(img_bytes)
+        result = await analyse_chart_bytes(
+            img_bytes,
+            analysis_mode=analysis_mode,
+            selected_timeframe=tf,
+        )
         gemini_ok = True
     except Exception as e:
         err_str = str(e)
@@ -667,7 +670,6 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             from src.analysis import analyze
             from src.utils.formatting import pro_analysis_card, entry_card
-            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             analysis_message = await update.message.reply_text(
                 pro_analysis_card(a),

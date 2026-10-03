@@ -83,11 +83,12 @@ def _analysis_mode_for_timeframe(chat_id: int, timeframe: str) -> str:
     if mode != COMBINED_MODE:
         return mode
     combined = get_combined_timeframes(chat_id)
-    return (
-        "intraday"
-        if timeframe == combined["interval"]
-        and timeframe != combined["scalp"]
-        else "scalp"
+    if timeframe == combined["scalp"]:
+        return "scalp"
+    if timeframe == combined["interval"]:
+        return "intraday"
+    raise ValueError(
+        f"{timeframe} is not selected in either stream of combined mode."
     )
 
 
@@ -312,8 +313,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         tf_arg  = parts[2] if len(parts) > 2 else _get_tf(context, chat_id)
         tf      = tf_arg if tf_arg != "all" else _get_tf(context, chat_id)
         kb = refresh_keyboard(command, tf_arg)
-        mode_name = get_user_mode(chat_id)
-
         # Always answer the query first so Telegram never shows a frozen button
         await query.answer()
         _invalidate_refresh_market_data(command, tf)
@@ -362,7 +361,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Re-run engine analysis for the chart TF
                 from src.utils.formatting import pro_analysis_card
                 await query.edit_message_text(f"Re-analysing {tf}…", reply_markup=kb)
-                analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
                 a = await analyze(tf, mode=analysis_mode)
                 if getattr(a, "is_simulated", False):
                     await query.edit_message_text(
@@ -414,7 +413,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "signal":
                     await query.edit_message_text("Scanning for a trade setup...", reply_markup=kb)
-                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
                     a = await analyze(tf, mode=analysis_mode)
                     if getattr(a, "is_simulated", False):
                         await query.edit_message_text(
@@ -431,7 +430,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "trend":
                     await query.edit_message_text("Assessing the trend...", reply_markup=kb)
-                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
                     a = await analyze(tf, mode=analysis_mode)
                     if getattr(a, "is_simulated", False):
                         await query.edit_message_text(
@@ -448,7 +447,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "levels":
                     await query.edit_message_text("Calculating key levels...", reply_markup=kb)
-                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
                     a = await analyze(tf, mode=analysis_mode)
                     if getattr(a, "is_simulated", False):
                         await query.edit_message_text(
@@ -465,7 +464,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 elif command == "outlook":
                     await query.edit_message_text("Generating the market outlook...", reply_markup=kb)
-                    analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+                    analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
                     a = await analyze(tf, mode=analysis_mode)
                     if getattr(a, "is_simulated", False):
                         await query.edit_message_text(
@@ -510,7 +509,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── All analysis callbacks — blocked when market is closed ─────────────────
     await query.answer()
 
-    mode_name = get_user_mode(chat_id)
     tf      = data.split(":")[1] if ":" in data else _get_tf(context, chat_id)
     command = data.split(":")[0]          # e.g. "signal", "trend", "analyze" …
     kb      = refresh_keyboard(command, tf)
@@ -570,11 +568,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("signal:"):
         await query.edit_message_text("Scanning for a trade setup…", reply_markup=kb)
         try:
-            analysis_mode = (
-                "scalp"
-                if mode_name == COMBINED_MODE
-                else mode_name
-            )
+            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(signal_card(a), parse_mode="HTML",
                                           reply_markup=kb)
@@ -586,7 +580,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("trend:"):
         await query.edit_message_text("Assessing the trend…", reply_markup=kb)
         try:
-            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(trend_card(a), parse_mode="HTML",
                                           reply_markup=kb)
@@ -598,7 +592,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("levels:"):
         await query.edit_message_text("Calculating key levels…", reply_markup=kb)
         try:
-            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(levels_card(a), parse_mode="HTML",
                                           reply_markup=kb)
@@ -610,7 +604,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("outlook:"):
         await query.edit_message_text("Generating the market outlook…", reply_markup=kb)
         try:
-            analysis_mode = "scalp" if mode_name == COMBINED_MODE else mode_name
+            analysis_mode = _analysis_mode_for_timeframe(chat_id, tf)
             a = await analyze(tf, mode=analysis_mode)
             await query.edit_message_text(outlook_card(a), parse_mode="HTML",
                                           reply_markup=kb)

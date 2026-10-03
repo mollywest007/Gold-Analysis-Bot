@@ -1564,10 +1564,14 @@ def _structure_targets(
     atr: float,
     swing_highs: List[Tuple[int, float]],
     swing_lows: List[Tuple[int, float]],
+    *,
+    target_buffer_atr: float = 0.10,
+    minimum_rr: float = 1.0,
+    minimum_room_atr: float = 0.75,
 ) -> Tuple[float, float, float, str]:
     """Place profit targets just before real opposing pivots; never invent them."""
     risk = abs(entry - stop)
-    buffer = max(atr * 0.10, entry * 0.00002, 0.02)
+    buffer = max(atr * target_buffer_atr, entry * 0.00002, 0.02)
     if direction == "BUY":
         levels = sorted(
             {level for _, level in swing_highs if level > entry + buffer}
@@ -1589,7 +1593,7 @@ def _structure_targets(
 
     first = targets[0]
     reward = abs(first - entry)
-    if reward < max(risk, atr * 0.75):
+    if reward < max(risk * minimum_rr, atr * minimum_room_atr):
         return (
             0.0,
             0.0,
@@ -1622,8 +1626,19 @@ def _momentum_pullback_decision(
     atr: float,
     rsi: float,
     previous_rsi: float,
+    mode_cfg=None,
 ) -> dict:
     """Fast selected-timeframe trend → pullback → rejection → minor-break gate."""
+    if mode_cfg is None:
+        from src.mode_manager import get_mode_config
+        mode_cfg = get_mode_config()
+    profile = getattr(mode_cfg, "momentum_pullback", None)
+    if profile is None:
+        raise ValueError(
+            f"Mode '{getattr(mode_cfg, 'name', 'unknown')}' has no standalone "
+            "momentum-pullback profile; resolve a combined mode to its stream first."
+        )
+
     empty = {
         "status": "WAIT",
         "direction": "NEUTRAL",
@@ -1643,19 +1658,21 @@ def _momentum_pullback_decision(
         return {**empty, "confirmation": "Not enough valid candles to confirm local swings."}
 
     volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
-    swing_highs, swing_lows = _local_swings(highs, lows)
+    swing_highs, swing_lows = _local_swings(
+        highs, lows, lookback=max(48, int(mode_cfg.breakout_lookback))
+    )
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return {**empty, "confirmation": "Waiting for two confirmed swing highs and lows."}
 
     prior_high, last_high = swing_highs[-2][1], swing_highs[-1][1]
     prior_low, last_low = swing_lows[-2][1], swing_lows[-1][1]
     bullish = (
-        last_high > prior_high + volatility * 0.03
-        and last_low > prior_low + volatility * 0.03
+        last_high > prior_high + volatility * profile.swing_change_atr
+        and last_low > prior_low + volatility * profile.swing_change_atr
     )
     bearish = (
-        last_high < prior_high - volatility * 0.03
-        and last_low < prior_low - volatility * 0.03
+        last_high < prior_high - volatility * profile.swing_change_atr
+        and last_low < prior_low - volatility * profile.swing_change_atr
     )
     if not bullish and not bearish:
         return {
@@ -1666,7 +1683,10 @@ def _momentum_pullback_decision(
 
     direction = "BUY" if bullish else "SELL"
     checks = ["Selected-timeframe swing structure is directional"]
-    strong_rsi_conflict = (bullish and rsi < 44.0) or (bearish and rsi > 56.0)
+    strong_rsi_conflict = (
+        (bullish and rsi < profile.buy_rsi_veto_below)
+        or (bearish and rsi > profile.sell_rsi_veto_above)
+    )
     if strong_rsi_conflict:
         return {
             **empty,
@@ -1686,33 +1706,38 @@ def _momentum_pullback_decision(
 
     # Reject quiet rotations and repeated EMA crossings; EMA alignment itself
     # never establishes a trade direction.
+    chop_window = min(profile.chop_lookback_candles, len(closes))
     signs = [
         1 if closes[index] > opens[index]
         else -1 if closes[index] < opens[index]
         else 0
-        for index in range(max(0, len(closes) - 8), len(closes))
+        for index in range(len(closes) - chop_window, len(closes))
     ]
     nonzero_signs = [sign for sign in signs if sign]
     alternations = sum(
         left != right for left, right in zip(nonzero_signs, nonzero_signs[1:])
     )
-    recent_range = max(highs[-10:]) - min(lows[-10:])
-    recent_drift = abs(closes[-1] - closes[-10])
+    recent_range = max(highs[-chop_window:]) - min(lows[-chop_window:])
+    recent_drift = abs(closes[-1] - closes[-chop_window])
     ema20_series = _ema_series(closes, 20)
     ema50_series = _ema_series(closes, 50)
     recent_crosses = 0
-    for index in range(max(1, len(closes) - 20), len(closes)):
+    cross_window = min(len(closes) - 1, max(8, profile.chop_lookback_candles * 2))
+    for index in range(len(closes) - cross_window, len(closes)):
         before = ema20_series[index - 1] - ema50_series[index - 1]
         after = ema20_series[index] - ema50_series[index]
         if before * after <= 0 and abs(before) + abs(after) > 0:
             recent_crosses += 1
     choppy = (
-        (alternations >= 5 and recent_drift < volatility * 0.65)
-        or (recent_range < volatility * 1.15)
+        (
+            alternations >= profile.chop_max_alternations
+            and recent_drift < volatility * profile.chop_max_drift_atr
+        )
+        or (recent_range < volatility * profile.chop_minimum_range_atr)
         or (
             recent_crosses >= 3
             and abs(ema20 - ema50) < volatility * 0.30
-            and recent_drift < volatility
+            and recent_drift < volatility * profile.chop_max_drift_atr
         )
     )
     if choppy:
@@ -1724,22 +1749,28 @@ def _momentum_pullback_decision(
             "quality_checks": checks,
         }
 
-    # The last 3 completed pre-break candles are the pullback window; the
+    # The selected mode controls the completed pre-break pullback window; the
     # newest candle must close beyond their minor swing in the trend direction.
-    pullback_start = max(2, len(closes) - 4)
+    pullback_start = max(2, len(closes) - profile.pullback_candles - 1)
     pullback_end = len(closes) - 1
     pullback_indices = list(range(pullback_start, pullback_end))
     pullback_low = min(lows[index] for index in pullback_indices)
     pullback_high = max(highs[index] for index in pullback_indices)
-    impulse_start = max(0, pullback_start - 7)
+    impulse_start = max(
+        0, pullback_start - profile.impulse_lookback_candles
+    )
     impulse_high = max(highs[impulse_start:pullback_start])
     impulse_low = min(lows[impulse_start:pullback_start])
     pullback_depth = impulse_high - pullback_low if bullish else pullback_high - impulse_low
-    controlled = volatility * 0.08 <= pullback_depth <= volatility * 1.15
+    controlled = (
+        volatility * profile.minimum_pullback_depth_atr
+        <= pullback_depth
+        <= volatility * profile.maximum_pullback_depth_atr
+    )
     structure_holds = (
-        pullback_low >= last_low - volatility * 0.10
+        pullback_low >= last_low - volatility * profile.structure_hold_tolerance_atr
         if bullish
-        else pullback_high <= last_high + volatility * 0.10
+        else pullback_high <= last_high + volatility * profile.structure_hold_tolerance_atr
     )
     had_counter_move = any(
         closes[index] < closes[index - 1] if bullish
@@ -1749,20 +1780,27 @@ def _momentum_pullback_decision(
 
     # A pullback may test EMA20, the latest protected swing, or a former
     # breakout/breakdown level. EMA50 is not used as a directional gate.
-    old_range = range(max(1, pullback_start - 20), max(1, pullback_start - 3))
+    old_range = range(
+        max(1, pullback_start - int(mode_cfg.breakout_lookback)),
+        max(1, pullback_start - profile.pullback_candles),
+    )
     if bullish:
         prior_breakout = max((highs[index] for index in old_range), default=ema20)
         support_levels = [ema20, last_low, prior_breakout]
         nearest_support = min(support_levels, key=lambda level: abs(pullback_low - level))
         support_held = (
-            abs(pullback_low - nearest_support) <= volatility * 0.55
-            and nearest_support <= pullback_low + volatility * 0.15
+            abs(pullback_low - nearest_support) <= volatility * profile.level_tolerance_atr
+            and nearest_support <= pullback_low + volatility * profile.structure_hold_tolerance_atr
         )
         rejection = any(
             closes[index] > opens[index]
             and min(opens[index], closes[index]) - lows[index]
-            >= max(volatility * 0.08, abs(closes[index] - opens[index]) * 0.25)
-            and abs(lows[index] - nearest_support) <= volatility * 0.65
+            >= max(
+                volatility * profile.rejection_wick_min_atr,
+                abs(closes[index] - opens[index]) * profile.rejection_wick_body_ratio,
+            )
+            and abs(lows[index] - nearest_support)
+            <= volatility * profile.level_tolerance_atr
             for index in pullback_indices
         )
         minor_level = max(highs[pullback_start:pullback_end])
@@ -1772,14 +1810,18 @@ def _momentum_pullback_decision(
         resistance_levels = [ema20, last_high, prior_breakdown]
         nearest_support = min(resistance_levels, key=lambda level: abs(pullback_high - level))
         support_held = (
-            abs(pullback_high - nearest_support) <= volatility * 0.55
-            and nearest_support >= pullback_high - volatility * 0.15
+            abs(pullback_high - nearest_support) <= volatility * profile.level_tolerance_atr
+            and nearest_support >= pullback_high - volatility * profile.structure_hold_tolerance_atr
         )
         rejection = any(
             closes[index] < opens[index]
             and highs[index] - max(opens[index], closes[index])
-            >= max(volatility * 0.08, abs(closes[index] - opens[index]) * 0.25)
-            and abs(highs[index] - nearest_support) <= volatility * 0.65
+            >= max(
+                volatility * profile.rejection_wick_min_atr,
+                abs(closes[index] - opens[index]) * profile.rejection_wick_body_ratio,
+            )
+            and abs(highs[index] - nearest_support)
+            <= volatility * profile.level_tolerance_atr
             for index in pullback_indices
         )
         minor_level = min(lows[pullback_start:pullback_end])
@@ -1788,9 +1830,9 @@ def _momentum_pullback_decision(
     breakout_range = highs[-1] - lows[-1]
     breakout_body = abs(closes[-1] - opens[-1])
     extended = (
-        breakout_range > volatility * 1.65
-        or breakout_body > volatility * 1.15
-        or abs(price - ema20) > volatility * 1.60
+        breakout_range > volatility * profile.maximum_breakout_range_atr
+        or breakout_body > volatility * profile.maximum_breakout_body_atr
+        or abs(price - ema20) > volatility * profile.maximum_ema_distance_atr
     )
     if not (controlled and structure_holds and had_counter_move and support_held):
         return {
@@ -1827,24 +1869,38 @@ def _momentum_pullback_decision(
 
     entry = float(price)
     swing_extreme = pullback_low if bullish else pullback_high
-    stop_buffer = max(volatility * 0.10, entry * 0.00002, 0.02)
-    minimum_noise_distance = volatility * 0.35
+    stop_buffer = max(
+        volatility * profile.stop_buffer_atr, entry * 0.00002, 0.02
+    )
+    minimum_noise_distance = volatility * profile.minimum_stop_distance_atr
     if bullish:
         stop = min(swing_extreme - stop_buffer, entry - minimum_noise_distance)
     else:
         stop = max(swing_extreme + stop_buffer, entry + minimum_noise_distance)
     risk = abs(entry - stop)
-    if risk > volatility * 2.5:
+    if risk > volatility * profile.maximum_stop_distance_atr:
         return {
             **empty,
             "direction": direction,
             "setup": "Structural stop is too wide for the expected move",
-            "confirmation": "The pullback swing requires excessive risk; skipping instead of widening or compressing the stop.",
+            "confirmation": (
+                "The pullback swing exceeds this mode's maximum structural risk "
+                f"of {profile.maximum_stop_distance_atr:g} ATR; skipping instead "
+                "of widening or compressing the stop."
+            ),
             "quality_checks": checks,
         }
 
     tp1, tp2, tp3, target_issue = _structure_targets(
-        direction, entry, stop, volatility, swing_highs, swing_lows
+        direction,
+        entry,
+        stop,
+        volatility,
+        swing_highs,
+        swing_lows,
+        target_buffer_atr=profile.target_buffer_atr,
+        minimum_rr=mode_cfg.min_rr_ratio,
+        minimum_room_atr=profile.minimum_target_room_atr,
     )
     if target_issue:
         return {
@@ -1857,10 +1913,13 @@ def _momentum_pullback_decision(
 
     checks.extend([
         "Stop is beyond the pullback swing with an ATR noise buffer",
-        "Nearest structural target offers at least 1R of clear room",
+        (
+            "Nearest structural target offers at least "
+            f"{mode_cfg.min_rr_ratio:g}R of clear room"
+        ),
     ])
     rr = round(abs(tp1 - entry) / risk, 2)
-    half_zone = volatility * 0.12
+    half_zone = volatility * profile.entry_zone_atr
     return {
         "status": "MODERATE ENTRY",
         "direction": direction,
@@ -1894,7 +1953,17 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     previous_rsi = compute_rsi(closes[:-1], 14) if len(closes) > 15 else rsi
     atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
     decision = _momentum_pullback_decision(
-        opens, highs, lows, closes, price, ema20, ema50, atr, rsi, previous_rsi
+        opens,
+        highs,
+        lows,
+        closes,
+        price,
+        ema20,
+        ema50,
+        atr,
+        rsi,
+        previous_rsi,
+        mode_cfg=mode_cfg,
     )
     direction = decision["direction"]
     setup = decision["setup"]
@@ -1967,6 +2036,16 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "setup_status": setup_status,
         "current_confirmation": wait_reason,
         "quality_checks": decision["quality_checks"],
+        "mode_rules": {
+            "pullback_candles": mode_cfg.momentum_pullback.pullback_candles,
+            "maximum_pullback_depth_atr": (
+                mode_cfg.momentum_pullback.maximum_pullback_depth_atr
+            ),
+            "minimum_target_rr": mode_cfg.min_rr_ratio,
+            "maximum_stop_atr": (
+                mode_cfg.momentum_pullback.maximum_stop_distance_atr
+            ),
+        },
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,

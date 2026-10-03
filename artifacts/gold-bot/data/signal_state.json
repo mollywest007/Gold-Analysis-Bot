@@ -3,16 +3,16 @@
     "8039158711": {
       "mode": "scalp",
       "timeframe": "M15",
-      "active_signal": {
+      "active_signal": {},
+      "closed_signal": {
         "M15": "BUY"
       },
-      "closed_signal": {},
       "last_fired": {
-        "M15": 1790938329.7999804
+        "M15": 1790947027.733317
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1790938288.5166078
+        "M15": 1790948827.7333212
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
@@ -20,11 +20,11 @@
       "momentum_shift_warned": {},
       "forming_alert_sent": {},
       "forming_alert_last_sent": {
-        "M15": 1790938448.3261979
+        "M15": 1790958442.8993492
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 7015
+          "8039158711": 7041
         }
       },
       "reminded_trade_ids": {

@@ -1619,10 +1619,30 @@
       "confidence": 55,
       "rr_ratio": 1.5,
       "opened_at": 1790938327.5988615,
-      "status": "open",
+      "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "closed_at": 1790947026.893202,
+      "close_reason": "stop_loss",
+      "exit_evidence": {
+        "source": "verified_candle",
+        "symbol": "XAU/USD",
+        "timeframe": "M15",
+        "high": 4212.0,
+        "low": 4157.4,
+        "spot": 4194.100098,
+        "bid": 4194.579,
+        "ask": 4195.241,
+        "spread": 0.662,
+        "captured_at": 1790947026.8931975
+      },
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1790947027.7304547,
+      "cooldown_notification_pending": false,
+      "cooldown_until": 1790948827.7333212,
+      "cooldown_duration_seconds": 1800.0,
+      "cooldown_notification_sent_at": 1790947027.9721448
     }
   ]
 }

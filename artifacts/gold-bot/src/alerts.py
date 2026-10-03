@@ -1852,6 +1852,51 @@ def _pending_result_event(trade: dict) -> Optional[str]:
     )
 
 
+async def _broadcast_mode_scoped_market_cards(
+    bot,
+    subscribers: Set[int],
+    card_builder,
+    label: str,
+) -> tuple[Set[int], int]:
+    """Analyze and broadcast cards only with each account's selected stream(s)."""
+    grouped_recipients: dict[tuple[tuple[str, str], ...], Set[int]] = {}
+    for account_id in sorted(subscribers):
+        try:
+            streams = get_monitoring_streams(account_id)
+            specs = tuple(
+                (analysis_mode, timeframe)
+                for _, timeframe, analysis_mode in streams
+            )
+            if not specs:
+                logger.warning("%s skipped account %s: no selected analysis stream.", label, account_id)
+                continue
+            grouped_recipients.setdefault(specs, set()).add(account_id)
+        except Exception as e:
+            logger.error("%s could not resolve mode for account %s: %s", label, account_id, e)
+
+    dead: Set[int] = set()
+    delivered = 0
+    for specs, recipients in grouped_recipients.items():
+        analyses = await asyncio.gather(
+            *(_safe_analyze(timeframe, mode=mode) for mode, timeframe in specs)
+        )
+        if any(analysis is None for analysis in analyses):
+            logger.warning(
+                "%s skipped %s account(s): selected-mode analysis failed for %s.",
+                label,
+                len(recipients),
+                specs,
+            )
+            continue
+        text = "\n\n".join(card_builder(analysis) for analysis in analyses)
+        account_dead, account_delivered = await _broadcast_text(
+            bot, recipients, text, return_result=True
+        )
+        dead.update(account_dead)
+        delivered += int(account_delivered)
+    return dead, delivered
+
+
 async def send_market_conditions_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Broadcast a market conditions update every 4 hours to all subscribers."""
     from src.market_hours import market_status
@@ -1875,13 +1920,15 @@ async def send_market_conditions_summary(context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     try:
-        a    = await analyze("H1")
-        text = market_conditions_card(a)
-        dead = await _broadcast_text(bot, subs, text)
+        dead, delivered = await _broadcast_mode_scoped_market_cards(
+            bot, subs, market_conditions_card, "Market conditions summary"
+        )
         if dead:
             subs -= dead
             _save(subs)
-        logger.info(f"Market conditions summary sent to {len(subs)} subscriber(s).")
+        logger.info(
+            "Market conditions summary sent to %s subscriber(s).", delivered
+        )
     except Exception as e:
         logger.error(f"Market conditions summary failed: {e}")
 
@@ -1890,13 +1937,13 @@ async def _send_market_open_notification(bot, subs: Set[int]) -> None:
     from src.utils.formatting import market_open_card
     logger.info("Sending market-open notification...")
     try:
-        a    = await analyze("H1")
-        text = market_open_card(a)
-        dead = await _broadcast_text(bot, subs, text)
+        dead, delivered = await _broadcast_mode_scoped_market_cards(
+            bot, subs, market_open_card, "Market-open notification"
+        )
         if dead:
             subs -= dead
             _save(subs)
-        logger.info(f"Market-open sent to {len(subs)} subscriber(s).")
+        logger.info("Market-open sent to %s subscriber(s).", delivered)
     except Exception as e:
         logger.error(f"Market-open notification failed: {e}")
 
