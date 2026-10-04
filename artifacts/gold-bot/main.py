@@ -43,7 +43,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-ALERT_INTERVAL_SECONDS  = 15    # 15 seconds — catch entries before the move extends
+ALERT_INTERVAL_SECONDS  = 5     # Fast base tick; each stream applies its mode cadence.
 FAST_EXIT_INTERVAL_SECONDS = 5   # quote-only SL/TP monitor, independent of analysis
 CACHE_REFRESH_SECONDS   = 60    # 1 minute — keeps analysis fresh
 

@@ -51,6 +51,9 @@ _tf_last_fired: Dict[str, float] = {}
 # scan cannot send the same entry before the persistent lock is written.
 _pending_signal: Dict[str, str] = {}
 _scan_lock = asyncio.Lock()
+# Last completed-start timestamp per account, selected mode, and stream key.
+# Monotonic time avoids clock adjustments changing the per-mode scan schedule.
+_last_analysis_scan_at: Dict[tuple[int | None, str, str], float] = {}
 # Trade exits have their own short critical section so a fast quote monitor
 # cannot race the full alert scan while both update the JSON trade store.
 _trade_exit_lock = asyncio.Lock()
@@ -2183,6 +2186,7 @@ async def _check_and_alert_once(
     context: ContextTypes.DEFAULT_TYPE,
     account_id: int | None = None,
     state: AccountAlertState | None = None,
+    respect_scan_cadence: bool = False,
 ) -> None:
     """Run one isolated scan for one Telegram account.
 
@@ -2568,17 +2572,24 @@ async def _check_and_alert_once(
     # ── Scan timeframes for entry signals ─────────────────────────────────────
     # Each timeframe alerts independently. One card per timeframe per direction
     # change — lock releases only when the signal flips or the trade closes.
+    analysis_scan_specs = (
+        _due_analysis_streams(scan_specs, account_id)
+        if respect_scan_cadence
+        else scan_specs
+    )
     analyses = await asyncio.gather(
         *[
             _safe_analyze(tf, engine_mode)
-            for _, tf, engine_mode, _ in scan_specs
+            for _, tf, engine_mode, _ in analysis_scan_specs
         ],
         return_exceptions=True,
     )
 
     # Pass 1 — log all results, collect newly-triggered signals
     new_signals: list = []   # (stream, key, tf, engine mode, analysis) entries
-    for (stream_label, tf, analysis_mode, state_key), a in zip(scan_specs, analyses):
+    for (stream_label, tf, analysis_mode, state_key), a in zip(
+        analysis_scan_specs, analyses
+    ):
         scan_cfg = (
             mode_cfg
             if not (account_scan and mode_name == COMBINED_MODE)
@@ -3185,6 +3196,7 @@ async def check_and_alert(context: ContextTypes.DEFAULT_TYPE) -> None:
                     context,
                     account_id=account_id,
                     state=_load_account_state(account_id),
+                    respect_scan_cadence=True,
                 )
             except Exception:
                 logger.error(

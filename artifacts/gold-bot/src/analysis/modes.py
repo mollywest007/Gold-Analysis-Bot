@@ -87,6 +87,9 @@ class ModeConfig:
     # new mode can tune the strategy without adding branches to the engine.
     risk_note: str = ""
     momentum_pullback: Optional[MomentumPullbackProfile] = None
+    # Background entry-analysis cadence. Combined mode uses the interval
+    # belonging to each independently resolved stream, not this coordinator.
+    analysis_scan_interval_seconds: int = 15
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
     # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default
@@ -273,6 +276,7 @@ MODES: Dict[str, ModeConfig] = {
         ),
         risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
+        analysis_scan_interval_seconds = 5,
     ),
 
     "intraday": ModeConfig(
@@ -314,6 +318,7 @@ MODES: Dict[str, ModeConfig] = {
         ),
         risk_note = "Balanced intraday stop; TP1 targets 2R and TP2 extends the day move.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["intraday"],
+        analysis_scan_interval_seconds = 15,
     ),
 
     "swing": ModeConfig(
@@ -359,6 +364,7 @@ MODES: Dict[str, ModeConfig] = {
         ),
         risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["swing"],
+        analysis_scan_interval_seconds = 60,
     ),
 
     "position": ModeConfig(
@@ -404,6 +410,7 @@ MODES: Dict[str, ModeConfig] = {
         ),
         risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["position"],
+        analysis_scan_interval_seconds = 300,
     ),
 
     # This is a coordinator profile for the UI and persistence layer.  The
@@ -440,6 +447,7 @@ MODES: Dict[str, ModeConfig] = {
             "at the same time."
         ),
         risk_note = "Each alert uses the risk plan of its own Scalp or Intra-hour stream.",
+        analysis_scan_interval_seconds = 5,
     ),
 }
 
