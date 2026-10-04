@@ -74,13 +74,15 @@ MAX_FUTURES_SPOT_DEVIATION = 100.0
 _ohlcv_cache: Dict[str, Tuple["OHLCVData", float]] = {}
 _price_cache: Tuple[float, float] = (0.0, 0.0)   # (price, timestamp)
 _price_bbo_cache: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # bid, ask, timestamp
+_price_source_cache = "unavailable"
 _cache_lock = asyncio.Lock()
 
 
 class OHLCVData:
     def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0,
                  is_simulated: bool = False, timestamps: list = None,
-                 fetched_at: float = 0.0):
+                 fetched_at: float = 0.0, price_source: str = "unknown",
+                 candle_source: str = "unknown"):
         self.opens        = opens
         self.highs        = highs
         self.lows         = lows
@@ -89,6 +91,8 @@ class OHLCVData:
         self.price        = spot_price if spot_price > 0 else (closes[-1] if closes else 0.0)
         self.is_simulated = is_simulated  # True when real data fetch failed — signals unreliable
         self.timestamps   = timestamps or []  # Unix timestamps per candle (open time)
+        self.price_source = price_source
+        self.candle_source = candle_source
         # Exit detection uses this to reject an old cached object after a
         # market-data outage instead of treating its last wick as live evidence.
         self.fetched_at   = float(fetched_at or time.time())
@@ -187,7 +191,9 @@ def _aggregate_bars(data: "OHLCVData", step: int) -> "OHLCVData":
     result              = OHLCVData(opens, highs, lows, closes, volumes,
                                     is_simulated=data.is_simulated,
                                     timestamps=timestamps,
-                                    fetched_at=data.fetched_at)
+                                    fetched_at=data.fetched_at,
+                                    price_source=data.price_source,
+                                    candle_source=data.candle_source)
     result.price        = data.price
     return result
 
@@ -281,7 +287,7 @@ async def _fetch_yf_last_close(session: aiohttp.ClientSession) -> Optional[float
 
 async def get_gold_price(force_refresh: bool = False) -> float:
     """Return XAU/USD spot, optionally bypassing the short-lived quote cache."""
-    global _price_cache, _price_bbo_cache
+    global _price_cache, _price_bbo_cache, _price_source_cache
     async with _cache_lock:
         cached_price, cached_ts = _price_cache
         if (
@@ -306,6 +312,7 @@ async def get_gold_price(force_refresh: bool = False) -> float:
         if selected is not None:
             async with _cache_lock:
                 _price_cache = (selected, time.time())
+                _price_source_cache = "spot"
             logger.info(f"Spot price (validated): {selected:.2f}")
             return selected
 
@@ -315,24 +322,31 @@ async def get_gold_price(force_refresh: bool = False) -> float:
         if price:
             async with _cache_lock:
                 _price_cache = (price, time.time())
+                _price_source_cache = "yf_futures"
             return price
 
+    _price_source_cache = "unavailable"
     logger.error("All price sources failed")
     return 0.0
 
 
 def get_cached_gold_quote(mid_price: float) -> dict:
-    """Pair a validated spot snapshot with a fresh bid/ask when available.
+    """Pair a validated price snapshot with source identity and fresh bid/ask.
 
-    If Swissquote's executable quote is missing or inconsistent, callers use
-    the validated spot as a conservative fallback rather than stale sides.
+    Yahoo GC=F is a futures proxy, not an executable XAU/USD quote. Its value
+    remains available for chart context but must not be used to open or close
+    an XAU/USD position.
     """
     try:
         mid_price = float(mid_price)
     except (TypeError, ValueError):
         mid_price = 0.0
     bid, ask, captured_at = _price_bbo_cache
+    source = _price_source_cache
+    symbol = "XAU/USD" if source == "spot" else "GC=F" if source == "yf_futures" else "UNKNOWN"
     quote_is_fresh = (
+        source == "spot"
+        and
         mid_price > 0
         and captured_at > 0
         and time.time() - captured_at <= PRICE_TTL + 2
@@ -341,7 +355,8 @@ def get_cached_gold_quote(mid_price: float) -> dict:
         and abs((bid + ask) / 2 - mid_price) <= MAX_SOURCE_SPREAD
     )
     return {
-        "symbol": "XAU/USD",
+        "symbol": symbol,
+        "source": source,
         "mid": mid_price,
         "bid": bid if quote_is_fresh else None,
         "ask": ask if quote_is_fresh else None,
@@ -440,16 +455,22 @@ async def _fetch_ohlcv_raw(
             )
             spot_price = None
 
-        # Normalize futures OHLCV to spot prices by subtracting the basis.
-        # Futures trade at a premium (cost of carry). Without this, all
-        # calculated levels (SL, TP, S/R) come out ~$10-15 too high vs spot.
-        if spot_price and spot_price > 0 and 0 < (futures_last - spot_price) < 60:
+        # Normalize futures OHLCV to spot prices by subtracting the signed
+        # basis. If the basis is unusually large, retain its futures identity
+        # and prevent it from producing an actionable XAU/USD trade plan.
+        basis = futures_last - spot_price if spot_price and spot_price > 0 else None
+        candle_source = "yf_futures"
+        if basis is not None and abs(basis) < 60:
             basis = futures_last - spot_price
             opens   = [round(o - basis, 2) for o in opens]
             highs   = [round(h - basis, 2) for h in highs]
             lows    = [round(l - basis, 2) for l in lows]
             closes  = [round(c - basis, 2) for c in closes]
-            logger.info(f"[{timeframe}] Basis-adjusted {basis:+.2f} (futures {futures_last:.2f} → spot {spot_price:.2f})")
+            candle_source = "spot_normalized_futures"
+            logger.info(
+                f"[{timeframe}] Basis-adjusted {basis:+.2f} "
+                f"(futures {futures_last:.2f} → spot {spot_price:.2f})"
+            )
             effective_spot = spot_price
         else:
             effective_spot = spot_price if (spot_price and spot_price > 0) else futures_last
@@ -463,6 +484,8 @@ async def _fetch_ohlcv_raw(
             effective_spot,
             timestamps=timestamps,
             fetched_at=time.time(),
+            price_source="spot" if spot_price and spot_price > 0 else "yf_futures",
+            candle_source=candle_source,
         )
 
         if aggregate_h4:
@@ -503,6 +526,7 @@ async def fetch_ohlcv(timeframe: str) -> Optional["OHLCVData"]:
         spot = await get_gold_price()
         if spot > 0:
             cached_data.price = spot
+            cached_data.price_source = _price_source_cache
         return cached_data
 
     data = await _fetch_ohlcv_raw(timeframe)
@@ -594,6 +618,8 @@ async def fetch_historical_ohlcv(
         is_simulated=False,
         timestamps=[data.timestamps[i] for i in completed_indices],
         fetched_at=data.fetched_at,
+        price_source="yf_futures",
+        candle_source="yf_futures",
     )
 
 
@@ -642,22 +668,25 @@ def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":
         price = close_p
 
     return OHLCVData(opens, highs, lows, closes, volumes, spot_price=closes[-1],
-                     is_simulated=True)
+                     is_simulated=True, price_source="simulated",
+                     candle_source="simulated")
 
 
 def invalidate_cache(timeframe: str = None) -> None:
     """Force-expire OHLCV cache — call after a trade alert or hard refresh."""
-    global _price_cache, _price_bbo_cache
+    global _price_cache, _price_bbo_cache, _price_source_cache
     if timeframe:
         _ohlcv_cache.pop(timeframe, None)
     else:
         _ohlcv_cache.clear()
     _price_cache = (0.0, 0.0)
     _price_bbo_cache = (0.0, 0.0, 0.0)
+    _price_source_cache = "unavailable"
 
 
 def invalidate_price_cache() -> None:
     """Force the next request to read a fresh live spot quote."""
-    global _price_cache, _price_bbo_cache
+    global _price_cache, _price_bbo_cache, _price_source_cache
     _price_cache = (0.0, 0.0)
     _price_bbo_cache = (0.0, 0.0, 0.0)
+    _price_source_cache = "unavailable"

@@ -1004,6 +1004,13 @@ def _post_entry_tf_extremes(
         return None
     if getattr(data, "is_simulated", False):
         return None
+    if getattr(data, "candle_source", "unknown") != "spot_normalized_futures":
+        logger.warning(
+            "[%s] Ignoring candle extremes without a verified spot-normalized "
+            "XAU/USD candle source.",
+            timeframe,
+        )
+        return (current_price, current_price)
 
     now = time.time() if now is None else now
     period = _TF_PERIOD_SECONDS.get(timeframe)
@@ -1070,6 +1077,9 @@ def _post_entry_tf_extremes(
 def _entry_price_is_currently_valid(
     analysis,
     current_price: float,
+    *,
+    price_source: str = "spot",
+    symbol: str = "XAU/USD",
 ) -> bool:
     """Reject stale entry plans that are already beyond their trade levels.
 
@@ -1089,7 +1099,17 @@ def _entry_price_is_currently_valid(
     except (AttributeError, TypeError, ValueError):
         return False
 
-    if price <= 0 or entry <= 0 or stop <= 0 or tp1 <= 0:
+    if (
+        price_source != "spot"
+        or symbol != "XAU/USD"
+        or getattr(analysis, "price_source", "spot") != "spot"
+        or getattr(analysis, "candle_source", "spot_normalized_futures")
+        != "spot_normalized_futures"
+        or price <= 0
+        or entry <= 0
+        or stop <= 0
+        or tp1 <= 0
+    ):
         return False
     near_entry_distance = max(abs(entry) * 0.00015, atr * 0.35, 0.05)
     if abs(price - entry) > near_entry_distance:
@@ -2331,6 +2351,7 @@ async def _check_and_alert_once(
     # the terminal-exit cooldown has been saved and the analysis re-fetched.
     tfs_closed_this_cycle: set = set()
     current_price = 0.0
+    exit_quote = {"symbol": "UNKNOWN", "source": "unavailable"}
     try:
         current_price = await get_gold_price()
         if current_price > 0:
@@ -2420,6 +2441,7 @@ async def _check_and_alert_once(
                     bid=exit_quote.get("bid"),
                     ask=exit_quote.get("ask"),
                     symbol=exit_quote.get("symbol", "XAU/USD"),
+                    price_source=exit_quote.get("source", "unavailable"),
                 )
             event_trade_ids: set[str] = set()
             cooldown_event_trade_ids: set[str] = set()
@@ -2583,6 +2605,21 @@ async def _check_and_alert_once(
             f"atr14={getattr(a, 'atr', 0.0):.2f} "
             f"setup={getattr(a, 'price_action_setup', '') or 'none'}"
         )
+
+        price_source = getattr(a, "price_source", "unknown")
+        candle_source = getattr(a, "candle_source", "unknown")
+        if (
+            price_source != "spot"
+            or candle_source != "spot_normalized_futures"
+        ):
+            logger.warning(
+                "[%s] Signal suppressed — XAU/USD spot quote and normalized "
+                "gold candles are required (price=%s candles=%s).",
+                tf,
+                price_source,
+                candle_source,
+            )
+            continue
 
         if state_key in reanalysis_blocked:
             logger.info(
@@ -2791,7 +2828,12 @@ async def _check_and_alert_once(
             # Momentum-shift warnings above are informational and must still
             # work with lightweight analysis objects that do not carry entry
             # levels.
-            if not _entry_price_is_currently_valid(a, current_price):
+            if not _entry_price_is_currently_valid(
+                a,
+                current_price,
+                price_source=exit_quote.get("source", "unavailable"),
+                symbol=exit_quote.get("symbol", "UNKNOWN"),
+            ):
                 pending_signal.pop(state_key, None)
                 logger.warning(
                     "[%s] Entry withheld — live price %.2f is no longer "
@@ -2986,7 +3028,6 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.warning("Fast exit scan skipped — live spot unavailable.")
             return
         exit_quote = get_cached_gold_quote(current_price)
-        exit_quote = get_cached_gold_quote(current_price)
 
         bot = context.application.bot
         for account_id in sorted(subscribers):
@@ -3002,6 +3043,7 @@ async def check_open_trades_fast(context: ContextTypes.DEFAULT_TYPE) -> None:
                     bid=exit_quote.get("bid"),
                     ask=exit_quote.get("ask"),
                     symbol=exit_quote.get("symbol", "XAU/USD"),
+                    price_source=exit_quote.get("source", "unavailable"),
                 )
 
             subs = {account_id}

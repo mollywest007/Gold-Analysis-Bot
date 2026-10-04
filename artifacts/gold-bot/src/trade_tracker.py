@@ -287,7 +287,8 @@ def check_trades(current_price: float, recent_high: float = None,
                   account_id: int | str | None = None,
                   bid: float = None,
                   ask: float = None,
-                  symbol: str = "XAU/USD") -> List[Dict[str, Any]]:
+                  symbol: str = "XAU/USD",
+                  price_source: str = "spot") -> List[Dict[str, Any]]:
     """
     Evaluate all open trades against current_price.
 
@@ -313,9 +314,12 @@ def check_trades(current_price: float, recent_high: float = None,
     if current_price <= 0:
         logger.warning("Trade check skipped — current price is unavailable.")
         return []
-    if not _is_gold_symbol(symbol):
-        logger.warning("Trade check skipped — unsupported live symbol %r.", symbol)
-        return []
+    live_symbol_is_gold = _is_gold_symbol(symbol)
+    if not live_symbol_is_gold:
+        logger.warning(
+            "Trade price transitions disabled — unsupported live symbol %r.",
+            symbol,
+        )
     try:
         bid = float(bid) if bid is not None else None
         ask = float(ask) if ask is not None else None
@@ -357,6 +361,19 @@ def check_trades(current_price: float, recent_high: float = None,
             # for this timeframe — without this, the TF stays permanently locked
             # and the next genuine entry signal is silently suppressed forever.
             events.append({"trade": t, "event": "EXPIRED", "exit_price": t.get("entry", 0)})
+            continue
+
+        # GC=F is a futures proxy, not the executable XAU/USD instrument.
+        # Do not use it, an unverified source, or its spread as SL/TP evidence.
+        # Time-based expiry remains independent of quote availability.
+        if price_source != "spot" or not live_symbol_is_gold:
+            logger.warning(
+                "Trade %s exit check skipped — requires validated XAU/USD spot "
+                "(source=%r symbol=%r).",
+                t.get("id"),
+                price_source,
+                symbol,
+            )
             continue
 
         d     = t["direction"]

@@ -186,6 +186,8 @@ class MarketAnalysis:
     moderate_entry_low: float = 0.0
     moderate_entry_high: float = 0.0
     latest_candle_timestamp: float = 0.0
+    price_source: str = "unknown"
+    candle_source: str = "unknown"
 
 
 
@@ -2061,7 +2063,15 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     )
     direction = decision["direction"]
     setup = decision["setup"]
-    setup_status = "WAIT" if data.is_simulated else decision["status"]
+    spot_context_usable = (
+        data.price_source == "spot"
+        and data.candle_source == "spot_normalized_futures"
+    )
+    setup_status = (
+        "WAIT"
+        if data.is_simulated or not spot_context_usable
+        else decision["status"]
+    )
     condition = (
         "BULLISH" if direction == "BUY"
         else "BEARISH" if direction == "SELL"
@@ -2092,6 +2102,12 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     wait_reason = decision["confirmation"]
     if data.is_simulated:
         wait_reason = "Simulated candles are not actionable. " + wait_reason
+    elif not spot_context_usable:
+        wait_reason = (
+            "Verified XAU/USD spot and spot-normalized candles are required for "
+            "an actionable plan; futures-proxy data is context only. "
+            + wait_reason
+        )
     confidence = (
         78 if setup_status == "MODERATE ENTRY"
         else 68 if setup_status == "MISSED"
@@ -2119,6 +2135,8 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     report = {
         "framework": "selected-timeframe swing momentum + pullback rejection + minor structure break",
         "data_quality": data_quality,
+        "price_source": data.price_source,
+        "candle_source": data.candle_source,
         "direction": simple_direction,
         "market_condition": condition,
         "ema20": round(ema20, 2),
@@ -2267,6 +2285,8 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             if getattr(data, "timestamps", None)
             else 0.0
         ),
+        price_source=data.price_source,
+        candle_source=data.candle_source,
     )
 
 async def _analyze_single(
