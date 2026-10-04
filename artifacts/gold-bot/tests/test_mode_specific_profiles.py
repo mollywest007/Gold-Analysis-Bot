@@ -12,6 +12,26 @@ from src.handlers import callbacks, commands
 
 
 class ModeSpecificProfileTests(unittest.TestCase):
+    def test_range_trap_sensitivity_is_mode_specific(self):
+        trap_settings = {
+            mode: (
+                config.momentum_pullback.range_trap_lookback_candles,
+                config.momentum_pullback.range_trap_max_width_atr,
+            )
+            for mode, config in MODES.items()
+            if config.momentum_pullback is not None
+        }
+
+        self.assertEqual(
+            trap_settings,
+            {
+                "scalp": (16, 2.25),
+                "intraday": (20, 2.50),
+                "swing": (24, 2.75),
+                "position": (30, 3.00),
+            },
+        )
+
     def test_structural_target_filter_uses_each_modes_rr_floor(self):
         scalp = MODES["scalp"]
         position = MODES["position"]

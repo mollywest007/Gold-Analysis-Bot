@@ -1615,6 +1615,61 @@ def _structure_targets(
     )
 
 
+def _is_boxed_between_swing_levels(
+    price: float,
+    atr: float,
+    closes: List[float],
+    swing_highs: List[Tuple[int, float]],
+    swing_lows: List[Tuple[int, float]],
+    profile,
+) -> bool:
+    """Reject a close still boxed by repeatedly tested nearby swing levels."""
+    lookback = min(profile.range_trap_lookback_candles, len(closes))
+    if lookback < 3:
+        return False
+
+    start_index = max(0, len(closes) - lookback - 1)
+    end_index = len(closes) - 1  # latest candle is not a confirmed pivot
+    recent_highs = [
+        level for index, level in swing_highs
+        if start_index <= index < end_index and level > price
+    ]
+    recent_lows = [
+        level for index, level in swing_lows
+        if start_index <= index < end_index and level < price
+    ]
+    if len(recent_highs) < 2 or len(recent_lows) < 2:
+        return False
+
+    resistance = min(recent_highs)
+    support = max(recent_lows)
+    if support >= price or resistance <= price:
+        return False
+
+    touch_tolerance = max(float(atr), 0.01) * profile.level_tolerance_atr
+    resistance_touches = sum(
+        abs(level - resistance) <= touch_tolerance for level in recent_highs
+    )
+    support_touches = sum(
+        abs(level - support) <= touch_tolerance for level in recent_lows
+    )
+    box_width = resistance - support
+    if (
+        resistance_touches < 2
+        or support_touches < 2
+        or box_width > max(float(atr), 0.01) * profile.range_trap_max_width_atr
+    ):
+        return False
+
+    # Require recent closes to remain inside the pivot bracket. A confirmed
+    # close outside either boundary means the market has already escaped it.
+    recent_close_count = min(3, lookback)
+    return all(
+        support < close < resistance
+        for close in closes[-recent_close_count:]
+    )
+
+
 def _momentum_pullback_decision(
     opens: List[float],
     highs: List[float],
@@ -1627,6 +1682,8 @@ def _momentum_pullback_decision(
     rsi: float,
     previous_rsi: float,
     mode_cfg=None,
+    ema20_history: List[float] = None,
+    ema50_history: List[float] = None,
 ) -> dict:
     """Fast selected-timeframe trend → pullback → rejection → minor-break gate."""
     if mode_cfg is None:
@@ -1719,8 +1776,16 @@ def _momentum_pullback_decision(
     )
     recent_range = max(highs[-chop_window:]) - min(lows[-chop_window:])
     recent_drift = abs(closes[-1] - closes[-chop_window])
-    ema20_series = _ema_series(closes, 20)
-    ema50_series = _ema_series(closes, 50)
+    ema20_series = (
+        ema20_history
+        if ema20_history is not None and len(ema20_history) == len(closes)
+        else _ema_series(closes, 20)
+    )
+    ema50_series = (
+        ema50_history
+        if ema50_history is not None and len(ema50_history) == len(closes)
+        else _ema_series(closes, 50)
+    )
     recent_crosses = 0
     cross_window = min(len(closes) - 1, max(8, profile.chop_lookback_candles * 2))
     for index in range(len(closes) - cross_window, len(closes)):
@@ -1747,6 +1812,27 @@ def _momentum_pullback_decision(
             "setup": "Ranging/choppy conditions",
             "confirmation": "Recent candles alternate or remain compressed; waiting for cleaner movement.",
             "quality_checks": checks,
+        }
+
+    if _is_boxed_between_swing_levels(
+        price,
+        volatility,
+        closes,
+        swing_highs,
+        swing_lows,
+        profile,
+    ):
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Price is boxed between nearby swing support and resistance",
+            "confirmation": (
+                "Repeated confirmed swing highs and lows bracket recent closes "
+                "inside a narrow range; waiting for a close outside the box."
+            ),
+            "quality_checks": checks + [
+                "Nearby swing support and resistance form a bounded range"
+            ],
         }
 
     # The selected mode controls the completed pre-break pullback window; the
@@ -1920,13 +2006,21 @@ def _momentum_pullback_decision(
     ])
     rr = round(abs(tp1 - entry) / risk, 2)
     half_zone = volatility * profile.entry_zone_atr
+    rsi_confirmation = (
+        f"RSI {rsi:.1f} supports momentum."
+        if rsi_supports
+        else (
+            f"RSI {rsi:.1f} does not strongly disagree; "
+            "price structure and the pullback confirmation drive this entry."
+        )
+    )
     return {
         "status": "MODERATE ENTRY",
         "direction": direction,
         "setup": "Fast momentum pullback: rejection + minor structure break",
         "confirmation": (
             f"Short-term {direction.lower()} structure; controlled pullback held; "
-            f"rejection and minor swing break confirmed. RSI {rsi:.1f} supports momentum."
+            f"rejection and minor swing break confirmed. {rsi_confirmation}"
         ),
         "entry_low": round(entry - half_zone, 2),
         "entry_high": round(entry + half_zone, 2),

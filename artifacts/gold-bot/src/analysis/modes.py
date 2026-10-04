@@ -43,6 +43,8 @@ class MomentumPullbackProfile:
     target_buffer_atr: float
     minimum_target_room_atr: float
     entry_zone_atr: float
+    range_trap_lookback_candles: int
+    range_trap_max_width_atr: float
 
 
 @dataclass
@@ -129,6 +131,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         target_buffer_atr=0.08,
         minimum_target_room_atr=0.60,
         entry_zone_atr=0.08,
+        range_trap_lookback_candles=16,
+        range_trap_max_width_atr=2.25,
     ),
     "intraday": MomentumPullbackProfile(
         swing_change_atr=0.03,
@@ -155,6 +159,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         target_buffer_atr=0.10,
         minimum_target_room_atr=0.75,
         entry_zone_atr=0.12,
+        range_trap_lookback_candles=20,
+        range_trap_max_width_atr=2.50,
     ),
     "swing": MomentumPullbackProfile(
         swing_change_atr=0.05,
@@ -181,6 +187,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         target_buffer_atr=0.12,
         minimum_target_room_atr=0.90,
         entry_zone_atr=0.16,
+        range_trap_lookback_candles=24,
+        range_trap_max_width_atr=2.75,
     ),
     "position": MomentumPullbackProfile(
         swing_change_atr=0.07,
@@ -207,6 +215,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         target_buffer_atr=0.15,
         minimum_target_room_atr=1.00,
         entry_zone_atr=0.20,
+        range_trap_lookback_candles=30,
+        range_trap_max_width_atr=3.00,
     ),
 }
 

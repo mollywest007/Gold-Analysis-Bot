@@ -165,6 +165,7 @@ BOT_COMMANDS = [
     BotCommand("outlook",   "Market outlook report"),
     BotCommand("chart",     "Send a chart image for AI analysis"),
     BotCommand("history",   "Recent closed trade results"),
+    BotCommand("backtest",  "Replay your selected mode on real gold candles"),
     BotCommand("news",      "Latest gold market headlines"),
     BotCommand("settings",  "Change mode and analysis timeframe"),
     BotCommand("mode",      "Switch Scalp, Interval, combined, Swing, or Position mode"),

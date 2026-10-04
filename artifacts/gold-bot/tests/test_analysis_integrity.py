@@ -140,6 +140,58 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertTrue(
             any("no strong disagreement" in item for item in result["quality_checks"])
         )
+        self.assertIn("does not strongly disagree", result["confirmation"])
+        self.assertNotIn("RSI 47.0 supports momentum", result["confirmation"])
+
+    def test_bounded_pivot_box_blocks_an_otherwise_valid_entry(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with (
+            patch.object(engine, "_local_swings", return_value=swings),
+            patch.object(
+                engine, "_is_boxed_between_swing_levels", return_value=True
+            ),
+        ):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.35, 110.0, 111.5,
+                2.5, 55.0, 54.0,
+                mode_cfg=MODES["intraday"],
+            )
+
+        self.assertEqual(result["status"], "WAIT")
+        self.assertIn("boxed", result["setup"])
+        self.assertEqual(result["tp1"], 0.0)
+
+    def test_bounded_pivot_box_requires_repeated_bracketing_levels(self):
+        closes = [100.0] * 20
+        closes[-3:] = [100.4, 100.5, 100.6]
+        swing_highs = [(12, 101.0), (16, 101.2)]
+        swing_lows = [(13, 99.8), (17, 99.9)]
+
+        self.assertTrue(
+            engine._is_boxed_between_swing_levels(
+                100.6,
+                1.0,
+                closes,
+                swing_highs,
+                swing_lows,
+                MODES["intraday"].momentum_pullback,
+            )
+        )
+        self.assertFalse(
+            engine._is_boxed_between_swing_levels(
+                101.3,
+                1.0,
+                closes,
+                swing_highs,
+                swing_lows,
+                MODES["intraday"].momentum_pullback,
+            )
+        )
 
     def test_refresh_analysis_commands_refresh_live_quote_without_dropping_candles(self):
         with patch.object(market_data, "invalidate_cache") as invalidate, \

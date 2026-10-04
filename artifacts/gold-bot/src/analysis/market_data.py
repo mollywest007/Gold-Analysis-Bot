@@ -3,6 +3,7 @@ import logging
 import math
 import random
 import time
+from datetime import datetime, timezone
 from typing import Optional, Dict, List, Tuple
 
 import aiohttp
@@ -31,6 +32,21 @@ TF_PARAMS: Dict[str, Dict] = {
     "D1":  {"interval": "1d",  "range": "6mo"},
     "W1":  {"interval": "1wk", "range": "5y"},
     "MN1": {"interval": "1mo", "range": "10y"},
+}
+
+# Longer, real-candle windows for strategy replay. These ranges are deliberately
+# separate from the short windows used for responsive live analysis.
+BACKTEST_HISTORY_RANGES: Dict[str, str] = {
+    "M1": "7d",
+    "M3": "7d",
+    "M5": "60d",
+    "M15": "60d",
+    "M30": "60d",
+    "H1": "2y",
+    "H4": "2y",
+    "D1": "10y",
+    "W1": "10y",
+    "MN1": "10y",
 }
 
 MIN_CANDLES = 30
@@ -335,23 +351,45 @@ def get_cached_gold_quote(mid_price: float) -> dict:
 
 # ─── Historical OHLCV ─────────────────────────────────────────────────────────
 
-async def _fetch_ohlcv_raw(timeframe: str) -> Optional["OHLCVData"]:
+async def _fetch_ohlcv_raw(
+    timeframe: str,
+    *,
+    data_range: str = None,
+    include_live_spot: bool = True,
+) -> Optional["OHLCVData"]:
     params       = TF_PARAMS.get(timeframe, TF_PARAMS["H1"])
     aggregate_h4 = timeframe == "H4"
     aggregate_m3 = timeframe == "M3"
-    url          = f"{YF_CHART}?interval={params['interval']}&range={params['range']}"
+    url          = (
+        f"{YF_CHART}?interval={params['interval']}"
+        f"&range={data_range or params['range']}"
+    )
 
     try:
         async with aiohttp.ClientSession() as session:
-            # Fetch OHLCV and spot price concurrently
-            ohlcv_resp, spot_results = await asyncio.gather(
-                session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=12)),
-                asyncio.gather(
-                    _fetch_goldapi(session),
-                    _fetch_swissquote(session),
-                    return_exceptions=True,
-                ),
-            )
+            if include_live_spot:
+                # Fetch OHLCV and spot price concurrently for live analysis.
+                ohlcv_resp, spot_results = await asyncio.gather(
+                    session.get(
+                        url,
+                        headers=HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=12),
+                    ),
+                    asyncio.gather(
+                        _fetch_goldapi(session),
+                        _fetch_swissquote(session),
+                        return_exceptions=True,
+                    ),
+                )
+            else:
+                # Historical replay uses the provider's internally consistent
+                # futures series and does not need a current spot quote.
+                ohlcv_resp = await session.get(
+                    url,
+                    headers=HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                )
+                spot_results = []
             spot_price = _first_valid_spot(spot_results)
 
             async with ohlcv_resp as resp:
@@ -478,6 +516,85 @@ async def fetch_ohlcv(timeframe: str) -> Optional["OHLCVData"]:
             _ohlcv_cache[timeframe] = (data, time.time())
 
     return data
+
+
+def _candle_end_timestamp(timestamp: float, timeframe: str) -> float:
+    if timeframe == "MN1":
+        opened = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        if opened.month == 12:
+            next_month = datetime(opened.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            next_month = datetime(
+                opened.year, opened.month + 1, 1, tzinfo=timezone.utc
+            )
+        return next_month.timestamp()
+
+    seconds = {
+        "M1": 60,
+        "M3": 3 * 60,
+        "M5": 5 * 60,
+        "M15": 15 * 60,
+        "M30": 30 * 60,
+        "H1": 60 * 60,
+        "H4": 4 * 60 * 60,
+        "D1": 24 * 60 * 60,
+        "W1": 7 * 24 * 60 * 60,
+    }.get(timeframe)
+    if seconds is None:
+        raise ValueError(f"Unsupported historical timeframe: {timeframe}")
+    return timestamp + seconds
+
+
+async def fetch_historical_ohlcv(
+    timeframe: str,
+    *,
+    now: float = None,
+) -> Optional["OHLCVData"]:
+    """Fetch only real, completed historical candles; never use simulation."""
+    if timeframe not in BACKTEST_HISTORY_RANGES:
+        raise ValueError(f"Unsupported historical timeframe: {timeframe}")
+
+    data = await _fetch_ohlcv_raw(
+        timeframe,
+        data_range=BACKTEST_HISTORY_RANGES[timeframe],
+        include_live_spot=False,
+    )
+    if (
+        data is None
+        or data.is_simulated
+        or not data.timestamps
+        or len(data.timestamps) != len(data.closes)
+    ):
+        logger.warning(
+            "Historical replay unavailable for %s — real aligned candle "
+            "timestamps are missing.",
+            timeframe,
+        )
+        return None
+
+    cutoff = float(now if now is not None else time.time())
+    completed_indices = [
+        index
+        for index, opened_at in enumerate(data.timestamps)
+        if _candle_end_timestamp(float(opened_at), timeframe) <= cutoff
+    ]
+    if not completed_indices:
+        logger.warning("No completed historical candles available for %s.", timeframe)
+        return None
+
+    # Keep provider order and all completed rows; market closures naturally
+    # create timestamp gaps and must not be filled with guessed candles.
+    return OHLCVData(
+        [data.opens[i] for i in completed_indices],
+        [data.highs[i] for i in completed_indices],
+        [data.lows[i] for i in completed_indices],
+        [data.closes[i] for i in completed_indices],
+        [data.volumes[i] for i in completed_indices],
+        spot_price=data.closes[completed_indices[-1]],
+        is_simulated=False,
+        timestamps=[data.timestamps[i] for i in completed_indices],
+        fetched_at=data.fetched_at,
+    )
 
 
 def _simulate_ohlcv(timeframe: str, n: int = 80) -> "OHLCVData":

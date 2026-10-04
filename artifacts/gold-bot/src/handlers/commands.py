@@ -565,6 +565,44 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _track_panel(context, chat_id, "history", message)
 
 
+async def cmd_backtest(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    from src.analysis.backtest import (
+        format_backtest_report,
+        run_historical_backtest,
+    )
+
+    chat_id = update.effective_chat.id
+    await _begin_panel(context, chat_id, "backtest")
+    message = await update.message.reply_text(
+        "Fetching completed real gold candles and replaying your selected mode..."
+    )
+    await _track_panel(context, chat_id, "backtest", message)
+    try:
+        reports = []
+        for mode, timeframe in _analysis_specs(chat_id):
+            report = await run_historical_backtest(mode, timeframe)
+            reports.append(format_backtest_report(report))
+        await message.edit_text(
+            "\n\n".join(reports),
+            parse_mode="HTML",
+            reply_markup=refresh_keyboard("backtest", "all"),
+        )
+    except (ValueError, RuntimeError) as exc:
+        await message.edit_text(
+            f"Historical replay unavailable: {exc}",
+            reply_markup=refresh_keyboard("backtest", "all"),
+        )
+    except Exception:
+        logger.exception("Historical backtest failed for account %s.", chat_id)
+        await message.edit_text(
+            "Historical replay failed while fetching or processing real candles. "
+            "No simulated data was used.",
+            reply_markup=refresh_keyboard("backtest", "all"),
+        )
+
+
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch live OHLCV data, render a chart, analyse it with Gemini Vision."""
     import html as _html
@@ -701,3 +739,4 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("news",      cmd_news))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("history",   cmd_history))
+    app.add_handler(CommandHandler("backtest",  cmd_backtest))

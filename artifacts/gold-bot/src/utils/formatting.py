@@ -4180,6 +4180,7 @@ def help_text() -> str:
         ("/outlook",   "Market outlook and potential scenarios"),
         ("/active",    "View open trades and live P&L"),
         ("/history",   "View recent trade results"),
+        ("/backtest",  "Replay the selected mode on real historical candles"),
         ("/news",      "View the latest gold market headlines"),
         ("/alerts",    "Manage automatic alert preferences"),
         ("/mode",      "Select Scalp, Intra-hour, combined, Swing, or Position mode"),

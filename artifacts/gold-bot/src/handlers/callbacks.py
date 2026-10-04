@@ -357,6 +357,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     history_card(trades, stats), parse_mode="HTML", reply_markup=kb
                 )
 
+            elif command == "backtest":
+                from src.analysis.backtest import (
+                    format_backtest_report,
+                    run_historical_backtest,
+                )
+                from src.handlers.commands import _analysis_specs
+
+                await query.edit_message_text(
+                    "Fetching completed real gold candles and replaying your selected mode...",
+                    reply_markup=kb,
+                )
+                try:
+                    reports = []
+                    for selected_mode, selected_tf in _analysis_specs(chat_id):
+                        report = await run_historical_backtest(
+                            selected_mode, selected_tf
+                        )
+                        reports.append(format_backtest_report(report))
+                    await query.edit_message_text(
+                        "\n\n".join(reports),
+                        parse_mode="HTML",
+                        reply_markup=refresh_keyboard("backtest", "all"),
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "Historical backtest refresh failed for account %s.",
+                        chat_id,
+                    )
+                    await query.edit_message_text(
+                        f"Historical replay unavailable: {exc}",
+                        reply_markup=refresh_keyboard("backtest", "all"),
+                    )
+
             elif command == "chart":
                 # Re-run engine analysis for the chart TF
                 from src.utils.formatting import pro_analysis_card
