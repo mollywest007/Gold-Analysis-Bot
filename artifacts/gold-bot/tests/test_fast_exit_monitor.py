@@ -35,6 +35,16 @@ class FastExitMonitorTests(unittest.IsolatedAsyncioTestCase):
                  "get_gold_price",
                  new=AsyncMock(return_value=94.8),
              ) as get_price, \
+             patch.object(
+                 alerts,
+                 "get_cached_gold_quote",
+                 return_value={
+                     "symbol": "XAU/USD",
+                     "source": "spot",
+                     "bid": None,
+                     "ask": None,
+                 },
+             ), \
              patch.object(alerts, "_save_signal_state"), \
              patch.object(
                  __import__("src.market_hours", fromlist=["market_status"]),
@@ -51,6 +61,7 @@ class FastExitMonitorTests(unittest.IsolatedAsyncioTestCase):
             bid=None,
             ask=None,
             symbol="XAU/USD",
+            price_source="spot",
         )
 
 

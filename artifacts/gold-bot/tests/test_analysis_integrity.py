@@ -103,6 +103,43 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(result["direction"], "BUY")
         self.assertEqual(result["tp1"], 0.0)
 
+    def test_futures_proxy_context_cannot_create_an_actionable_entry(self):
+        closes = [100.0 + index * 0.1 for index in range(40)]
+        data = market_data.OHLCVData(
+            [value - 0.02 for value in closes],
+            [value + 0.05 for value in closes],
+            [value - 0.05 for value in closes],
+            closes,
+            [10.0] * len(closes),
+            spot_price=closes[-1],
+            price_source="yf_futures",
+            candle_source="yf_futures",
+        )
+        decision = {
+            "status": "MODERATE ENTRY",
+            "direction": "BUY",
+            "setup": "Fast momentum pullback",
+            "confirmation": "Test plan",
+            "entry_low": 103.0,
+            "entry_high": 104.0,
+            "invalidation": 102.0,
+            "stop_loss": 102.0,
+            "tp1": 106.0,
+            "tp2": 0.0,
+            "tp3": 0.0,
+            "rr": 2.0,
+            "quality_checks": [],
+        }
+        with patch.object(engine, "_momentum_pullback_decision", return_value=decision):
+            analysis = engine._analyze_simple_data(
+                data, "M15", MODES["intraday"]
+            )
+
+        self.assertEqual(analysis.action, "WAIT")
+        self.assertEqual(analysis.stop_loss, 0.0)
+        self.assertEqual(analysis.price_source, "yf_futures")
+        self.assertIn("futures-proxy data is context only", analysis.wait_reason)
+
     def test_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
         swings = (
@@ -281,7 +318,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
     def test_executable_gold_quote_requires_a_fresh_spread_consistent_bbo(self):
         snapshot_time = time.time()
-        with patch.object(
+        with patch.object(market_data, "_price_source_cache", "spot"), patch.object(
             market_data,
             "_price_bbo_cache",
             (4455.0, 4455.2, snapshot_time),
@@ -293,7 +330,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(quote["ask"], 4455.2)
         self.assertTrue(quote["spread_available"])
 
-        with patch.object(
+        with patch.object(market_data, "_price_source_cache", "spot"), patch.object(
             market_data,
             "_price_bbo_cache",
             (4455.0, 4455.2, snapshot_time - market_data.PRICE_TTL - 3),
@@ -502,6 +539,10 @@ class CachedPriceTests(unittest.IsolatedAsyncioTestCase):
             result = await market_data.get_gold_price()
 
         self.assertEqual(result, 4526.4)
+        self.assertEqual(market_data._price_source_cache, "yf_futures")
+        quote = market_data.get_cached_gold_quote(result)
+        self.assertEqual(quote["symbol"], "GC=F")
+        self.assertEqual(quote["source"], "yf_futures")
 
     async def test_cached_candles_receive_a_fresh_spot_snapshot(self):
         data = market_data.OHLCVData(

@@ -118,6 +118,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             lows=[1.0, 99.0, 98.0, 97.0, 96.0],
             timestamps=[100.0, 200.0, 300.0, 400.0, 500.0],
             is_simulated=False,
+            candle_source="spot_normalized_futures",
         )
 
         self.assertEqual(
@@ -135,6 +136,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             lows=[80.0, 99.0],
             timestamps=[200.0, 300.0],
             is_simulated=False,
+            candle_source="spot_normalized_futures",
         )
 
         self.assertEqual(
@@ -152,6 +154,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             lows=[80.0, 99.0],
             timestamps=[100.0, 200.0],
             is_simulated=False,
+            candle_source="spot_normalized_futures",
         )
 
         self.assertEqual(
@@ -172,6 +175,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             timestamps=[900.0],
             fetched_at=100.0,
             is_simulated=False,
+            candle_source="spot_normalized_futures",
         )
 
         self.assertEqual(
@@ -654,6 +658,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             limit_entry=0.0,
             ote_high=2352.0,
             ote_low=2344.0,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
         )
 
     async def test_setup_forming_alert_is_deduplicated_after_delivery(self):
@@ -795,6 +801,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             sell_votes=7,
             adx=25.0,
             is_simulated=False,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
             htf_bias="Neutral",
             choch="NONE",
         )
@@ -1041,6 +1049,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                 sell_votes=1,
                 adx=25.0,
                 is_simulated=False,
+                price_source="spot",
+                candle_source="spot_normalized_futures",
                 htf_bias="Bullish",
                 choch="NONE",
                 entry=2350.0,
@@ -1153,6 +1163,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                 "legacy": {"direction": "BUY", "confirmation": "NEUTRAL"},
             },
             is_simulated=False,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
             buy_votes=4,
             sell_votes=1,
             adx=25.0,
@@ -1171,6 +1183,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             confidence=85,
             win_probability=70,
             is_simulated=False,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
             buy_votes=1,
             sell_votes=7,
             adx=25.0,
@@ -1383,6 +1397,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             sell_votes=1,
             adx=25.0,
             is_simulated=False,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
             htf_bias="Bullish",
             choch="NONE",
             entry=2350.0,

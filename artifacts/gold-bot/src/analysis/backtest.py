@@ -329,6 +329,8 @@ def replay_momentum_pullback(
         "mode": mode,
         "mode_label": mode_cfg.label,
         "timeframe": timeframe,
+        "historical_symbol": "GC=F",
+        "historical_candle_source": data.candle_source,
         "candles": len(closes),
         "history_start": float(data.timestamps[0]),
         "history_end": float(data.timestamps[-1]),
@@ -414,6 +416,7 @@ def format_backtest_report(report: Dict) -> str:
         coverage = ""
     return (
         f"<b>Historical replay — {report['mode_label']} / {report['timeframe']}</b>\n"
+        f"Historical source: Yahoo GC=F gold futures proxy, not XAU/USD spot.\n"
         f"Real completed candles: {report['candles']:,} ({start} to {end} UTC)\n"
         f"Generated setups: {report['generated_signals']} "
         f"(stale next-open entries skipped: {report['skipped_stale_entries']})\n"

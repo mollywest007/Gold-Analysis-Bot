@@ -114,6 +114,19 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
 
+    def test_gold_futures_proxy_cannot_trigger_an_xau_usd_exit(self):
+        self.assertTrue(self._open_buy())
+
+        events = trade_tracker.check_trades(
+            89.0,
+            tf_extremes={"H1": (100.0, 80.0)},
+            symbol="GC=F",
+            price_source="yf_futures",
+        )
+
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
     def test_post_entry_wick_triggers_target(self):
         self.assertTrue(self._open_buy())
         events = trade_tracker.check_trades(
