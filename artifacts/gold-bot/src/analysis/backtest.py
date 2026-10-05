@@ -292,7 +292,9 @@ def replay_momentum_pullback(
                 "sl": stop,
                 "tp1": tp1,
                 "planned_rr": float(decision.get("rr") or 0.0),
-                "setup_type": "Fast momentum pullback",
+                "setup_type": (
+                    decision.get("setup_type") or "Other/unspecified pullback"
+                ),
                 "outcome": outcome,
                 "bars_to_event": exit_index - index,
                 "entry_delay_minutes": entry_delay_minutes,
@@ -325,11 +327,34 @@ def replay_momentum_pullback(
         else:
             current_losing_streak = 0
 
+    loss_setup_types = {}
+    setup_type_stats = {}
+    for trade in trades:
+        setup_type = trade["setup_type"]
+        stats = setup_type_stats.setdefault(
+            setup_type, {"closed": 0, "tp1_first": 0, "sl_first": 0}
+        )
+        stats["closed"] += 1
+        if trade["outcome"] == "TP1":
+            stats["tp1_first"] += 1
+        else:
+            stats["sl_first"] += 1
+            loss_setup_types[setup_type] = loss_setup_types.get(setup_type, 0) + 1
+
+    most_loss_setup_type = (
+        min(
+            loss_setup_types,
+            key=lambda label: (-loss_setup_types[label], label),
+        )
+        if loss_setup_types
+        else None
+    )
+
     return {
         "mode": mode,
         "mode_label": mode_cfg.label,
         "timeframe": timeframe,
-        "historical_symbol": "GC=F",
+        "historical_symbol": getattr(data, "symbol", "unknown") or "unknown",
         "historical_candle_source": data.candle_source,
         "candles": len(closes),
         "history_start": float(data.timestamps[0]),
@@ -353,7 +378,9 @@ def replay_momentum_pullback(
             round(sum(entry_delays_minutes) / len(entry_delays_minutes), 1)
             if entry_delays_minutes else None
         ),
-        "loss_setup_types": {"Fast momentum pullback": losses} if losses else {},
+        "loss_setup_types": loss_setup_types,
+        "setup_type_stats": setup_type_stats,
+        "most_loss_setup_type": most_loss_setup_type,
         "longest_losing_streak": longest_losing_streak,
         "sample_sufficient": total_closed >= 50,
     }
@@ -379,8 +406,14 @@ def format_backtest_report(report: Dict) -> str:
     ).strftime("%Y-%m-%d")
     if report["sample_sufficient"]:
         sample_note = (
-            "50+ closed outcomes; still a historical estimate, not a guarantee."
+            "50+ closed outcomes; historical estimates only, not a guarantee."
         )
+    else:
+        sample_note = (
+            f"Only {report['closed_trades']} closed outcomes; 50 are required "
+            "before drawing performance conclusions."
+        )
+    if report["closed_trades"]:
         outcomes = (
             f"Closed first-touch outcomes: {report['closed_trades']} — "
             f"TP1 first: {report['tp1_first']}, SL first: {report['sl_first']}\n"
@@ -396,27 +429,42 @@ def format_backtest_report(report: Dict) -> str:
             f"{report['longest_losing_streak']}\n"
         )
         loss_setup = (
-            "Fast momentum pullback (the only setup type in this engine)"
-            if report["sl_first"]
+            f"{report['most_loss_setup_type']} "
+            f"({report['loss_setup_types'][report['most_loss_setup_type']]} SL-first)"
+            if report.get("most_loss_setup_type")
             else "No SL-first outcomes"
         )
-        loss_setup_line = f"SL loss setup: {loss_setup}\n"
+        all_loss_types = ", ".join(
+            f"{label}: {count}"
+            for label, count in sorted(report["loss_setup_types"].items())
+        ) or "none"
+        loss_setup_line = (
+            f"Most SL-loss setup type: {loss_setup}\n"
+            f"SL-first losses by pullback reference: {all_loss_types}\n"
+        )
         coverage = (
             f"Expired without target/stop: {report['expired']} | "
             f"Unresolved at history end: {report['unresolved']}\n"
         )
     else:
-        sample_note = (
-            f"Only {report['closed_trades']} valid closed outcomes were available "
-            "(50 required); performance metrics are withheld."
+        outcomes = "Closed first-touch outcomes: 0\n"
+        metrics = "Win rate, average R:R, and timing metrics: unavailable.\n"
+        loss_setup_line = "SL loss setup: no closed losses.\n"
+        coverage = (
+            f"Expired without target/stop: {report['expired']} | "
+            f"Unresolved at history end: {report['unresolved']}\n"
         )
-        outcomes = ""
-        metrics = ""
-        loss_setup_line = ""
-        coverage = ""
+    source = str(report.get("historical_candle_source") or "unknown")
+    symbol = str(report.get("historical_symbol") or "unknown")
+    if source == "yf_futures":
+        source_label = "Yahoo Finance GC=F gold-futures proxy (not XAU/USD spot)"
+    elif symbol != "unknown":
+        source_label = f"{source} ({symbol})"
+    else:
+        source_label = source
     return (
         f"<b>Historical replay — {report['mode_label']} / {report['timeframe']}</b>\n"
-        f"Historical source: Yahoo GC=F gold futures proxy, not XAU/USD spot.\n"
+        f"Historical source: {source_label}.\n"
         f"Real completed candles: {report['candles']:,} ({start} to {end} UTC)\n"
         f"Generated setups: {report['generated_signals']} "
         f"(stale next-open entries skipped: {report['skipped_stale_entries']})\n"

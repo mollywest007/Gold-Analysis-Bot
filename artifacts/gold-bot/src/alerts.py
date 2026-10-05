@@ -182,6 +182,34 @@ def _trade_state_key(trade: dict, combined: bool = False) -> str:
     return f"{stream}:{timeframe}"
 
 
+def _due_analysis_streams(
+    scan_specs: list[tuple[str, str, str, str]],
+    account_id: int | None,
+    now: float | None = None,
+) -> list[tuple[str, str, str, str]]:
+    """Select only streams whose own mode-specific analysis interval elapsed."""
+    now = time.monotonic() if now is None else float(now)
+    due = []
+    for spec in scan_specs:
+        _label, _timeframe, engine_mode, state_key = spec
+        mode_cfg = MODES.get(engine_mode)
+        if mode_cfg is None:
+            logger.error(
+                "Skipping alert analysis for unknown stream mode %r.",
+                engine_mode,
+            )
+            continue
+        interval = max(
+            1, int(getattr(mode_cfg, "analysis_scan_interval_seconds", 15))
+        )
+        scan_key = (account_id, engine_mode, state_key)
+        last_scan = _last_analysis_scan_at.get(scan_key)
+        if last_scan is None or now - last_scan >= interval:
+            due.append(spec)
+            _last_analysis_scan_at[scan_key] = now
+    return due
+
+
 def _raw_timeframe(state_key: str) -> str:
     """Return the candle timeframe from either a legacy or combined state key."""
     if ":" in state_key:
@@ -2818,7 +2846,7 @@ async def _check_and_alert_once(
                     )
                     continue
                 # Only send the warning once per TF per shift direction —
-                # the scanner runs every 15s so without this it spams the
+                # without this it spams the
                 # same message continuously while the trade is open.
                 if momentum_shift_warned.get(state_key) != direction:
                     await _send_momentum_shift_warning(

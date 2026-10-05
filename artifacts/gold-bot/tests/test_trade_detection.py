@@ -136,7 +136,7 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["TP1"])
         self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "tp1_hit")
 
-    def test_terminal_exit_persists_the_evidence_used(self):
+    def test_stop_wick_does_not_close_until_live_price_reaches_stop(self):
         self.assertTrue(self._open_buy())
 
         events = trade_tracker.check_trades(
@@ -144,13 +144,28 @@ class TradeDetectionTests(unittest.TestCase):
             tf_extremes={"H1": (105.0, 89.5)},
         )
 
+        self.assertEqual(events, [])
+        trade = trade_tracker.get_all_trades()[0]
+        self.assertEqual(trade["status"], "open")
+        self.assertNotIn("exit_evidence", trade)
+
+    def test_live_stop_exit_persists_both_trigger_and_candle_context(self):
+        self.assertTrue(self._open_buy())
+
+        events = trade_tracker.check_trades(
+            89.5,
+            tf_extremes={"H1": (105.0, 89.5)},
+        )
+
         self.assertEqual(events[0]["event"], "SL")
         evidence = trade_tracker.get_all_trades()[0]["exit_evidence"]
-        self.assertEqual(evidence["source"], "verified_candle")
+        self.assertEqual(evidence["source"], "live_spot")
         self.assertEqual(evidence["timeframe"], "H1")
-        self.assertEqual(evidence["high"], 105.0)
+        self.assertEqual(evidence["high"], 89.5)
         self.assertEqual(evidence["low"], 89.5)
-        self.assertEqual(evidence["spot"], 101.0)
+        self.assertEqual(evidence["spot"], 89.5)
+        self.assertEqual(evidence["observed_candle_high"], 105.0)
+        self.assertEqual(evidence["observed_candle_low"], 89.5)
 
     def test_spot_only_terminal_exit_records_spot_evidence(self):
         self.assertTrue(self._open_buy())
@@ -252,7 +267,7 @@ class TradeDetectionTests(unittest.TestCase):
             )
         )
 
-    def test_stop_wick_triggers_stop_for_sell(self):
+    def test_candle_stop_wick_alone_does_not_trigger_stop_for_sell(self):
         self.assertTrue(
             trade_tracker.open_trade(
                 direction="SELL",
@@ -270,8 +285,52 @@ class TradeDetectionTests(unittest.TestCase):
             100.0,
             tf_extremes={"M15": (111.0, 99.0)},
         )
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
+    def test_buy_stop_uses_executable_bid_not_midpoint(self):
+        self.assertTrue(self._open_buy())
+
+        # Midpoint reaches the stop, but the executable bid has not.
+        events = trade_tracker.check_trades(
+            90.0, bid=90.1, ask=90.2, tf_extremes={}
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "open")
+
+        events = trade_tracker.check_trades(
+            90.05, bid=89.95, ask=90.15, tf_extremes={}
+        )
         self.assertEqual([event["event"] for event in events], ["SL"])
-        self.assertEqual(trade_tracker.get_all_trades()[0]["status"], "sl_hit")
+        evidence = trade_tracker.get_all_trades()[0]["exit_evidence"]
+        self.assertEqual(evidence["source"], "live_bid_ask")
+        self.assertEqual(evidence["low"], 89.95)
+
+    def test_sell_stop_uses_executable_ask_not_midpoint(self):
+        self.assertTrue(
+            trade_tracker.open_trade(
+                direction="SELL",
+                entry=100.0,
+                sl=110.0,
+                tp1=90.0,
+                tp2=None,
+                timeframe="M15",
+                confidence=80,
+                rr_ratio=1.0,
+            )
+        )
+        events = trade_tracker.check_trades(
+            110.0, bid=109.8, ask=109.9, tf_extremes={}
+        )
+        self.assertEqual(events, [])
+
+        events = trade_tracker.check_trades(
+            110.0, bid=109.9, ask=110.1, tf_extremes={}
+        )
+        self.assertEqual([event["event"] for event in events], ["SL"])
+        evidence = trade_tracker.get_all_trades()[0]["exit_evidence"]
+        self.assertEqual(evidence["source"], "live_bid_ask")
+        self.assertEqual(evidence["high"], 110.1)
 
     def test_post_tp1_retrace_to_entry_does_not_close_before_original_stop(self):
         self.assertTrue(
@@ -332,7 +391,7 @@ class TradeDetectionTests(unittest.TestCase):
         self.assertTrue(self._open_buy(timeframe="M15"))
 
         events = trade_tracker.check_trades(
-            100.0,
+            90.0,
             tf_extremes={"M15": (101.0, 89.0)},
         )
         self.assertEqual([event["event"] for event in events], ["SL"])
@@ -345,7 +404,7 @@ class TradeDetectionTests(unittest.TestCase):
         # A terminal record cannot emit the same SL event again.
         self.assertEqual(
             trade_tracker.check_trades(
-                100.0,
+                90.0,
                 tf_extremes={"M15": (101.0, 89.0)},
             ),
             [],

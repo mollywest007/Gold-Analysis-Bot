@@ -110,8 +110,9 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(report["average_entry_delay_minutes"], 1.0)
         self.assertFalse(report["sample_sufficient"])
         formatted = backtest.format_backtest_report(report)
-        self.assertIn("performance metrics are withheld", formatted)
-        self.assertNotIn("TP1 first:", formatted)
+        self.assertIn("Only 1 closed outcomes", formatted)
+        self.assertIn("TP1-first rate: 100.0%", formatted)
+        self.assertIn("TP1 first: 1, SL first: 0", formatted)
 
     def test_replay_counts_stop_first_when_both_levels_touch_same_candle(self):
         report = self._run_one_signal(stop_and_target_same_candle=True)
@@ -120,8 +121,19 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(report["tp1_first"], 0)
         self.assertEqual(report["longest_losing_streak"], 1)
         self.assertEqual(
-            report["loss_setup_types"], {"Fast momentum pullback": 1}
+            report["loss_setup_types"], {"Other/unspecified pullback": 1}
         )
+        self.assertEqual(report["most_loss_setup_type"], "Other/unspecified pullback")
+
+    def test_report_attributes_non_yahoo_history_to_its_actual_source(self):
+        report = self._run_one_signal()
+        report["historical_candle_source"] = "MIT XAU/USD sample"
+        report["historical_symbol"] = "XAU/USD"
+
+        formatted = backtest.format_backtest_report(report)
+
+        self.assertIn("MIT XAU/USD sample (XAU/USD)", formatted)
+        self.assertNotIn("Yahoo Finance GC=F", formatted)
 
     def test_replay_rejects_simulated_candles_and_wrong_mode_timeframe(self):
         data = self._data()

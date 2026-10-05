@@ -12,6 +12,35 @@ from src.handlers import callbacks, commands
 
 
 class ModeSpecificProfileTests(unittest.TestCase):
+    def test_alert_analysis_cadence_is_mode_specific_and_stream_scoped(self):
+        self.assertEqual(
+            {
+                mode: MODES[mode].analysis_scan_interval_seconds
+                for mode in ("scalp", "intraday", "swing", "position")
+            },
+            {
+                "scalp": 5,
+                "intraday": 15,
+                "swing": 60,
+                "position": 300,
+            },
+        )
+        specs = [
+            ("SCALP", "M15", "scalp", "scalp:M15"),
+            ("INTRA-HOUR", "H1", "intraday", "interval:H1"),
+        ]
+
+        with patch.dict(alerts._last_analysis_scan_at, {}, clear=True):
+            self.assertEqual(
+                alerts._due_analysis_streams(specs, 123, now=100.0), specs
+            )
+            self.assertEqual(
+                alerts._due_analysis_streams(specs, 123, now=105.0), [specs[0]]
+            )
+            self.assertEqual(
+                alerts._due_analysis_streams(specs, 123, now=115.0), specs
+            )
+
     def test_range_trap_sensitivity_is_mode_specific(self):
         trap_settings = {
             mode: (

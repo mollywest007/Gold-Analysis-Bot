@@ -758,6 +758,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             limit_entry=0.0,
             ote_high=2352.0,
             ote_low=2344.0,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
         )
         context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
 
@@ -1123,6 +1125,17 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                  new=AsyncMock(side_effect=signal),
              ), \
              patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+              patch.object(
+                  alerts,
+                  "get_cached_gold_quote",
+                  return_value={
+                      "price": 2350.0,
+                      "source": "spot",
+                      "symbol": "XAU/USD",
+                      "bid": 2349.9,
+                      "ask": 2350.1,
+                  },
+              ), \
              patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
              patch.object(alerts.trade_tracker, "get_all_trades", side_effect=all_trades), \
              patch.object(alerts.trade_tracker, "check_trades", return_value=[]), \
@@ -1424,6 +1437,17 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
              patch.object(alerts, "_load", return_value={123}), \
              patch.object(alerts, "_safe_analyze", new=AsyncMock(return_value=full_signal)), \
              patch.object(alerts, "get_gold_price", new=AsyncMock(return_value=2350.0)), \
+              patch.object(
+                  alerts,
+                  "get_cached_gold_quote",
+                  return_value={
+                      "price": 2350.0,
+                      "source": "spot",
+                      "symbol": "XAU/USD",
+                      "bid": 2349.9,
+                      "ask": 2350.1,
+                  },
+              ), \
              patch.object(alerts, "fetch_ohlcv", new=AsyncMock(return_value=None)), \
              patch.object(alerts.trade_tracker, "get_active_trades", return_value=[]), \
              patch.object(alerts.trade_tracker, "get_all_trades", return_value=[]), \

@@ -5,11 +5,13 @@ description: Known bugs and their fixes in the TP/SL detection and trade reminde
 
 ## SL/TP detection rules
 
-**SL uses candle extremes (highs/lows); TP now also uses post-entry candle extremes.**
+**An SL transition requires the latest validated executable quote to reach the stored stop; candle wicks alone never close a trade. TP may still use verified post-entry candle extremes.**
 
-Both are filtered in `alerts.py` to only include candles whose open timestamp >= trade `opened_at`. When no post-entry candle exists (new trade, no completed candle yet), `tf_extremes[tf]` is set to `(current_price, current_price)` — collapses to spot-price only for that cycle.
+BUY stops use the validated bid and SELL stops use the validated ask, falling back to current XAU/USD spot only when a valid bid/ask pair is unavailable. Post-entry candle extremes remain available for TP detection and are recorded as context when a live stop is reached.
 
-**Why:** SL-only candle detection was asymmetric — genuine TP wick hits between 15-second polls were silently missed while SL wicks were caught.
+**Why:** A wick may have retraced before the live quote check; the user's rule is that a stop is counted only when the current validated market price reaches the geometrically valid stored stop.
+
+**How to apply:** Validate source, symbol, quote plausibility, trade direction, and stored SL geometry first. Do not transition SL state from `tf_extremes`; preserve those extremes only as diagnostic context. Keep verified post-entry candle extremes eligible for TP detection.
 
 ## False immediate SL bug (fixed)
 

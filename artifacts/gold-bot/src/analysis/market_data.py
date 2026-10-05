@@ -60,10 +60,14 @@ OHLCV_TTL  = 5 * 60   # 5 minutes
 OHLCV_TTL_BY_TIMEFRAME: Dict[str, int] = {
     "M1": 5,
     "M3": 5,
-    "M5": 10,
-    "M15": 15,
-    "M30": 30,
-    "H1": 60,
+    "M5": 5,
+    "M15": 5,
+    "M30": 15,
+    "H1": 15,
+    "H4": 60,
+    "D1": 60,
+    "W1": 60,
+    "MN1": 300,
 }
 # Exit monitoring uses this quote cache.  A long TTL can leave a fast SL/TP
 # move invisible while the heavier analysis scan is still running.
@@ -82,7 +86,7 @@ class OHLCVData:
     def __init__(self, opens, highs, lows, closes, volumes, spot_price: float = 0.0,
                  is_simulated: bool = False, timestamps: list = None,
                  fetched_at: float = 0.0, price_source: str = "unknown",
-                 candle_source: str = "unknown"):
+                 candle_source: str = "unknown", symbol: str = "unknown"):
         self.opens        = opens
         self.highs        = highs
         self.lows         = lows
@@ -93,6 +97,7 @@ class OHLCVData:
         self.timestamps   = timestamps or []  # Unix timestamps per candle (open time)
         self.price_source = price_source
         self.candle_source = candle_source
+        self.symbol = symbol
         # Exit detection uses this to reject an old cached object after a
         # market-data outage instead of treating its last wick as live evidence.
         self.fetched_at   = float(fetched_at or time.time())
@@ -620,6 +625,7 @@ async def fetch_historical_ohlcv(
         fetched_at=data.fetched_at,
         price_source="yf_futures",
         candle_source="yf_futures",
+        symbol="GC=F",
     )
 
 

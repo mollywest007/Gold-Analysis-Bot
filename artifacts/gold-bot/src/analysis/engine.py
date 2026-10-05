@@ -1711,6 +1711,7 @@ def _momentum_pullback_decision(
         "tp2": 0.0,
         "tp3": 0.0,
         "rr": 0.0,
+        "setup_type": "",
         "quality_checks": [],
     }
     if len(closes) < 18 or min(len(opens), len(highs), len(lows)) < len(closes):
@@ -1874,8 +1875,14 @@ def _momentum_pullback_decision(
     )
     if bullish:
         prior_breakout = max((highs[index] for index in old_range), default=ema20)
-        support_levels = [ema20, last_low, prior_breakout]
-        nearest_support = min(support_levels, key=lambda level: abs(pullback_low - level))
+        support_references = [
+            (ema20, "EMA20 retest"),
+            (last_low, "Protected swing retest"),
+            (prior_breakout, "Prior breakout retest"),
+        ]
+        nearest_support, setup_type = min(
+            support_references, key=lambda item: abs(pullback_low - item[0])
+        )
         support_held = (
             abs(pullback_low - nearest_support) <= volatility * profile.level_tolerance_atr
             and nearest_support <= pullback_low + volatility * profile.structure_hold_tolerance_atr
@@ -1895,8 +1902,14 @@ def _momentum_pullback_decision(
         minor_break = closes[-1] > minor_level
     else:
         prior_breakdown = min((lows[index] for index in old_range), default=ema20)
-        resistance_levels = [ema20, last_high, prior_breakdown]
-        nearest_support = min(resistance_levels, key=lambda level: abs(pullback_high - level))
+        resistance_references = [
+            (ema20, "EMA20 retest"),
+            (last_high, "Protected swing retest"),
+            (prior_breakdown, "Prior breakdown retest"),
+        ]
+        nearest_support, setup_type = min(
+            resistance_references, key=lambda item: abs(pullback_high - item[0])
+        )
         support_held = (
             abs(pullback_high - nearest_support) <= volatility * profile.level_tolerance_atr
             and nearest_support >= pullback_high - volatility * profile.structure_hold_tolerance_atr
@@ -2032,6 +2045,7 @@ def _momentum_pullback_decision(
         "tp2": tp2,
         "tp3": tp3,
         "rr": rr,
+        "setup_type": setup_type,
         "quality_checks": checks,
     }
 

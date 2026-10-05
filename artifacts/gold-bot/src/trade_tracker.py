@@ -293,8 +293,9 @@ def check_trades(current_price: float, recent_high: float = None,
     Evaluate all open trades against current_price.
 
     recent_high/recent_low (deprecated): retained for call compatibility, but
-    never used as exit evidence.  A caller must provide verified candle
-    extremes in tf_extremes; otherwise only the live spot price is checked.
+    never used as exit evidence. A live executable quote must reach the stored
+    stop before an SL transition; verified post-entry candle extremes may still
+    detect target touches.
 
      tf_extremes (optional): raw timeframe keys such as "M15" or "H1", or
      combined-mode (mode, timeframe) keys such as ("scalp", "M15") —
@@ -457,22 +458,14 @@ def check_trades(current_price: float, recent_high: float = None,
             else current_price
         )
 
-        # SL detection uses verified candle extremes when supplied (catching
-        # brief wicks through the stop that retraced before the next spot
-        # poll).  Do not fall back to caller-provided historical highs/lows:
-        # those values have no freshness or post-entry guarantee and can
-        # falsely close a still-live trade.  With no verified candle, use the
-        # current spot snapshot only.
-        if tf_hi is not None and tf_lo is not None:
-            sl_hi = max(tf_hi, executable_price)
-            sl_lo = min(tf_lo, executable_price)
-        else:
-            sl_hi = executable_price
-            sl_lo = executable_price
+        # A candle wick is not proof that the executable market is still at
+        # the stop. SL state changes require the latest validated bid (BUY) or
+        # ask (SELL), falling back to live spot only when no valid BBO exists.
+        sl_hi = sl_lo = executable_price
 
-        # Persist the exact evidence used for a terminal decision. This is
-        # intentionally assembled here, after validation, so the record can
-        # distinguish a verified candle wick from a live-spot-only decision.
+        # This evidence supports target transitions, which may be detected
+        # from validated post-entry candle extremes. Stop evidence below is
+        # deliberately separate and always records the executable live quote.
         exit_evidence = {
             "source": "verified_candle"
             if tf_hi is not None and tf_lo is not None
@@ -488,13 +481,29 @@ def check_trades(current_price: float, recent_high: float = None,
             "spread": round(ask - bid, 5) if bid is not None and ask is not None else None,
             "captured_at": time.time(),
         }
+        sl_exit_evidence = {
+            "source": "live_bid_ask"
+            if bid is not None and ask is not None
+            else "live_spot",
+            "symbol": "XAU/USD",
+            "timeframe": t.get("timeframe"),
+            "high": executable_price,
+            "low": executable_price,
+            "spot": current_price,
+            "bid": bid,
+            "ask": ask,
+            "spread": round(ask - bid, 5) if bid is not None and ask is not None else None,
+            "observed_candle_high": tf_hi,
+            "observed_candle_low": tf_lo,
+            "captured_at": time.time(),
+        }
 
-        # TP detection uses post-entry candle extremes (same tf_extremes dict
-        # that SL uses). tf_extremes is pre-filtered in alerts.py to include
+        # TP detection may use post-entry candle extremes from tf_extremes,
+        # which is pre-filtered in alerts.py to include
         # only candles that opened AFTER the trade was placed, so there is no
         # risk of a pre-entry wick triggering a false win.  Using candle
-        # extremes symmetrically with SL means a genuine wick to TP between
-        # two 15-second polls is caught rather than silently missed.
+        # extremes for TP catches a genuine wick between quote polls. SL
+        # transitions remain quote-only because a candle wick may have retraced.
         # When no post-entry candle exists yet (new trade, fallback path in
         # alerts.py sets tf_extremes[tf] = (current_price, current_price)),
         # this collapses back to current_price — safe.
@@ -528,37 +537,49 @@ def check_trades(current_price: float, recent_high: float = None,
             tp2_exit  = tp2
             tp3_exit  = tp3_val
 
+        candle_stop_hit = (
+            tf_lo <= sl if d == "BUY" and tf_lo is not None
+            else tf_hi >= sl if d == "SELL" and tf_hi is not None
+            else False
+        )
+        if candle_stop_hit and not sl_hit:
+            logger.info(
+                "Trade %s stop wick ignored — validated live executable quote "
+                "%.5f has not reached SL %.5f.",
+                t.get("id"),
+                executable_price,
+                sl,
+            )
+
         if sl_hit:
             # TP1 is a partial milestone, not a reason to move the stop. Keep
             # the original stop level active for the remaining position and
             # preserve the partial-win status when that original level is hit.
             if t.get("tp1_hit"):
-                _mark_terminal(
-                    t, "tp1_sl_hit", "stop_loss", exit_evidence
-                )
+                _mark_terminal(t, "tp1_sl_hit", "stop_loss", sl_exit_evidence)
                 changed = True
                 events.append({
                     "trade": t,
                     "event": "TP1_SL",
                     "exit_price": sl_exit,
-                    "exit_evidence": exit_evidence,
+                    "exit_evidence": sl_exit_evidence,
                 })
                 logger.info(
                     f"Trade {t['id']} original SL hit after TP1 partial @ "
-                    f"{sl_exit:.2f} (evidence={exit_evidence})"
+                    f"{sl_exit:.2f} (evidence={sl_exit_evidence})"
                 )
             else:
-                _mark_terminal(t, "sl_hit", "stop_loss", exit_evidence)
+                _mark_terminal(t, "sl_hit", "stop_loss", sl_exit_evidence)
                 changed = True
                 events.append({
                     "trade": t,
                     "event": "SL",
                     "exit_price": sl_exit,
-                    "exit_evidence": exit_evidence,
+                    "exit_evidence": sl_exit_evidence,
                 })
                 logger.info(
                     f"Trade {t['id']} SL hit @ {sl_exit:.2f} "
-                    f"(evidence={exit_evidence})"
+                    f"(evidence={sl_exit_evidence})"
                 )
 
         elif tp3_hit and tp3_val and not t.get("tp3_hit"):
