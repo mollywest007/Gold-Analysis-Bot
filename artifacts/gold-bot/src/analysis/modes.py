@@ -11,7 +11,7 @@ Adding a new mode:  add an entry to MODES dict with a ModeConfig object.
 The rest of the system picks it up automatically.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 
@@ -45,6 +45,11 @@ class MomentumPullbackProfile:
     entry_zone_atr: float
     range_trap_lookback_candles: int
     range_trap_max_width_atr: float
+    structure_pivot_radius: int = 1
+    structure_lookback_candles: int = 48
+    confirmation_break_atr: float = 0.03
+    range_trap_minimum_touches: int = 2
+    expected_holding_bars: int = 24
 
 
 @dataclass
@@ -222,6 +227,178 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_max_width_atr=3.00,
     ),
 }
+
+
+_TIMEFRAME_RANK = {
+    "M1": 0,
+    "M3": 0,
+    "M5": 0,
+    "M15": 1,
+    "M30": 2,
+    "H1": 3,
+    "H4": 4,
+    "D1": 5,
+    "W1": 6,
+    "MN1": 7,
+}
+
+_TIMEFRAME_PULLBACK_BARS = {
+    "scalp": (2, 3, 3, 4, 5, 5, 6, 6),
+    "intraday": (3, 3, 3, 4, 4, 5, 6, 6),
+    "swing": (3, 3, 3, 3, 4, 5, 6, 7),
+    "position": (4, 4, 4, 4, 4, 5, 6, 7),
+}
+
+_MODE_STRUCTURE_BASE = {
+    "scalp": 24,
+    "intraday": 32,
+    "swing": 40,
+    "position": 48,
+}
+
+_MODE_PIVOT_ANCHOR = {
+    "scalp": 2,
+    "intraday": 2,
+    "swing": 3,
+    "position": 4,
+}
+
+_MODE_TIMEFRAME_ANCHOR = {
+    "scalp": 1,    # M15 is the normal scalp chart
+    "intraday": 3, # H1
+    "swing": 4,    # H4
+    "position": 5, # D1
+}
+
+_MODE_HOLDING_BARS = {
+    "scalp": (60, 40, 30, 16, 12, 8, 6, 4, 2, 2),
+    "intraday": (120, 90, 60, 32, 24, 16, 10, 7, 5, 3),
+    "swing": (180, 120, 96, 48, 36, 24, 24, 18, 12, 8),
+    "position": (240, 180, 120, 72, 48, 36, 30, 24, 18, 12),
+}
+
+
+def resolve_momentum_pullback_profile(
+    mode_cfg: "ModeConfig",
+    timeframe: str,
+) -> MomentumPullbackProfile:
+    """Scale the existing mode profile to the selected chart's structure."""
+    profile = mode_cfg.momentum_pullback
+    if profile is None:
+        raise ValueError(
+            f"Mode '{getattr(mode_cfg, 'name', 'unknown')}' has no standalone "
+            "momentum-pullback profile; resolve a combined mode to its stream first."
+        )
+    if timeframe not in _TIMEFRAME_RANK:
+        raise ValueError(f"Unsupported momentum-pullback timeframe: {timeframe}")
+
+    mode = mode_cfg.name
+    rank = _TIMEFRAME_RANK[timeframe]
+    baseline = _MODE_TIMEFRAME_ANCHOR.get(mode, 3)
+    broader_steps = max(0, rank - baseline)
+    pivot_steps = max(0, rank - _MODE_PIVOT_ANCHOR.get(mode, 2))
+
+    # Scalp stays responsive on lower charts. Larger charts use broader,
+    # confirmed pivots rather than treating every one-bar fluctuation as a swing.
+    pivot_radius = min(3, 1 + (pivot_steps + 1) // 2)
+    structure_lookback = (
+        _MODE_STRUCTURE_BASE.get(mode, 32) + rank * 8
+    )
+    pullback_bars = _TIMEFRAME_PULLBACK_BARS.get(
+        mode, _TIMEFRAME_PULLBACK_BARS["intraday"]
+    )[rank]
+
+    # All distances remain ATR-relative. Broader charts get more room for normal
+    # retracements and structural stops, but never exceed the global 2.5 ATR cap.
+    return replace(
+        profile,
+        pullback_candles=pullback_bars,
+        minimum_pullback_depth_atr=(
+            profile.minimum_pullback_depth_atr + broader_steps * 0.01
+        ),
+        maximum_pullback_depth_atr=(
+            profile.maximum_pullback_depth_atr
+            + rank * 0.025
+            + broader_steps * 0.08
+        ),
+        swing_change_atr=profile.swing_change_atr + pivot_steps * 0.01,
+        rejection_wick_min_atr=(
+            profile.rejection_wick_min_atr + pivot_steps * 0.01
+        ),
+        rejection_wick_body_ratio=(
+            profile.rejection_wick_body_ratio + pivot_steps * 0.02
+        ),
+        chop_lookback_candles=(
+            profile.chop_lookback_candles + broader_steps * 2 + rank // 2
+        ),
+        chop_minimum_range_atr=max(
+            0.35, profile.chop_minimum_range_atr - rank * 0.08
+        ),
+        chop_max_alternations=(
+            profile.chop_max_alternations + rank // 3
+        ),
+        chop_max_drift_atr=max(
+            0.25, profile.chop_max_drift_atr - rank * 0.04
+        ),
+        stop_buffer_atr=(
+            profile.stop_buffer_atr + rank * 0.005 + broader_steps * 0.01
+        ),
+        minimum_stop_distance_atr=(
+            profile.minimum_stop_distance_atr
+            + rank * 0.015
+            + broader_steps * 0.025
+        ),
+        maximum_stop_distance_atr=min(
+            2.5,
+            profile.maximum_stop_distance_atr
+            + rank * 0.04
+            + broader_steps * 0.08,
+        ),
+        target_buffer_atr=(
+            profile.target_buffer_atr + rank * 0.005 + broader_steps * 0.01
+        ),
+        minimum_target_room_atr=(
+            profile.minimum_target_room_atr
+            + rank * 0.02
+            + broader_steps * 0.06
+        ),
+        maximum_ema_distance_atr=(
+            profile.maximum_ema_distance_atr + broader_steps * 0.15
+        ),
+        maximum_breakout_range_atr=max(
+            1.35,
+            profile.maximum_breakout_range_atr
+            - (0.35 if mode == "scalp" and rank == 0 else 0.20 if rank <= 1 else 0.0)
+            + broader_steps * 0.05,
+        ),
+        maximum_breakout_body_atr=max(
+            0.8,
+            profile.maximum_breakout_body_atr
+            - (0.20 if mode == "scalp" and rank == 0 else 0.10 if rank <= 1 else 0.0),
+        ),
+        # RSI is a soft momentum read. Only a clear conflict with price structure
+        # blocks a setup; neutral readings and a missing 50-line cross do not.
+        buy_rsi_veto_below=35.0,
+        sell_rsi_veto_above=65.0,
+        structure_pivot_radius=pivot_radius,
+        structure_lookback_candles=structure_lookback,
+        range_trap_lookback_candles=(
+            profile.range_trap_lookback_candles + rank * 2
+        ),
+        range_trap_max_width_atr=max(
+            1.5, profile.range_trap_max_width_atr - rank * 0.10
+        ),
+        range_trap_minimum_touches=2 + rank // 4,
+        expected_holding_bars=_MODE_HOLDING_BARS.get(
+            mode, _MODE_HOLDING_BARS["intraday"]
+        )[rank],
+        confirmation_break_atr=(
+            {"scalp": 0.005, "intraday": 0.02, "swing": 0.05, "position": 0.08}
+            .get(mode, 0.02)
+            + rank * 0.005
+            + pivot_steps * 0.015
+        ),
+    )
 
 
 # ─── Mode definitions ─────────────────────────────────────────────────────────

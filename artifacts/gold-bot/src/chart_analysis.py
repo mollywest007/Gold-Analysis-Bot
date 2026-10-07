@@ -22,7 +22,7 @@ from typing import Optional
 
 import aiohttp
 
-from src.analysis.modes import MODES
+from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 
 logger = logging.getLogger(__name__)
 
@@ -378,29 +378,64 @@ Set open_trade_valid = true if the original thesis is still intact, false if str
 
 def _profile_instructions(mode_name: str, timeframe: str) -> str:
     config = MODES.get(mode_name)
-    profile = getattr(config, "momentum_pullback", None) if config else None
-    if profile is None:
+    if config is None:
         raise ValueError(
             f"Mode '{mode_name}' does not have a standalone analysis profile."
         )
+    timeframe = timeframe or config.preferred_timeframe
+    profile = resolve_momentum_pullback_profile(config, timeframe)
+    mode_guidance = {
+        "scalp": (
+            "Use recent, relatively small structure and a controlled shallow "
+            "pullback; confirm promptly with rejection and the minor pullback "
+            "swing break. On charts above M15, widen the structure to the "
+            "selected chart instead of reusing M1/M5 assumptions."
+        ),
+        "intraday": (
+            "Be more selective than Scalp but remain responsive. Use selected-"
+            "chart intraday swings, a moderate pullback, and a meaningful "
+            "minor/intermediate break; avoid obvious ranges."
+        ),
+        "swing": (
+            "Wait for broader selected-chart swing structure and a deeper "
+            "pullback. Ignore small intraday fluctuations; require a stronger "
+            "selected-chart structure break before confirming. Do not wait for "
+            "a complete trend—confirm when the mode-appropriate structural "
+            "sequence is complete."
+        ),
+        "position": (
+            "Prioritize major selected-chart swing highs/lows and deeper "
+            "pullbacks. Ignore insignificant fluctuations; a small rejection "
+            "or intraday break is not position confirmation."
+        ),
+    }.get(mode_name, "")
     return (
         f"Selected mode: {config.label}; selected timeframe: "
-        f"{timeframe or 'read the chart label'}. Local swing change must be at "
-        f"least {profile.swing_change_atr:g} ATR. Use {profile.pullback_candles} "
-        f"completed pullback candle(s), depth {profile.minimum_pullback_depth_atr:g}–"
-        f"{profile.maximum_pullback_depth_atr:g} ATR, and a rejection wick of at "
-        f"least {profile.rejection_wick_min_atr:g} ATR or "
-        f"{profile.rejection_wick_body_ratio:g} of candle body. Do not chase a "
-        f"breakout range over {profile.maximum_breakout_range_atr:g} ATR or price "
-        f"more than {profile.maximum_ema_distance_atr:g} ATR from EMA20. RSI is a "
-        f"veto only below {profile.buy_rsi_veto_below:g} for BUY or above "
-        f"{profile.sell_rsi_veto_above:g} for SELL. Place the structural stop "
-        f"beyond the pullback swing with a {profile.stop_buffer_atr:g} ATR buffer "
-        f"and at least {profile.minimum_stop_distance_atr:g} ATR noise distance; "
-        f"reject risk above {profile.maximum_stop_distance_atr:g} ATR. TP1 must "
-        f"be a real opposing level with at least 1:{config.min_rr_ratio:g} R:R and "
-        f"{profile.minimum_target_room_atr:g} ATR of room. Do not wait for a "
-        "complete trend or higher-timeframe confirmation."
+        f"{timeframe}. {mode_guidance} Direction must come from this timeframe's "
+        f"HH/HL or LH/LL structure and price momentum, not EMA20/EMA50 alignment. "
+        f"Use confirmed pivots with {profile.structure_pivot_radius} candle(s) "
+        f"on each side over the recent {profile.structure_lookback_candles}-bar "
+        f"structure window. Allow {profile.pullback_candles} completed pullback "
+        f"bar(s), with ATR-relative depth "
+        f"{profile.minimum_pullback_depth_atr:g}–"
+        f"{profile.maximum_pullback_depth_atr:g} ATR while the protected swing "
+        f"holds. A simple rejection and close beyond the relevant pullback swing "
+        f"by at least {profile.confirmation_break_atr:g} ATR is sufficient; do "
+        "not require multiple candle patterns or three confirmation candles. "
+        f"Do not chase a breakout range over "
+        f"{profile.maximum_breakout_range_atr:g} ATR or price more than "
+        f"{profile.maximum_ema_distance_atr:g} ATR from EMA20. RSI is soft: "
+        "prefer BUY above 45 and rising, SELL below 55 and falling; skip only "
+        f"for strong disagreement (BUY below {profile.buy_rsi_veto_below:g} or "
+        f"SELL above {profile.sell_rsi_veto_above:g}), never for missing a 50 "
+        f"cross. Put SL beyond the structural pullback swing with a "
+        f"{profile.stop_buffer_atr:g} ATR buffer and at least "
+        f"{profile.minimum_stop_distance_atr:g} ATR noise distance; reject risk "
+        f"above {profile.maximum_stop_distance_atr:g} ATR. TP1 must be a real "
+        f"opposing selected-timeframe level with at least 1:{config.min_rr_ratio:g} "
+        f"R:R and {profile.minimum_target_room_atr:g} ATR of room. All distances "
+        "scale with current ATR; do not use fixed pip/point distances or "
+        "higher-timeframe confirmation."
     )
 
 

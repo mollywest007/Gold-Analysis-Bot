@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from src import alerts
 from src.analysis import engine
 from src.analysis.engine import _momentum_pullback_decision, _structure_targets
-from src.analysis.modes import MODES
+from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 from src.chart_analysis import _mode_prompt_instructions, _resolve_chart_scope
 from src.handlers import callbacks, commands
 
@@ -60,6 +60,30 @@ class ModeSpecificProfileTests(unittest.TestCase):
                 "position": (30, 3.00),
             },
         )
+
+    def test_mode_rules_scale_with_the_selected_timeframe(self):
+        scalp_m1 = resolve_momentum_pullback_profile(MODES["scalp"], "M1")
+        scalp_m15 = resolve_momentum_pullback_profile(MODES["scalp"], "M15")
+        swing_h4 = resolve_momentum_pullback_profile(MODES["swing"], "H4")
+        swing_w1 = resolve_momentum_pullback_profile(MODES["swing"], "W1")
+
+        self.assertEqual(scalp_m1.pullback_candles, 2)
+        self.assertEqual(scalp_m15.pullback_candles, 3)
+        self.assertGreater(scalp_m15.structure_lookback_candles,
+                           scalp_m1.structure_lookback_candles)
+        self.assertLess(scalp_m1.maximum_breakout_range_atr,
+                        scalp_m15.maximum_breakout_range_atr)
+        self.assertLess(scalp_m1.confirmation_break_atr,
+                        scalp_m15.confirmation_break_atr)
+        self.assertEqual(swing_h4.structure_pivot_radius, 2)
+        self.assertEqual(swing_w1.structure_pivot_radius, 3)
+        self.assertGreater(swing_w1.maximum_pullback_depth_atr,
+                           swing_h4.maximum_pullback_depth_atr)
+        self.assertGreater(swing_w1.maximum_stop_distance_atr,
+                           swing_h4.maximum_stop_distance_atr)
+        for profile in (scalp_m1, scalp_m15, swing_h4, swing_w1):
+            self.assertEqual(profile.buy_rsi_veto_below, 35.0)
+            self.assertEqual(profile.sell_rsi_veto_above, 65.0)
 
     def test_structural_target_filter_uses_each_modes_rr_floor(self):
         scalp = MODES["scalp"]

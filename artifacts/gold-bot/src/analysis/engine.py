@@ -28,6 +28,7 @@ from .institutional import (
     combine_contexts,
     fetch_intermarket_snapshot,
 )
+from .modes import resolve_momentum_pullback_profile
 
 logger = logging.getLogger(__name__)
 
@@ -1529,22 +1530,26 @@ def _local_swings(
     highs: List[float],
     lows: List[float],
     lookback: int = 48,
+    pivot_radius: int = 1,
 ) -> Tuple[List[Tuple[int, float]], List[Tuple[int, float]]]:
-    """Return confirmed one-candle pivots from the selected timeframe only."""
+    """Return confirmed selected-timeframe pivots at the requested scale."""
+    radius = max(1, int(pivot_radius))
     end = len(highs) - 1  # the live/latest candle is not a confirmed pivot
-    start = max(1, end - lookback)
+    start = max(radius, end - lookback)
     swing_highs = []
     swing_lows = []
-    for index in range(start, end):
-        if (
-            highs[index] >= highs[index - 1]
-            and highs[index] > highs[index + 1]
-        ):
+    for index in range(start, max(start, len(highs) - radius)):
+        left_highs = highs[index - radius:index]
+        right_highs = highs[index + 1:index + radius + 1]
+        left_lows = lows[index - radius:index]
+        right_lows = lows[index + 1:index + radius + 1]
+        if len(left_highs) != radius or len(right_highs) != radius:
+            continue
+        neighborhood_highs = left_highs + right_highs
+        neighborhood_lows = left_lows + right_lows
+        if highs[index] >= max(neighborhood_highs) and highs[index] > min(neighborhood_highs):
             swing_highs.append((index, float(highs[index])))
-        if (
-            lows[index] <= lows[index - 1]
-            and lows[index] < lows[index + 1]
-        ):
+        if lows[index] <= min(neighborhood_lows) and lows[index] < max(neighborhood_lows):
             swing_lows.append((index, float(lows[index])))
     return swing_highs, swing_lows
 
@@ -1627,7 +1632,8 @@ def _is_boxed_between_swing_levels(
 ) -> bool:
     """Reject a close still boxed by repeatedly tested nearby swing levels."""
     lookback = min(profile.range_trap_lookback_candles, len(closes))
-    if lookback < 3:
+    minimum_touches = max(2, int(profile.range_trap_minimum_touches))
+    if lookback < minimum_touches + 1:
         return False
 
     start_index = max(0, len(closes) - lookback - 1)
@@ -1640,7 +1646,10 @@ def _is_boxed_between_swing_levels(
         level for index, level in swing_lows
         if start_index <= index < end_index and level < price
     ]
-    if len(recent_highs) < 2 or len(recent_lows) < 2:
+    if (
+        len(recent_highs) < minimum_touches
+        or len(recent_lows) < minimum_touches
+    ):
         return False
 
     resistance = min(recent_highs)
@@ -1657,15 +1666,15 @@ def _is_boxed_between_swing_levels(
     )
     box_width = resistance - support
     if (
-        resistance_touches < 2
-        or support_touches < 2
+        resistance_touches < minimum_touches
+        or support_touches < minimum_touches
         or box_width > max(float(atr), 0.01) * profile.range_trap_max_width_atr
     ):
         return False
 
     # Require recent closes to remain inside the pivot bracket. A confirmed
     # close outside either boundary means the market has already escaped it.
-    recent_close_count = min(3, lookback)
+    recent_close_count = min(minimum_touches + 1, lookback)
     return all(
         support < close < resistance
         for close in closes[-recent_close_count:]
@@ -1686,17 +1695,14 @@ def _momentum_pullback_decision(
     mode_cfg=None,
     ema20_history: List[float] = None,
     ema50_history: List[float] = None,
+    timeframe: str = None,
 ) -> dict:
-    """Fast selected-timeframe trend → pullback → rejection → minor-break gate."""
+    """Mode- and timeframe-scaled trend → pullback → rejection → structure gate."""
     if mode_cfg is None:
         from src.mode_manager import get_mode_config
         mode_cfg = get_mode_config()
-    profile = getattr(mode_cfg, "momentum_pullback", None)
-    if profile is None:
-        raise ValueError(
-            f"Mode '{getattr(mode_cfg, 'name', 'unknown')}' has no standalone "
-            "momentum-pullback profile; resolve a combined mode to its stream first."
-        )
+    timeframe = timeframe or mode_cfg.preferred_timeframe
+    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
 
     empty = {
         "status": "WAIT",
@@ -1713,16 +1719,29 @@ def _momentum_pullback_decision(
         "rr": 0.0,
         "setup_type": "",
         "quality_checks": [],
+        "skip_reason": "Insufficient directional structure",
+        "skip_detail": "",
     }
     if len(closes) < 18 or min(len(opens), len(highs), len(lows)) < len(closes):
-        return {**empty, "confirmation": "Not enough valid candles to confirm local swings."}
+        return {
+            **empty,
+            "confirmation": "Not enough valid candles to confirm local swings.",
+            "skip_detail": "Insufficient valid candles for selected-timeframe structure.",
+        }
 
     volatility = max(float(atr or 0.0), price * 0.0001, 0.01)
     swing_highs, swing_lows = _local_swings(
-        highs, lows, lookback=max(48, int(mode_cfg.breakout_lookback))
+        highs,
+        lows,
+        lookback=profile.structure_lookback_candles,
+        pivot_radius=profile.structure_pivot_radius,
     )
     if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return {**empty, "confirmation": "Waiting for two confirmed swing highs and lows."}
+        return {
+            **empty,
+            "confirmation": "Waiting for two confirmed swing highs and lows.",
+            "skip_detail": "Waiting for two confirmed swing highs and lows.",
+        }
 
     prior_high, last_high = swing_highs[-2][1], swing_highs[-1][1]
     prior_low, last_low = swing_lows[-2][1], swing_lows[-1][1]
@@ -1739,6 +1758,8 @@ def _momentum_pullback_decision(
             **empty,
             "setup": "Mixed or ranging short-term swing structure",
             "confirmation": "Recent swing highs and lows do not form a clear HH/HL or LH/LL sequence.",
+            "skip_reason": "Insufficient directional structure",
+            "skip_detail": "Recent selected-timeframe swing highs and lows are mixed.",
         }
 
     direction = "BUY" if bullish else "SELL"
@@ -1754,10 +1775,12 @@ def _momentum_pullback_decision(
             "setup": "RSI strongly disagrees with price structure",
             "confirmation": f"RSI {rsi:.1f} strongly conflicts with the {direction} structure; skipping.",
             "quality_checks": checks,
+            "skip_reason": "RSI strongly disagrees",
+            "skip_detail": f"RSI {rsi:.1f} strongly conflicts with {direction} structure.",
         }
     rsi_supports = (
-        (bullish and rsi >= 48.0 and rsi >= previous_rsi - 1.0)
-        or (bearish and rsi <= 52.0 and rsi <= previous_rsi + 1.0)
+        (bullish and rsi > 45.0 and rsi > previous_rsi)
+        or (bearish and rsi < 55.0 and rsi < previous_rsi)
     )
     if rsi_supports:
         checks.append("RSI momentum is recovering/falling with price")
@@ -1803,8 +1826,11 @@ def _momentum_pullback_decision(
         )
         or (recent_range < volatility * profile.chop_minimum_range_atr)
         or (
-            recent_crosses >= 3
-            and abs(ema20 - ema50) < volatility * 0.30
+            recent_crosses >= 3 + max(0, profile.structure_pivot_radius - 1)
+            and abs(ema20 - ema50)
+            < volatility * max(
+                0.15, 0.30 - max(0, profile.structure_pivot_radius - 1) * 0.05
+            )
             and recent_drift < volatility * profile.chop_max_drift_atr
         )
     )
@@ -1815,6 +1841,8 @@ def _momentum_pullback_decision(
             "setup": "Ranging/choppy conditions",
             "confirmation": "Recent candles alternate or remain compressed; waiting for cleaner movement.",
             "quality_checks": checks,
+            "skip_reason": "Ranging/choppy market",
+            "skip_detail": "Directional progress is weak relative to this mode/timeframe's chop profile.",
         }
 
     if _is_boxed_between_swing_levels(
@@ -1836,11 +1864,16 @@ def _momentum_pullback_decision(
             "quality_checks": checks + [
                 "Nearby swing support and resistance form a bounded range"
             ],
+            "skip_reason": "Ranging/choppy market",
+            "skip_detail": "Repeated selected-timeframe support and resistance are boxing price.",
         }
 
     # The selected mode controls the completed pre-break pullback window; the
     # newest candle must close beyond their minor swing in the trend direction.
-    pullback_start = max(2, len(closes) - profile.pullback_candles - 1)
+    pullback_start = max(
+        profile.structure_pivot_radius + 1,
+        len(closes) - profile.pullback_candles - 1,
+    )
     pullback_end = len(closes) - 1
     pullback_indices = list(range(pullback_start, pullback_end))
     pullback_low = min(lows[index] for index in pullback_indices)
@@ -1869,8 +1902,15 @@ def _momentum_pullback_decision(
 
     # A pullback may test EMA20, the latest protected swing, or a former
     # breakout/breakdown level. EMA50 is not used as a directional gate.
+    prior_level_lookback = max(
+        int(mode_cfg.breakout_lookback),
+        min(
+            profile.structure_lookback_candles // 2,
+            int(mode_cfg.breakout_lookback) + profile.structure_pivot_radius * 6,
+        ),
+    )
     old_range = range(
-        max(1, pullback_start - int(mode_cfg.breakout_lookback)),
+        max(1, pullback_start - prior_level_lookback),
         max(1, pullback_start - profile.pullback_candles),
     )
     if bullish:
@@ -1899,7 +1939,10 @@ def _momentum_pullback_decision(
             for index in pullback_indices
         )
         minor_level = max(highs[pullback_start:pullback_end])
-        minor_break = closes[-1] > minor_level
+        minor_break = (
+            closes[-1]
+            > minor_level + volatility * profile.confirmation_break_atr
+        )
     else:
         prior_breakdown = min((lows[index] for index in old_range), default=ema20)
         resistance_references = [
@@ -1926,7 +1969,10 @@ def _momentum_pullback_decision(
             for index in pullback_indices
         )
         minor_level = min(lows[pullback_start:pullback_end])
-        minor_break = closes[-1] < minor_level
+        minor_break = (
+            closes[-1]
+            < minor_level - volatility * profile.confirmation_break_atr
+        )
 
     breakout_range = highs[-1] - lows[-1]
     breakout_body = abs(closes[-1] - opens[-1])
@@ -2034,8 +2080,10 @@ def _momentum_pullback_decision(
         "direction": direction,
         "setup": "Fast momentum pullback: rejection + minor structure break",
         "confirmation": (
-            f"Short-term {direction.lower()} structure; controlled pullback held; "
-            f"rejection and minor swing break confirmed. {rsi_confirmation}"
+            f"Selected-timeframe {direction.lower()} structure; controlled "
+            f"{profile.pullback_candles}-bar pullback held; rejection and "
+            f"{'minor' if mode_cfg.name == 'scalp' else 'mode-scaled'} structure "
+            f"break confirmed. {rsi_confirmation}"
         ),
         "entry_low": round(entry - half_zone, 2),
         "entry_high": round(entry + half_zone, 2),
@@ -2062,6 +2110,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     rsi = compute_rsi(closes, 14)
     previous_rsi = compute_rsi(closes[:-1], 14) if len(closes) > 15 else rsi
     atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
+    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
     decision = _momentum_pullback_decision(
         opens,
         highs,
@@ -2074,6 +2123,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         rsi,
         previous_rsi,
         mode_cfg=mode_cfg,
+        timeframe=timeframe,
     )
     direction = decision["direction"]
     setup = decision["setup"]
@@ -2092,8 +2142,8 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         else "RANGING"
     )
     rsi_supports = (
-        (direction == "BUY" and rsi >= 48.0 and rsi >= previous_rsi - 1.0)
-        or (direction == "SELL" and rsi <= 52.0 and rsi <= previous_rsi + 1.0)
+        (direction == "BUY" and rsi > 45.0 and rsi > previous_rsi)
+        or (direction == "SELL" and rsi < 55.0 and rsi < previous_rsi)
     )
     action = (
         direction
@@ -2163,14 +2213,16 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "current_confirmation": wait_reason,
         "quality_checks": decision["quality_checks"],
         "mode_rules": {
-            "pullback_candles": mode_cfg.momentum_pullback.pullback_candles,
-            "maximum_pullback_depth_atr": (
-                mode_cfg.momentum_pullback.maximum_pullback_depth_atr
-            ),
+            "selected_timeframe": timeframe,
+            "pullback_candles": profile.pullback_candles,
+            "minimum_pullback_depth_atr": profile.minimum_pullback_depth_atr,
+            "maximum_pullback_depth_atr": profile.maximum_pullback_depth_atr,
             "minimum_target_rr": mode_cfg.min_rr_ratio,
-            "maximum_stop_atr": (
-                mode_cfg.momentum_pullback.maximum_stop_distance_atr
-            ),
+            "maximum_stop_atr": profile.maximum_stop_distance_atr,
+            "structure_pivot_radius": profile.structure_pivot_radius,
+            "structure_lookback_candles": profile.structure_lookback_candles,
+            "confirmation_break_atr": profile.confirmation_break_atr,
+            "maximum_breakout_range_atr": profile.maximum_breakout_range_atr,
         },
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,

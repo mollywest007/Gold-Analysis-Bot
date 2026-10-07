@@ -48,6 +48,17 @@ or incomplete setup must not receive invented stop or target levels.
 Analysis statuses remain `WAIT`, `DEVELOPING`, `MODERATE ENTRY`, `MISSED`, or
 `INVALID`. Alerts must distinguish a confirmed entry from an incomplete setup.
 
+## Mode- and timeframe-aware execution
+
+The shared Momentum-Pullback sequence stays direction → pullback → rejection →
+structure confirmation → entry, but its structural pivot radius, pullback
+window/depth, breakout chase limit, confirmation displacement, structural stop
+buffer/risk ceiling, and target clearance adapt to both the active mode and
+selected timeframe. Measurements remain ATR-relative; no fixed pip or point
+distances are shared across charts. EMA20 is pullback context, not a direction
+gate. RSI14 is a soft preference (BUY above 45 and rising; SELL below 55 and
+falling) and only strongly opposing RSI blocks an otherwise valid structure.
+
 The momentum-pullback sequence is shared, but its thresholds and risk rules are
 selected from the user's active mode before analysis begins. Scalp, Intraday,
 Swing, and Position each keep their own sensitivity, pullback window, rejection

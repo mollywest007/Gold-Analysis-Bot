@@ -10,7 +10,7 @@ from src.analysis.market_data import (
     OHLCVData,
     fetch_historical_ohlcv,
 )
-from src.analysis.modes import MODES
+from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 from src.trade_tracker import _DEFAULT_MAX_TRADE_AGE, _TF_MAX_AGE
 
 
@@ -164,7 +164,7 @@ def replay_momentum_pullback(
             "at least 100 are needed for a meaningful replay."
         )
 
-    profile = mode_cfg.momentum_pullback
+    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
     closes = data.closes
     highs = data.highs
     lows = data.lows
@@ -225,6 +225,7 @@ def replay_momentum_pullback(
             mode_cfg=mode_cfg,
             ema20_history=local_ema20_chop,
             ema50_history=local_ema50_chop,
+            timeframe=timeframe,
         )
         if decision.get("status") != "MODERATE ENTRY":
             index += 1

@@ -1439,13 +1439,31 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
     quality_checks = report.get("quality_checks", []) or []
+    has_timeframe_profile = (
+        mode_rules.get("minimum_pullback_depth_atr") is not None
+        and mode_rules.get("structure_pivot_radius") is not None
+    )
     mode_rules_line = (
         f"{int(mode_rules['pullback_candles'])} pullback bars · "
-        f"depth ≤{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
+        f"depth {float(mode_rules['minimum_pullback_depth_atr']):g}–"
+        f"{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
+        f"pivot ±{int(mode_rules['structure_pivot_radius'])} bars"
+        if mode_rules.get("pullback_candles") is not None and has_timeframe_profile
+        else (
+            f"{int(mode_rules['pullback_candles'])} pullback bars · "
+            f"depth ≤{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
+            f"SL cap {float(mode_rules['maximum_stop_atr']):g} ATR · "
+            f"structural target ≥1:{float(mode_rules['minimum_target_rr']):g}"
+            if mode_rules.get("pullback_candles") is not None
+            else "Mode-specific pullback and structural-target rules"
+        )
+    )
+    confirmation_rules_line = (
+        f"Break ≥{float(mode_rules['confirmation_break_atr']):g} ATR · "
         f"SL cap {float(mode_rules['maximum_stop_atr']):g} ATR · "
-        f"structural target ≥1:{float(mode_rules['minimum_target_rr']):g}"
-        if mode_rules.get("pullback_candles") is not None
-        else "Mode-specific pullback and structural-target rules"
+        f"structural TP ≥1:{float(mode_rules['minimum_target_rr']):g}"
+        if mode_rules.get("confirmation_break_atr") is not None
+        else ""
     )
     maximum_stop_atr = float(mode_rules.get("maximum_stop_atr", 2.5))
     entry = float(getattr(a, "entry", 0.0) or 0.0)
@@ -1469,7 +1487,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     rsi_support = (
         "supports " + trend_bias
         if "RSI momentum is recovering/falling with price" in quality_checks
-        else "not confirmed"
+        else "soft/neutral; price structure leads"
     )
     setup = str(getattr(a, "price_action_setup", "") or "None detected")
     wait_reason = str(
@@ -1511,6 +1529,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "╚══════════════════════════════════╝",
         f"Mode      : {mode_display}",
         f"Mode rules: {mode_rules_line}",
+        *([f"Confirm   : {confirmation_rules_line}"] if confirmation_rules_line else []),
         f"TF        : {timeframe} only",
         f"Price     : {fmt_price(price)}  |  {data_quality}",
         f"Candle    : latest OHLCV {candle_as_of}",

@@ -74,6 +74,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 rsi=55.0,
                 previous_rsi=54.0,
                 mode_cfg=MODES["intraday"],
+                timeframe="M15",
             )
 
         self.assertEqual(result["status"], "MODERATE ENTRY")
@@ -97,6 +98,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 opens, highs, lows, closes, 110.25, 110.0, 111.5,
                 2.5, 55.0, 54.0,
                 mode_cfg=MODES["intraday"],
+                timeframe="M15",
             )
 
         self.assertEqual(result["status"], "DEVELOPING")
@@ -140,7 +142,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(analysis.price_source, "yf_futures")
         self.assertIn("futures-proxy data is context only", analysis.wait_reason)
 
-    def test_strong_rsi_disagreement_vetoes_the_entry(self):
+    def test_only_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
         swings = (
             [(20, 109.0), (32, 112.55)],
@@ -150,13 +152,43 @@ class AnalysisIntegrityTests(unittest.TestCase):
         with patch.object(engine, "_local_swings", return_value=swings):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.35, 110.0, 111.5,
-                2.5, 40.0, 42.0,
+                2.5, 34.0, 38.0,
                 mode_cfg=MODES["intraday"],
             )
 
         self.assertEqual(result["status"], "WAIT")
         self.assertEqual(result["direction"], "BUY")
         self.assertIn("disagrees", result["setup"])
+
+    def test_rsi_below_45_without_strong_disagreement_is_only_a_soft_filter(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.35, 110.0, 111.5,
+                2.5, 44.0, 43.0,
+                mode_cfg=MODES["intraday"],
+                timeframe="M15",
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertIn("does not strongly disagree", result["confirmation"])
+
+    def test_wider_pivot_radius_ignores_minor_timeframe_fluctuation(self):
+        highs = [1.0, 2.0, 3.0, 2.0, 4.0, 3.0, 2.0, 1.0]
+        lows = [-value for value in highs]
+
+        one_bar_highs, _ = engine._local_swings(highs, lows, pivot_radius=1)
+        broad_highs, _ = engine._local_swings(highs, lows, pivot_radius=2)
+
+        self.assertIn((2, 3.0), one_bar_highs)
+        self.assertNotIn((2, 3.0), broad_highs)
+        self.assertIn((4, 4.0), broad_highs)
 
     def test_neutral_rsi_does_not_add_a_second_entry_confirmation_gate(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
@@ -170,15 +202,15 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 opens, highs, lows, closes, 110.35, 110.0, 111.5,
                 2.5, 47.0, 46.0,
                 mode_cfg=MODES["intraday"],
+                timeframe="M15",
             )
 
         self.assertEqual(result["status"], "MODERATE ENTRY")
         self.assertEqual(result["direction"], "BUY")
         self.assertTrue(
-            any("no strong disagreement" in item for item in result["quality_checks"])
+            any("RSI momentum is recovering" in item for item in result["quality_checks"])
         )
-        self.assertIn("does not strongly disagree", result["confirmation"])
-        self.assertNotIn("RSI 47.0 supports momentum", result["confirmation"])
+        self.assertIn("RSI 47.0 supports momentum", result["confirmation"])
 
     def test_bounded_pivot_box_blocks_an_otherwise_valid_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
@@ -400,7 +432,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
     def test_analysis_card_shows_unconfirmed_directional_indication(self):
         analysis = MarketAnalysis(
             price=4350.0,
-            timeframe="H1",
+                timeframe="H1",
             bias="Bearish",
             trend="Bearish",
             strength="Moderate",
