@@ -47,5 +47,5 @@ packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "
 
 [userenv.shared]
 ALLOWED_USERNAME = "senpaipl9"
-BOT_OWNER_TELEGRAM_ID = "8039158711"
+BOT_OWNER_TELEGRAM_ID = "t.me/senpaipl9"
 ALLOWED_USERNAMES = "senpaipl9"
