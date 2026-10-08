@@ -411,13 +411,16 @@ MODES: Dict[str, ModeConfig] = {
         name        = "scalp",
         label       = "Scalp",
         emoji       = "⚡",
-        description = "Quick entries on M5/M15. Tight stops, fast targets. Pure momentum.",
-        scan_timeframes = ["M1", "M3", "M5", "M15"],
+        description = "Quick entries from M1 through H1, scaled to the selected chart.",
+        scan_timeframes = ["M1", "M3", "M5", "M15", "M30", "H1"],
         # M15 is the stable default for a new Scalp session. M1/M3/M5 remain
-        # available in Settings for traders who want faster execution.
+        # available for faster execution; M30/H1 use broader scaled profiles.
         preferred_timeframe = "M15",
-        confirmation_map = {"M1": "M15", "M3": "M15", "M5": "M30", "M15": "H1"},
-        context_timeframes = ["M15", "M30", "H1"],
+        confirmation_map = {
+            "M1": "M15", "M3": "M15", "M5": "M30", "M15": "H1",
+            "M30": "H1", "H1": "H4",
+        },
+        context_timeframes = ["M15", "M30", "H1", "H4"],
         min_votes           = 2,   # fire faster — scalp windows close quickly
         min_votes_kill_zone = 2,
         confidence_threshold = 70,
@@ -450,8 +453,8 @@ MODES: Dict[str, ModeConfig] = {
         trade_type_label = "Scalp",
         tip = (
             "⚡ <b>Scalp Mode active.</b>\n"
-            "Signals fire on M1, M3, M5 and M15. Stops are tight — "
-            "monitor the trade closely and be ready to exit quickly."
+            "Signals fire from M1 through H1. M30/H1 use broader structure "
+            "than the lower-timeframe scalp rules."
         ),
         risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
@@ -504,11 +507,11 @@ MODES: Dict[str, ModeConfig] = {
         name        = "swing",
         label       = "Swing",
         emoji       = "🌊",
-        description = "Multi-day setups on H4/D1/W1. Wider stops, bigger targets, fewer signals.",
-        scan_timeframes = ["H4", "D1", "W1"],
+        description = "Patient multi-day setups on H1/H4/D1 with broader structure.",
+        scan_timeframes = ["H1", "H4", "D1"],
         preferred_timeframe = "H4",
-        confirmation_map = {"H4": "D1", "D1": "W1", "W1": "MN1"},
-        context_timeframes = ["H4", "D1", "W1", "MN1"],
+        confirmation_map = {"H1": "H4", "H4": "D1", "D1": "W1"},
+        context_timeframes = ["H1", "H4", "D1", "W1"],
         min_votes           = 4,
         min_votes_kill_zone = 4,   # kill zones less relevant on H4+
         confidence_threshold = 78,
@@ -529,6 +532,7 @@ MODES: Dict[str, ModeConfig] = {
             "Williams%R": 0.05, "Supertrend": 0.12,
         },
         sl_mult_override = {
+            "H1": 1.8,
             "H4": 2.0,
             "D1": 2.2,
             "W1": 2.4,
@@ -538,7 +542,7 @@ MODES: Dict[str, ModeConfig] = {
         trade_type_label = "Swing",
         tip = (
             "🌊 <b>Swing Mode active.</b>\n"
-            "Scanning H4, D1 and W1. Wider stops, larger targets. "
+            "Scanning H1, H4 and D1. Wider stops, larger targets. "
             "Expect fewer signals — only high-quality setups fire."
         ),
         risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",

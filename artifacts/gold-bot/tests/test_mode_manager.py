@@ -33,6 +33,19 @@ class ModeManagerTests(unittest.TestCase):
         self.assertEqual(mode_manager.get_timeframe(), "M15")
         self.assertEqual(mode_manager._load_state()["timeframe"], "M15")
 
+    def test_scalp_can_select_timeframes_above_m15(self):
+        mode_manager.set_mode("scalp")
+        self.assertEqual(mode_manager.set_timeframe("H1"), "H1")
+        self.assertEqual(mode_manager.get_timeframe(), "H1")
+
+    def test_swing_can_select_h1_h4_and_d1(self):
+        mode_manager.set_mode("swing")
+        self.assertEqual(
+            mode_manager.get_mode_config().scan_timeframes,
+            ["H1", "H4", "D1"],
+        )
+        self.assertEqual(mode_manager.set_timeframe("H1"), "H1")
+
     def test_switching_mode_keeps_compatible_timeframe(self):
         mode_manager.set_mode("scalp")
         mode_manager.set_timeframe("M15")
@@ -42,7 +55,7 @@ class ModeManagerTests(unittest.TestCase):
     def test_invalid_timeframe_is_rejected(self):
         mode_manager.set_mode("scalp")
         with self.assertRaises(ValueError):
-            mode_manager.set_timeframe("H1")
+            mode_manager.set_timeframe("W1")
 
     def test_unknown_explicit_mode_does_not_fall_back_to_saved_mode(self):
         mode_manager.set_mode("intraday")

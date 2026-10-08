@@ -143,7 +143,7 @@ class ReplayTests(unittest.TestCase):
 
         data.is_simulated = False
         with self.assertRaisesRegex(ValueError, "not scanned by Scalp"):
-            backtest.replay_momentum_pullback(data, "scalp", "H1")
+            backtest.replay_momentum_pullback(data, "scalp", "W1")
 
     def test_fast_indicator_series_match_live_engine_values(self):
         data = self._data()

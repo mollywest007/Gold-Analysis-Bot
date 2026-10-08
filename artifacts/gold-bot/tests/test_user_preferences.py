@@ -58,7 +58,7 @@ class UserPreferenceTests(unittest.TestCase):
         user_preferences.set_mode(first, "scalp")
 
         self.assertEqual(user_preferences.get_mode(first), "scalp")
-        self.assertEqual(user_preferences.get_timeframe(first), "M15")
+        self.assertEqual(user_preferences.get_timeframe(first), "M30")
         self.assertEqual(user_preferences.get_mode(second), "intraday")
         self.assertEqual(user_preferences.get_timeframe(second), "H1")
 
