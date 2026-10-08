@@ -1819,19 +1819,26 @@ def _momentum_pullback_decision(
         after = ema20_series[index] - ema50_series[index]
         if before * after <= 0 and abs(before) + abs(after) > 0:
             recent_crosses += 1
+    # Small candle range alone is normal during higher-timeframe
+    # consolidation. Treat compression as chop only when paired with failed
+    # directional progress and either repeated candle reversals or EMA
+    # whipsaws; EMA alignment itself remains contextual, not directional.
+    low_progress = recent_drift < volatility * profile.chop_max_drift_atr
+    compressed = recent_range < volatility * profile.chop_minimum_range_atr
     choppy = (
         (
             alternations >= profile.chop_max_alternations
-            and recent_drift < volatility * profile.chop_max_drift_atr
+            and low_progress
+            and compressed
         )
-        or (recent_range < volatility * profile.chop_minimum_range_atr)
         or (
             recent_crosses >= 3 + max(0, profile.structure_pivot_radius - 1)
             and abs(ema20 - ema50)
             < volatility * max(
                 0.15, 0.30 - max(0, profile.structure_pivot_radius - 1) * 0.05
             )
-            and recent_drift < volatility * profile.chop_max_drift_atr
+            and low_progress
+            and compressed
         )
     )
     if choppy:

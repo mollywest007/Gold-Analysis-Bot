@@ -105,6 +105,71 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(result["direction"], "BUY")
         self.assertEqual(result["tp1"], 0.0)
 
+    def test_quiet_consolidation_alone_is_not_classified_as_chop(self):
+        size = 40
+        opens = [100.0] * size
+        closes = [100.0] * size
+        highs = [100.1] * size
+        lows = [99.9] * size
+        swings = (
+            [(20, 102.3), (30, 102.4)],
+            [(21, 97.6), (31, 97.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens,
+                highs,
+                lows,
+                closes,
+                100.0,
+                100.0,
+                99.0,
+                1.0,
+                55.0,
+                54.0,
+                mode_cfg=MODES["intraday"],
+                ema20_history=[100.0] * size,
+                ema50_history=[99.0] * size,
+                timeframe="H1",
+            )
+
+        self.assertNotEqual(result["skip_reason"], "Ranging/choppy market")
+
+    def test_directionless_alternating_candles_with_low_progress_are_chop(self):
+        size = 40
+        opens = [100.0] * size
+        closes = [100.0] * size
+        highs = [100.1] * size
+        lows = [99.9] * size
+        for index in range(size - 8, size):
+            closes[index] = 100.03 if index % 2 == 0 else 99.97
+            opens[index] = 99.97 if index % 2 == 0 else 100.03
+        swings = (
+            [(20, 100.3), (30, 100.4)],
+            [(21, 99.6), (31, 99.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens,
+                highs,
+                lows,
+                closes,
+                closes[-1],
+                100.0,
+                99.0,
+                1.0,
+                55.0,
+                54.0,
+                mode_cfg=MODES["intraday"],
+                ema20_history=[100.0] * size,
+                ema50_history=[99.0] * size,
+                timeframe="H1",
+            )
+
+        self.assertEqual(result["skip_reason"], "Ranging/choppy market")
+
     def test_futures_proxy_context_cannot_create_an_actionable_entry(self):
         closes = [100.0 + index * 0.1 for index in range(40)]
         data = market_data.OHLCVData(
