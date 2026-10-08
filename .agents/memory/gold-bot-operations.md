@@ -9,6 +9,12 @@ Telegram long polling permits only one active `getUpdates` consumer for a bot to
 
 **How to apply:** Run exactly one polling workflow for the token, and treat repeated conflict errors as an operational duplicate-instance issue.
 
+Workflow restarts or workflow reconfiguration can leave an older bot process alive alongside the new one. Check the local process tree before concluding that a Telegram polling conflict comes from an external host.
+
+**Why:** A second launcher remained active in the workspace after a later workflow start, creating competing `getUpdates` requests.
+
+**How to apply:** After a restart or workflow change, verify that only one bot process tree remains. If conflicts continue after removing local duplicates, check other Repls, deployments, and computers using the same token.
+
 HTTP client debug logs must remain below INFO because Telegram bot tokens and Google API keys may be included in request URLs.
 
 **Why:** Request URLs are emitted in verbose HTTP logs, which can expose credentials in workflow output.
