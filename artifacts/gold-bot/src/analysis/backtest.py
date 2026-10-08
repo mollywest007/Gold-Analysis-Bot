@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -11,7 +12,16 @@ from src.analysis.market_data import (
     fetch_historical_ohlcv,
 )
 from src.analysis.modes import MODES, resolve_momentum_pullback_profile
-from src.trade_tracker import _DEFAULT_MAX_TRADE_AGE, _TF_MAX_AGE
+
+
+STANDARD_BACKTESTS = (
+    ("scalp", "M5"),
+    ("scalp", "M15"),
+    ("intraday", "M15"),
+    ("intraday", "H1"),
+    ("swing", "H4"),
+    ("swing", "D1"),
+)
 
 
 def _timeframe_seconds(timeframe: str) -> int:
@@ -190,11 +200,12 @@ def replay_momentum_pullback(
         raise ValueError("Not enough completed candles for this mode's lookback.")
 
     expected_bar_seconds = _timeframe_seconds(timeframe)
-    max_age_seconds = _TF_MAX_AGE.get(timeframe, _DEFAULT_MAX_TRADE_AGE)
+    max_age_seconds = profile.expected_holding_bars * expected_bar_seconds
 
     trades = []
     generated_signals = 0
     skipped_stale_entries = 0
+    skipped_reason_counts = Counter()
     expired = 0
     entry_delays_minutes = []
     index = first_signal_index
@@ -228,6 +239,9 @@ def replay_momentum_pullback(
             timeframe=timeframe,
         )
         if decision.get("status") != "MODERATE ENTRY":
+            skipped_reason_counts[
+                decision.get("skip_reason") or "Insufficient directional structure"
+            ] += 1
             index += 1
             continue
 
@@ -253,14 +267,24 @@ def replay_momentum_pullback(
             direction, next_open, entry, stop, tp1, atr
         ):
             skipped_stale_entries += 1
+            skipped_reason_counts["Setup already extended"] += 1
             index += 1
             continue
+        entry = next_open
+        risk_per_unit = abs(entry - stop)
+        if risk_per_unit <= 0:
+            skipped_stale_entries += 1
+            skipped_reason_counts["Invalid SL structure"] += 1
+            index += 1
+            continue
+        actual_planned_rr = abs(tp1 - entry) / risk_per_unit
         entry_delays_minutes.append(entry_delay_minutes)
 
         expiry_timestamp = float(data.timestamps[index + 1]) + max_age_seconds
         outcome = None
         exit_index = None
         expired_at_index = None
+        ambiguous_same_candle = False
         for future_index in range(index + 1, len(closes)):
             if float(data.timestamps[future_index]) >= expiry_timestamp:
                 expired_at_index = future_index
@@ -280,6 +304,7 @@ def replay_momentum_pullback(
             if stop_hit:
                 outcome = "SL"
                 exit_index = future_index
+                ambiguous_same_candle = target_hit
                 break
             if target_hit:
                 outcome = "TP1"
@@ -287,17 +312,32 @@ def replay_momentum_pullback(
                 break
 
         if outcome:
+            exit_price = stop if outcome == "SL" else tp1
+            realized_r = (
+                (entry - exit_price) / risk_per_unit
+                if direction == "SELL"
+                else (exit_price - entry) / risk_per_unit
+            )
             trades.append({
                 "direction": direction,
                 "entry": entry,
                 "sl": stop,
                 "tp1": tp1,
-                "planned_rr": float(decision.get("rr") or 0.0),
+                "planned_rr": actual_planned_rr,
+                "realized_r": realized_r,
                 "setup_type": (
                     decision.get("setup_type") or "Other/unspecified pullback"
                 ),
                 "outcome": outcome,
+                "loss_reason": (
+                    "Same-candle SL/TP ambiguity counted as SL"
+                    if outcome == "SL" and ambiguous_same_candle
+                    else "Structural SL reached before TP1"
+                    if outcome == "SL"
+                    else ""
+                ),
                 "bars_to_event": exit_index - index,
+                "entry_delay_candles": 1,
                 "entry_delay_minutes": entry_delay_minutes,
                 "signal_timestamp": float(data.timestamps[index]),
                 "exit_timestamp": float(data.timestamps[exit_index]),
@@ -316,7 +356,20 @@ def replay_momentum_pullback(
     losses = sum(trade["outcome"] == "SL" for trade in trades)
     total_closed = wins + losses
     planned_rrs = [trade["planned_rr"] for trade in trades]
+    realized_rs = [trade["realized_r"] for trade in trades]
     bars_to_events = [trade["bars_to_event"] for trade in trades]
+    loss_reason_counts = Counter(
+        trade["loss_reason"] for trade in trades if trade["outcome"] == "SL"
+    )
+    cumulative_r = 0.0
+    peak_r = 0.0
+    maximum_drawdown_r = 0.0
+    for trade_r in realized_rs:
+        cumulative_r += trade_r
+        peak_r = max(peak_r, cumulative_r)
+        maximum_drawdown_r = max(
+            maximum_drawdown_r, peak_r - cumulative_r
+        )
     longest_losing_streak = 0
     current_losing_streak = 0
     for trade in trades:
@@ -368,12 +421,32 @@ def replay_momentum_pullback(
         "expired": expired,
         "unresolved": max(0, generated_signals - skipped_stale_entries - total_closed - expired),
         "first_target_rate": round(wins / total_closed * 100, 1) if total_closed else None,
+        "win_rate": round(wins / total_closed * 100, 1) if total_closed else None,
+        "take_profit_frequency": (
+            round(wins / total_closed * 100, 1) if total_closed else None
+        ),
+        "stop_loss_frequency": (
+            round(losses / total_closed * 100, 1) if total_closed else None
+        ),
         "average_planned_rr": (
             round(sum(planned_rrs) / len(planned_rrs), 2) if planned_rrs else None
         ),
+        "average_r_per_trade": (
+            round(sum(realized_rs) / len(realized_rs), 2)
+            if realized_rs else None
+        ),
+        "maximum_drawdown_r": round(maximum_drawdown_r, 2),
         "average_bars_to_event": (
             round(sum(bars_to_events) / len(bars_to_events), 1)
             if bars_to_events else None
+        ),
+        "average_entry_delay_candles": (
+            round(
+                sum(trade["entry_delay_candles"] for trade in trades)
+                / len(trades),
+                1,
+            )
+            if trades else None
         ),
         "average_entry_delay_minutes": (
             round(sum(entry_delays_minutes) / len(entry_delays_minutes), 1)
@@ -382,7 +455,25 @@ def replay_momentum_pullback(
         "loss_setup_types": loss_setup_types,
         "setup_type_stats": setup_type_stats,
         "most_loss_setup_type": most_loss_setup_type,
+        "most_common_losing_trade_reason": (
+            min(
+                loss_reason_counts,
+                key=lambda reason: (-loss_reason_counts[reason], reason),
+            )
+            if loss_reason_counts
+            else None
+        ),
         "longest_losing_streak": longest_losing_streak,
+        "skipped_setups": sum(skipped_reason_counts.values()),
+        "skipped_reason_counts": dict(skipped_reason_counts),
+        "most_common_skip_reason": (
+            min(
+                skipped_reason_counts,
+                key=lambda reason: (-skipped_reason_counts[reason], reason),
+            )
+            if skipped_reason_counts
+            else None
+        ),
         "sample_sufficient": total_closed >= 50,
     }
 
@@ -416,18 +507,21 @@ def format_backtest_report(report: Dict) -> str:
         )
     if report["closed_trades"]:
         outcomes = (
-            f"Closed first-touch outcomes: {report['closed_trades']} — "
+            f"Trades: {report['closed_trades']} | "
+            f"Win rate: {report['win_rate']:.1f}% | "
+            f"TP1-first rate: {report['first_target_rate']:.1f}% | "
             f"TP1 first: {report['tp1_first']}, SL first: {report['sl_first']}\n"
+            f"TP frequency: {report['take_profit_frequency']:.1f}% | "
+            f"SL frequency: {report['stop_loss_frequency']:.1f}%\n"
         )
         metrics = (
-            f"TP1-first rate: {report['first_target_rate']:.1f}% | "
-            f"Average planned R:R: {report['average_planned_rr']:.2f}R\n"
-            f"Average setup-to-entry delay: "
-            f"{report['average_entry_delay_minutes']:.1f} minutes | "
-            f"Average bars to TP1/SL: "
-            f"{report['average_bars_to_event']:.1f} | "
-            f"Longest consecutive SLs: "
-            f"{report['longest_losing_streak']}\n"
+            f"Avg planned R:R: 1:{report['average_planned_rr']:.2f} | "
+            f"Avg realized: {report['average_r_per_trade']:+.2f}R/trade | "
+            f"Max drawdown: {report['maximum_drawdown_r']:.2f}R\n"
+            f"Longest SL streak: {report['longest_losing_streak']} | "
+            f"Avg time to entry: {report['average_entry_delay_candles']:.1f} "
+            f"candle(s) / {report['average_entry_delay_minutes']:.1f} min | "
+            f"Avg candles to TP/SL: {report['average_bars_to_event']:.1f}\n"
         )
         loss_setup = (
             f"{report['most_loss_setup_type']} "
@@ -440,17 +534,21 @@ def format_backtest_report(report: Dict) -> str:
             for label, count in sorted(report["loss_setup_types"].items())
         ) or "none"
         loss_setup_line = (
-            f"Most SL-loss setup type: {loss_setup}\n"
-            f"SL-first losses by pullback reference: {all_loss_types}\n"
+            f"Most common losing-trade reason: "
+            f"{report['most_common_losing_trade_reason'] or 'none'}\n"
+            f"Most common losing setup: {loss_setup} | "
+            f"All losing setup types: {all_loss_types}\n"
         )
         coverage = (
             f"Expired without target/stop: {report['expired']} | "
             f"Unresolved at history end: {report['unresolved']}\n"
         )
     else:
-        outcomes = "Closed first-touch outcomes: 0\n"
-        metrics = "Win rate, average R:R, and timing metrics: unavailable.\n"
-        loss_setup_line = "SL loss setup: no closed losses.\n"
+        outcomes = "Trades: 0 | Win rate: unavailable | TP: 0 | SL: 0\n"
+        metrics = (
+            "Average R:R, realized R, drawdown, streaks, and timing: unavailable.\n"
+        )
+        loss_setup_line = "Losing-trade reason and setup type: no closed losses.\n"
         coverage = (
             f"Expired without target/stop: {report['expired']} | "
             f"Unresolved at history end: {report['unresolved']}\n"
@@ -463,15 +561,30 @@ def format_backtest_report(report: Dict) -> str:
         source_label = f"{source} ({symbol})"
     else:
         source_label = source
+    skip_reason = report.get("most_common_skip_reason") or "none"
     return (
         f"<b>Historical replay — {report['mode_label']} / {report['timeframe']}</b>\n"
         f"Historical source: {source_label}.\n"
         f"Real completed candles: {report['candles']:,} ({start} to {end} UTC)\n"
         f"Generated setups: {report['generated_signals']} "
         f"(stale next-open entries skipped: {report['skipped_stale_entries']})\n"
+        f"Skipped setup checks: {report['skipped_setups']} | "
+        f"Most common skip: {skip_reason}\n"
         f"{outcomes}{metrics}{loss_setup_line}{coverage}"
         f"<i>{sample_note}</i>\n"
         "<i>First-touch replay only: same-candle SL/TP counts as SL. "
+        "Skipped checks are per candle, not unique opportunities. "
         "Spread, fees, slippage, and partial-position sizing are not modeled; "
         "this is not net P&amp;L.</i>"
+    )
+
+
+def format_unavailable_backtest(mode: str, timeframe: str, reason: str) -> str:
+    """Report one unavailable profile without suppressing the other replays."""
+    mode_cfg = MODES.get(mode)
+    label = mode_cfg.label if mode_cfg is not None else mode.title()
+    safe_reason = str(reason or "No adequate completed history was returned.")
+    return (
+        f"<b>Historical replay — {label} / {timeframe}</b>\n"
+        f"Unavailable: {safe_reason}. No simulated candles were substituted."
     )

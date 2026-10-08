@@ -1438,6 +1438,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     atr = float(getattr(a, "atr", 0.0) or 0.0)
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
+    skipped_setup = report.get("skipped_setup") or {}
     quality_checks = report.get("quality_checks", []) or []
     has_timeframe_profile = (
         mode_rules.get("minimum_pullback_depth_atr") is not None
@@ -1448,6 +1449,11 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"depth {float(mode_rules['minimum_pullback_depth_atr']):g}–"
         f"{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
         f"pivot ±{int(mode_rules['structure_pivot_radius'])} bars"
+        + (
+            f" · hold ≤{int(mode_rules['expected_holding_bars'])} bars"
+            if mode_rules.get("expected_holding_bars") is not None
+            else ""
+        )
         if mode_rules.get("pullback_candles") is not None and has_timeframe_profile
         else (
             f"{int(mode_rules['pullback_candles'])} pullback bars · "
@@ -1549,7 +1555,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Structure : {structure} | EMA20 {fmt_price(ema20)} is pullback context",
         f"Price act.: {setup}",
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
-        f"Risk      : ATR14 {fmt_price(atr)} | pullback-swing stop, {maximum_stop_atr:g} ATR max",
+        f"Risk      : ATR14 {fmt_price(atr)} sanity | structural swing SL, {maximum_stop_atr:g} ATR max",
         f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
         f"Setup checks: {len(quality_checks)} confirmed",
         "──────────────────────────────────",
@@ -1566,6 +1572,22 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "──────────────────────────────────",
         "CURRENT CONFIRMATION",
         f"{str(getattr(a, 'current_confirmation', '') or wait_reason)[:220]}",
+        *(
+            [
+                "──────────────────────────────────",
+                "SKIPPED SETUP",
+                (
+                    f"{skipped_setup.get('mode', 'MODE')} / "
+                    f"{skipped_setup.get('timeframe', timeframe)} / "
+                    f"{skipped_setup.get('direction', 'NEUTRAL')}"
+                ),
+                f"Type: {str(skipped_setup.get('setup_type', 'Unclassified'))[:100]}",
+                f"PRIMARY REASON: {str(skipped_setup.get('skip_reason', 'Insufficient directional structure'))[:100]}",
+                f"{str(skipped_setup.get('detail', 'No entry conditions are complete.'))[:160]}",
+            ]
+            if skipped_setup
+            else []
+        ),
         "──────────────────────────────────",
         "DECISION",
         f"Alert : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",

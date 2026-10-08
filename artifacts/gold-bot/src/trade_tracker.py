@@ -30,6 +30,18 @@ _TF_MAX_AGE = {
     "MN1": 540 * 24 * 3600, # 18 months
 }
 _DEFAULT_MAX_TRADE_AGE = 5 * 24 * 3600
+_TIMEFRAME_SECONDS = {
+    "M1": 60,
+    "M3": 3 * 60,
+    "M5": 5 * 60,
+    "M15": 15 * 60,
+    "M30": 30 * 60,
+    "H1": 60 * 60,
+    "H4": 4 * 60 * 60,
+    "D1": 24 * 60 * 60,
+    "W1": 7 * 24 * 60 * 60,
+    "MN1": 30 * 24 * 60 * 60,
+}
 _TERMINAL_STATUSES = {"sl_hit", "tp1_sl_hit", "tp1_final_hit", "tp3_hit"}
 _POST_TP_REANALYSIS_SECONDS = 10 * 60
 # XAU/USD cannot move tens of percent between two 15-second scans. This guard
@@ -208,6 +220,25 @@ def open_trade(
             )
             return False
 
+    expected_holding_bars = None
+    maximum_age_seconds = None
+    try:
+        from src.analysis.modes import MODES, resolve_momentum_pullback_profile
+
+        mode_cfg = MODES.get(str(mode or "").lower())
+        timeframe_seconds = _TIMEFRAME_SECONDS.get(timeframe)
+        if mode_cfg is not None and timeframe_seconds is not None:
+            profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
+            expected_holding_bars = profile.expected_holding_bars
+            maximum_age_seconds = expected_holding_bars * timeframe_seconds
+    except (ImportError, ValueError):
+        logger.warning(
+            "Could not resolve mode/timeframe holding window for %s/%s; "
+            "using the legacy timeframe expiry.",
+            mode,
+            timeframe,
+        )
+
     trade = {
         "id":          uuid4().hex,
         "account_id":  account_key,
@@ -224,6 +255,8 @@ def open_trade(
         "tp3":         tp3,
         "timeframe":   timeframe,
         "mode":        mode or "unknown",
+        "expected_holding_bars": expected_holding_bars,
+        "maximum_age_seconds": maximum_age_seconds,
         "confidence":  confidence,
         "rr_ratio":    rr_ratio,
         "opened_at":   time.time(),
@@ -353,7 +386,15 @@ def check_trades(current_price: float, recent_high: float = None,
             continue
 
         age = time.time() - t.get("opened_at", 0)
-        max_age = _TF_MAX_AGE.get(t.get("timeframe"), _DEFAULT_MAX_TRADE_AGE)
+        try:
+            stored_max_age = float(t.get("maximum_age_seconds") or 0)
+        except (TypeError, ValueError):
+            stored_max_age = 0.0
+        max_age = (
+            stored_max_age
+            if stored_max_age > 0
+            else _TF_MAX_AGE.get(t.get("timeframe"), _DEFAULT_MAX_TRADE_AGE)
+        )
         if age > max_age:
             t["status"] = "expired"
             changed = True

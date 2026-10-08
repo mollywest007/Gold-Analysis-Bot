@@ -1868,14 +1868,81 @@ def _momentum_pullback_decision(
             "skip_detail": "Repeated selected-timeframe support and resistance are boxing price.",
         }
 
-    # The selected mode controls the completed pre-break pullback window; the
-    # newest candle must close beyond their minor swing in the trend direction.
+    # Find a recent oversized break of a confirmed structural pivot. Its next
+    # controlled retest can qualify on the retest candle itself, avoiding both
+    # an entry at the breakout extreme and a second, lengthy confirmation chain.
+    oversized_structure_break = None
+    recent_start = max(0, len(closes) - profile.pullback_candles - 3)
+    for candidate in range(recent_start, len(closes) - 1):
+        candle_range = highs[candidate] - lows[candidate]
+        candle_body = abs(closes[candidate] - opens[candidate])
+        oversized = (
+            candle_range > volatility * profile.maximum_breakout_range_atr
+            or candle_body > volatility * profile.maximum_breakout_body_atr
+        )
+        if not oversized:
+            continue
+        if bullish and closes[candidate] > opens[candidate]:
+            earlier_levels = [
+                level for index, level in swing_highs if index < candidate
+            ]
+            reference = earlier_levels[-1] if earlier_levels else None
+            crossed = (
+                reference is not None
+                and closes[candidate]
+                > reference + volatility * profile.confirmation_break_atr
+            )
+        elif bearish and closes[candidate] < opens[candidate]:
+            earlier_levels = [
+                level for index, level in swing_lows if index < candidate
+            ]
+            reference = earlier_levels[-1] if earlier_levels else None
+            crossed = (
+                reference is not None
+                and closes[candidate]
+                < reference - volatility * profile.confirmation_break_atr
+            )
+        else:
+            crossed = False
+            reference = None
+        if crossed:
+            oversized_structure_break = (candidate, float(reference))
+
+    # Ordinarily, the newest candle breaks the minor swing formed by the
+    # selected mode/timeframe's pullback window.
     pullback_start = max(
         profile.structure_pivot_radius + 1,
         len(closes) - profile.pullback_candles - 1,
     )
     pullback_end = len(closes) - 1
-    pullback_indices = list(range(pullback_start, pullback_end))
+    prior_pullback_indices = list(range(pullback_start, pullback_end))
+    retest_indices = (
+        [
+            index for index in prior_pullback_indices
+            if index > oversized_structure_break[0]
+        ]
+        if oversized_structure_break is not None
+        else []
+    )
+    pullback_indices = (
+        [*retest_indices, len(closes) - 1]
+        if oversized_structure_break is not None
+        else prior_pullback_indices
+    )
+    if oversized_structure_break is not None:
+        pullback_indices = [
+            index for index in pullback_indices
+            if index != oversized_structure_break[0]
+        ]
+    if not pullback_indices:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Waiting for a controlled retest after the oversized break",
+            "confirmation": "The breakout is extended; wait for a mode-appropriate retest.",
+            "skip_reason": "Breakout too extended",
+            "skip_detail": "No completed retest candle is available yet.",
+        }
     pullback_low = min(lows[index] for index in pullback_indices)
     pullback_high = max(highs[index] for index in pullback_indices)
     impulse_start = max(
@@ -1883,6 +1950,10 @@ def _momentum_pullback_decision(
     )
     impulse_high = max(highs[impulse_start:pullback_start])
     impulse_low = min(lows[impulse_start:pullback_start])
+    if oversized_structure_break is not None:
+        breakout_index = oversized_structure_break[0]
+        impulse_high = highs[breakout_index]
+        impulse_low = lows[breakout_index]
     pullback_depth = impulse_high - pullback_low if bullish else pullback_high - impulse_low
     controlled = (
         volatility * profile.minimum_pullback_depth_atr
@@ -1898,6 +1969,9 @@ def _momentum_pullback_decision(
         closes[index] < closes[index - 1] if bullish
         else closes[index] > closes[index - 1]
         for index in pullback_indices
+    ) or (
+        oversized_structure_break is not None
+        and pullback_depth >= volatility * profile.minimum_pullback_depth_atr
     )
 
     # A pullback may test EMA20, the latest protected swing, or a former
@@ -1920,6 +1994,10 @@ def _momentum_pullback_decision(
             (last_low, "Protected swing retest"),
             (prior_breakout, "Prior breakout retest"),
         ]
+        if oversized_structure_break is not None:
+            support_references.append(
+                (oversized_structure_break[1], "Oversized breakout retest")
+            )
         nearest_support, setup_type = min(
             support_references, key=lambda item: abs(pullback_low - item[0])
         )
@@ -1938,7 +2016,20 @@ def _momentum_pullback_decision(
             <= volatility * profile.level_tolerance_atr
             for index in pullback_indices
         )
-        minor_level = max(highs[pullback_start:pullback_end])
+        minor_indices = (
+            retest_indices
+            if oversized_structure_break is not None
+            else prior_pullback_indices
+        )
+        minor_level = (
+            max(highs[index] for index in minor_indices)
+            if minor_indices
+            else (
+                oversized_structure_break[1]
+                if oversized_structure_break is not None
+                else max(highs[pullback_start:pullback_end])
+            )
+        )
         minor_break = (
             closes[-1]
             > minor_level + volatility * profile.confirmation_break_atr
@@ -1950,6 +2041,10 @@ def _momentum_pullback_decision(
             (last_high, "Protected swing retest"),
             (prior_breakdown, "Prior breakdown retest"),
         ]
+        if oversized_structure_break is not None:
+            resistance_references.append(
+                (oversized_structure_break[1], "Oversized breakdown retest")
+            )
         nearest_support, setup_type = min(
             resistance_references, key=lambda item: abs(pullback_high - item[0])
         )
@@ -1968,7 +2063,20 @@ def _momentum_pullback_decision(
             <= volatility * profile.level_tolerance_atr
             for index in pullback_indices
         )
-        minor_level = min(lows[pullback_start:pullback_end])
+        minor_indices = (
+            retest_indices
+            if oversized_structure_break is not None
+            else prior_pullback_indices
+        )
+        minor_level = (
+            min(lows[index] for index in minor_indices)
+            if minor_indices
+            else (
+                oversized_structure_break[1]
+                if oversized_structure_break is not None
+                else min(lows[pullback_start:pullback_end])
+            )
+        )
         minor_break = (
             closes[-1]
             < minor_level - volatility * profile.confirmation_break_atr
@@ -1976,18 +2084,42 @@ def _momentum_pullback_decision(
 
     breakout_range = highs[-1] - lows[-1]
     breakout_body = abs(closes[-1] - opens[-1])
-    extended = (
+    current_breakout_oversized = (
         breakout_range > volatility * profile.maximum_breakout_range_atr
         or breakout_body > volatility * profile.maximum_breakout_body_atr
-        or abs(price - ema20) > volatility * profile.maximum_ema_distance_atr
+    )
+    retest_is_controlled = (
+        oversized_structure_break is not None
+        and controlled
+        and structure_holds
+        and had_counter_move
+        and support_held
+    )
+    extended = current_breakout_oversized or (
+        abs(price - ema20) > volatility * profile.maximum_ema_distance_atr
+        and not retest_is_controlled
     )
     if not (controlled and structure_holds and had_counter_move and support_held):
+        pullback_destroyed = (
+            not structure_holds
+            or pullback_depth > volatility * profile.maximum_pullback_depth_atr
+        )
         return {
             **empty,
             "direction": direction,
             "setup": "Waiting for a controlled pullback to hold support/resistance",
             "confirmation": "Direction is clear, but the pullback is missing, too deep, or not holding a nearby level.",
             "quality_checks": checks,
+            "skip_reason": (
+                "Pullback destroyed structure"
+                if pullback_destroyed
+                else "No valid rejection"
+            ),
+            "skip_detail": (
+                "The pullback exceeded its structural depth or invalidated the protected swing."
+                if pullback_destroyed
+                else "Waiting for a controlled touch and hold at a meaningful area."
+            ),
         }
     checks.append("Controlled pullback held nearby support/resistance")
     if not rejection or not minor_break:
@@ -2001,6 +2133,10 @@ def _momentum_pullback_decision(
                 f"{'high' if bullish else 'low'}."
             ),
             "quality_checks": checks,
+            "skip_reason": "No valid rejection" if not rejection else "No structure break",
+            "skip_detail": (
+                "A simple rejection and one mode/timeframe-appropriate swing break are sufficient."
+            ),
         }
     checks.append("Rejection and minor structure break confirmed")
 
@@ -2009,22 +2145,40 @@ def _momentum_pullback_decision(
             **empty,
             "status": "MISSED",
             "direction": direction,
-            "setup": "Confirmed move is extended; wait for another retest",
+            "setup": "Breakout is extended; wait for a controlled retest",
             "confirmation": "The break candle or distance from EMA20 is too extended to chase.",
             "quality_checks": checks,
+            "skip_reason": (
+                "Breakout too extended"
+                if current_breakout_oversized
+                else "Setup already extended"
+            ),
+            "skip_detail": "Wait for the selected mode/timeframe's retest window; do not enter the extreme.",
         }
 
     entry = float(price)
     swing_extreme = pullback_low if bullish else pullback_high
-    stop_buffer = max(
-        volatility * profile.stop_buffer_atr, entry * 0.00002, 0.02
-    )
+    # The stop stays beyond the actual retest swing; ATR does not widen it.
+    stop_buffer = max(entry * 0.00002, 0.02)
     minimum_noise_distance = volatility * profile.minimum_stop_distance_atr
     if bullish:
-        stop = min(swing_extreme - stop_buffer, entry - minimum_noise_distance)
+        stop = swing_extreme - stop_buffer
     else:
-        stop = max(swing_extreme + stop_buffer, entry + minimum_noise_distance)
+        stop = swing_extreme + stop_buffer
     risk = abs(entry - stop)
+    if risk < minimum_noise_distance:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Structural stop is too tight for current volatility",
+            "confirmation": (
+                "The pullback-swing stop is inside the volatility sanity floor; "
+                "skip rather than widening it away from structure."
+            ),
+            "quality_checks": checks,
+            "skip_reason": "Invalid SL structure",
+            "skip_detail": "The structural stop is unrealistically tight for current ATR14.",
+        }
     if risk > volatility * profile.maximum_stop_distance_atr:
         return {
             **empty,
@@ -2036,6 +2190,8 @@ def _momentum_pullback_decision(
                 "of widening or compressing the stop."
             ),
             "quality_checks": checks,
+            "skip_reason": "Invalid SL structure",
+            "skip_detail": "The selected-timeframe structural swing requires excessive risk.",
         }
 
     tp1, tp2, tp3, target_issue = _structure_targets(
@@ -2046,23 +2202,30 @@ def _momentum_pullback_decision(
         swing_highs,
         swing_lows,
         target_buffer_atr=profile.target_buffer_atr,
-        minimum_rr=mode_cfg.min_rr_ratio,
+        minimum_rr=profile.minimum_target_rr,
         minimum_room_atr=profile.minimum_target_room_atr,
     )
     if target_issue:
+        strong_opposition = "too little room" in target_issue.lower()
         return {
             **empty,
             "direction": direction,
             "setup": "Insufficient room to opposing structure",
             "confirmation": target_issue,
             "quality_checks": checks,
+            "skip_reason": (
+                "Strong opposing resistance/support"
+                if strong_opposition
+                else "Insufficient TP room"
+            ),
+            "skip_detail": target_issue,
         }
 
     checks.extend([
         "Stop is beyond the pullback swing with an ATR noise buffer",
         (
             "Nearest structural target offers at least "
-            f"{mode_cfg.min_rr_ratio:g}R of clear room"
+            f"{profile.minimum_target_rr:g}R of clear room"
         ),
     ])
     rr = round(abs(tp1 - entry) / risk, 2)
@@ -2095,6 +2258,8 @@ def _momentum_pullback_decision(
         "rr": rr,
         "setup_type": setup_type,
         "quality_checks": checks,
+        "skip_reason": "",
+        "skip_detail": "",
     }
 
 
@@ -2172,6 +2337,32 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             "an actionable plan; futures-proxy data is context only. "
             + wait_reason
         )
+    skip_reason = str(decision.get("skip_reason") or "")
+    skip_detail = str(decision.get("skip_detail") or decision["confirmation"])
+    if setup_status != "MODERATE ENTRY" and (
+        data.is_simulated or not spot_context_usable
+    ):
+        skip_reason = "Invalid market data"
+        skip_detail = (
+            "A valid live XAU/USD spot price and spot-normalized candles are "
+            "required before an entry can be issued."
+        )
+    skipped_setup = (
+        {
+            "mode": mode_cfg.name.upper(),
+            "timeframe": timeframe,
+            "direction": direction if direction in ("BUY", "SELL") else "NEUTRAL",
+            "setup_type": (
+                decision.get("setup_type")
+                or decision.get("setup")
+                or "Unclassified"
+            ),
+            "skip_reason": skip_reason or "Insufficient directional structure",
+            "detail": skip_detail,
+        }
+        if action not in ("BUY", "SELL")
+        else None
+    )
     confidence = (
         78 if setup_status == "MODERATE ENTRY"
         else 68 if setup_status == "MISSED"
@@ -2211,18 +2402,23 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "signal_status": signal_status,
         "setup_status": setup_status,
         "current_confirmation": wait_reason,
+        "skipped_setup": skipped_setup,
         "quality_checks": decision["quality_checks"],
         "mode_rules": {
             "selected_timeframe": timeframe,
+            "expected_holding_bars": profile.expected_holding_bars,
             "pullback_candles": profile.pullback_candles,
             "minimum_pullback_depth_atr": profile.minimum_pullback_depth_atr,
             "maximum_pullback_depth_atr": profile.maximum_pullback_depth_atr,
-            "minimum_target_rr": mode_cfg.min_rr_ratio,
+            "minimum_target_rr": profile.minimum_target_rr,
             "maximum_stop_atr": profile.maximum_stop_distance_atr,
             "structure_pivot_radius": profile.structure_pivot_radius,
             "structure_lookback_candles": profile.structure_lookback_candles,
             "confirmation_break_atr": profile.confirmation_break_atr,
             "maximum_breakout_range_atr": profile.maximum_breakout_range_atr,
+            "chop_lookback_candles": profile.chop_lookback_candles,
+            "chop_minimum_range_atr": profile.chop_minimum_range_atr,
+            "range_trap_minimum_touches": profile.range_trap_minimum_touches,
         },
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,

@@ -118,6 +118,10 @@ class ChartAnalysisResult:
 
     raw: dict = field(default_factory=dict, repr=False)
     analysis_mode: str = "intraday"
+    direction: str = "NEUTRAL"
+    setup_type: str = ""
+    skip_reason: str = ""
+    skip_detail: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,11 +215,10 @@ but do not turn a fixed confluence count into a mechanical entry gate:
 - Rejection and minor-swing close that complete the entry sequence
 - Visible volume or momentum behavior as supporting context
 
-Do not wait for multiple confirmations or higher-timeframe alignment. Use only
-the selected mode's fast momentum-pullback sequence and ONE strong price-action
-confirmation: a controlled pullback, rejection at a nearby level, and a close
-beyond the latest minor swing. Indicator alignment and other timeframes are
-context only; they are not additional entry gates.
+Entry speed is relative to the selected mode and timeframe. Use ONE strong
+price-action sequence: a controlled pullback, rejection at a nearby level, and
+a close beyond the relevant minor swing. Do not force globally fast behavior,
+add extra indicators, or require higher-timeframe alignment.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 7 — TRADE LEVELS & DIRECT ENTRY
@@ -234,14 +237,31 @@ Before using MODERATE ENTRY, verify the selected mode's local swing, controlled
 pullback, nearby-level rejection, and minor-swing close are visible. One strong
 price-action sequence is enough; do not wait for extra indicators or timeframes.
 If the pullback or rejection is still forming, use DEVELOPING. If the sequence
-is complete but price is extended, use MISSED and do not chase. If screenshot
-quality prevents reliable price or structure reading, use WAIT.
+is complete but price is extended, use MISSED and wait for a mode-appropriate
+retest. If screenshot quality prevents reliable price or structure reading, use
+WAIT and record insufficient directional structure.
+
+Whenever setup_status is WAIT, DEVELOPING, MISSED, or INVALID, record a primary
+skip_reason from this exact list: Insufficient TP room; Strong opposing
+resistance/support; Ranging/choppy market; Pullback destroyed structure; RSI
+strongly disagrees; Breakout too extended; Invalid SL structure; Insufficient
+directional structure; No valid rejection; No structure break; Setup already
+extended. Also record the active mode, chart timeframe, direction, setup type,
+and a short skip_detail. Never return a bare WAIT without its reason.
 
 • Entry: current price after the selected timeframe's pullback rejection and minor swing break
-• Stop Loss: beyond the pullback swing with the active mode's buffer; never widen a
-  stop to force a trade. Reject the setup if structural risk exceeds 2.5 ATR.
-• TP1: the nearest real opposing swing/liquidity level, with the active mode's
-  minimum R:R and clearance. If it fails either test, use WAIT.
+• Oversized breakout: do not enter its extreme; wait for one controlled retest
+  appropriate to mode/timeframe. Enter promptly after a valid scalp retest;
+  Intraday/Swing may wait longer for a meaningful retest. No second long sequence.
+• Chop: require repeated alternation/compression and weak progress, or repeatedly
+  tested nearby boundaries. Do not call ordinary higher-timeframe consolidation
+  chop based only on several sideways candles.
+• Stop Loss: BUY below the relevant pullback swing low; SELL above its swing
+  high. ATR14 is only a volatility sanity check. If the structural stop is too
+  tight or wider than the profile cap, skip; never widen it away from structure.
+• TP1: a real opposing swing/liquidity level on this chart, with at least 1.5R
+  realistic room. If opposing structure blocks it, use WAIT rather than invent
+  or extend a target.
 • TP2 / TP3: only farther, distinct opposing structural levels visible on this chart.
   Never invent measured-move, higher-timeframe, or fixed-R targets.
 • Invalidation: the specific candle CLOSE that definitively cancels the setup thesis
@@ -294,7 +314,12 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "ltf_trend":            "BULLISH" | "BEARISH" | "NEUTRAL",
   "trend":                "UPTREND" | "DOWNTREND" | "SIDEWAYS",
   "market_structure":     "HH_HL" | "LH_LL" | "RANGING" | "TRANSITION",
+  "mode":                 "<active selected mode>",
   "timeframe":            "<read from chart label, e.g. M15, H1, H4 — or 'Unknown'>",
+  "direction":            "BUY" | "SELL" | "NEUTRAL",
+  "setup_type":           "<short pullback/retest structure label, or 'Unclassified'>",
+  "skip_reason":          "<one exact skip category, or empty for a confirmed entry>",
+  "skip_detail":          "<short explanation of the primary skip reason>",
   "confidence":           <integer 0-100>,
   "win_probability":      <integer 0-100>,
   "bullish_probability":  <integer 0-100>,
@@ -342,10 +367,13 @@ Critical rules:
 - Never force a trade. Require the selected mode's pullback-rejection-minor-break
   sequence and one strong price-action confirmation; do not substitute a stack
   of weaker confirmations.
-- Keep the stop beyond the structural pullback swing. Never widen it to force a
-  trade, and reject plans above the 2.5 ATR structural-risk ceiling.
+- Keep the stop beyond the structural pullback swing. ATR14 is a volatility
+  sanity check only; reject too-tight or profile-cap-exceeding structure rather
+  than widening a stop away from its swing.
 - Targets must be real opposing levels from this chart. Never claim profitability
   or present an untested win probability as a historical statistic.
+- For any non-entry status, populate mode, timeframe, direction, setup_type,
+  skip_reason, and skip_detail. Never return only "WAIT" without a primary reason.
 - bullish_probability + bearish_probability should sum to approximately 100.
 - ALWAYS use probabilistic language: never "price will go up/down", always "probability favors X because…"
 - Never tell the user to close an open trade simply because it is in drawdown — assess the STRUCTURE.
@@ -422,20 +450,31 @@ def _profile_instructions(mode_name: str, timeframe: str) -> str:
         f"holds. A simple rejection and close beyond the relevant pullback swing "
         f"by at least {profile.confirmation_break_atr:g} ATR is sufficient; do "
         "not require multiple candle patterns or three confirmation candles. "
+        f"Chop checks use {profile.chop_lookback_candles} candles and "
+        f"{profile.range_trap_minimum_touches} repeated touches; sideways candles "
+        "alone do not make higher-timeframe consolidation chop. If an unusually "
+        "large breakout candle appears, do not enter its extreme: wait for one "
+        "controlled mode/timeframe-sized retest that holds, then resume promptly "
+        "on the single relevant rejection/structure confirmation—do not add a "
+        "second long confirmation sequence. "
         f"Do not chase a breakout range over "
         f"{profile.maximum_breakout_range_atr:g} ATR or price more than "
         f"{profile.maximum_ema_distance_atr:g} ATR from EMA20. RSI is soft: "
         "prefer BUY above 45 and rising, SELL below 55 and falling; skip only "
         f"for strong disagreement (BUY below {profile.buy_rsi_veto_below:g} or "
         f"SELL above {profile.sell_rsi_veto_above:g}), never for missing a 50 "
-        f"cross. Put SL beyond the structural pullback swing with a "
-        f"{profile.stop_buffer_atr:g} ATR buffer and at least "
-        f"{profile.minimum_stop_distance_atr:g} ATR noise distance; reject risk "
-        f"above {profile.maximum_stop_distance_atr:g} ATR. TP1 must be a real "
-        f"opposing selected-timeframe level with at least 1:{config.min_rr_ratio:g} "
-        f"R:R and {profile.minimum_target_room_atr:g} ATR of room. All distances "
-        "scale with current ATR; do not use fixed pip/point distances or "
-        "higher-timeframe confirmation."
+        f"cross. Put BUY SL below the pullback swing low or SELL SL above the "
+        f"pullback swing high. ATR14 is only a volatility sanity check: if the "
+        f"structural stop is tighter than {profile.minimum_stop_distance_atr:g} "
+        f"ATR or wider than {profile.maximum_stop_distance_atr:g} ATR, skip; "
+        "never widen it away from structure. TP1 must be a real opposing "
+        f"selected-timeframe level with at least 1:{profile.minimum_target_rr:g} "
+        f"R:R and {profile.minimum_target_room_atr:g} ATR of room; if the "
+        "structure cannot support that target, skip instead of inventing one. "
+        f"Expected holding window: about {profile.expected_holding_bars} "
+        "selected-timeframe candles. Entry pace is relative to the selected "
+        "mode and timeframe; use no extra indicators as confirmation. Do not "
+        "use fixed pip/point distances or require higher-timeframe confirmation."
     )
 
 
@@ -680,6 +719,9 @@ async def analyse_chart_bytes(
     if scope_issue:
         _suppress_unscoped_setup(parsed, scope_issue)
     parsed["analysis_mode"] = resolved_mode
+    parsed["mode"] = resolved_mode
+    if selected_timeframe:
+        parsed["timeframe"] = selected_timeframe
 
     raw_status = str(parsed.get("setup_status", "WAIT")).upper().strip()
     status_aliases = {
@@ -692,6 +734,81 @@ async def analyse_chart_bytes(
     setup_status = status_aliases.get(raw_status, raw_status)
     if setup_status not in {"WAIT", "DEVELOPING", "MODERATE ENTRY", "MISSED", "INVALID"}:
         setup_status = "WAIT"
+
+    bias = str(parsed.get("bias", "NEUTRAL")).upper()
+    raw_direction = str(parsed.get("direction", "")).upper()
+    direction = (
+        raw_direction if raw_direction in {"BUY", "SELL", "NEUTRAL"}
+        else "BUY" if bias == "BULLISH"
+        else "SELL" if bias == "BEARISH"
+        else "NEUTRAL"
+    )
+    setup_type = str(
+        parsed.get("setup_type") or parsed.get("entry_type") or "Unclassified"
+    )
+    skip_reason = str(parsed.get("skip_reason") or "").strip()
+    skip_detail = str(
+        parsed.get("skip_detail")
+        or parsed.get("entry_reason")
+        or parsed.get("current_confirmation")
+        or "The selected setup conditions are incomplete."
+    ).strip()
+    valid_skip_reasons = {
+        "Insufficient TP room",
+        "Strong opposing resistance/support",
+        "Ranging/choppy market",
+        "Pullback destroyed structure",
+        "RSI strongly disagrees",
+        "Breakout too extended",
+        "Invalid SL structure",
+        "Insufficient directional structure",
+        "No valid rejection",
+        "No structure break",
+        "Setup already extended",
+    }
+    if setup_status == "MODERATE ENTRY":
+        skip_reason = ""
+        skip_detail = ""
+    elif skip_reason not in valid_skip_reasons:
+        reason_text = " ".join(
+            (
+                str(parsed.get("entry_reason") or ""),
+                str(parsed.get("current_confirmation") or ""),
+            )
+        ).lower()
+        if "chop" in reason_text or "rang" in reason_text or "boxed" in reason_text:
+            skip_reason = "Ranging/choppy market"
+        elif "rsi" in reason_text:
+            skip_reason = "RSI strongly disagrees"
+        elif "breakout" in reason_text and ("large" in reason_text or "extend" in reason_text):
+            skip_reason = "Breakout too extended"
+        elif "extended" in reason_text or "chase" in reason_text:
+            skip_reason = "Setup already extended"
+        elif any(word in reason_text for word in ("resistance", "support", "opposing structure")):
+            skip_reason = "Strong opposing resistance/support"
+        elif any(word in reason_text for word in ("stop", "sl", "risk")):
+            skip_reason = "Invalid SL structure"
+        elif any(word in reason_text for word in ("target", "room", "reward")):
+            skip_reason = "Insufficient TP room"
+        elif "destroy" in reason_text or "invalidated" in reason_text:
+            skip_reason = "Pullback destroyed structure"
+        elif "rejection" in reason_text:
+            skip_reason = "No valid rejection"
+        elif "break" in reason_text:
+            skip_reason = "No structure break"
+        else:
+            skip_reason = "Insufficient directional structure"
+    parsed["direction"] = direction
+    parsed["setup_type"] = setup_type
+    parsed["skip_reason"] = skip_reason
+    parsed["skip_detail"] = skip_detail
+    if setup_status != "MODERATE ENTRY":
+        parsed["entry_reason"] = (
+            f"MODE: {resolved_mode.upper()} | "
+            f"TIMEFRAME: {parsed.get('timeframe', 'Unknown')} | "
+            f"DIRECTION: {direction} | SETUP TYPE: {setup_type} | "
+            f"SKIP REASON: {skip_reason} | {skip_detail}"
+        )
 
     ot_valid_raw = parsed.get("open_trade_valid")
     if ot_valid_raw is None:
@@ -748,4 +865,8 @@ async def analyse_chart_bytes(
         open_trade_notes=str(parsed.get("open_trade_notes", "")),
         raw=parsed,
         analysis_mode=resolved_mode,
+        direction=direction,
+        setup_type=setup_type,
+        skip_reason=skip_reason,
+        skip_detail=skip_detail,
     )

@@ -50,6 +50,7 @@ class MomentumPullbackProfile:
     confirmation_break_atr: float = 0.03
     range_trap_minimum_touches: int = 2
     expected_holding_bars: int = 24
+    minimum_target_rr: float = 1.5
 
 
 @dataclass
@@ -162,7 +163,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=44.0,
         sell_rsi_veto_above=56.0,
         stop_buffer_atr=0.10,
-        minimum_stop_distance_atr=0.35,
+        minimum_stop_distance_atr=0.25,
         maximum_stop_distance_atr=2.00,
         target_buffer_atr=0.10,
         minimum_target_room_atr=0.75,
@@ -392,6 +393,7 @@ def resolve_momentum_pullback_profile(
         expected_holding_bars=_MODE_HOLDING_BARS.get(
             mode, _MODE_HOLDING_BARS["intraday"]
         )[rank],
+        minimum_target_rr=max(1.5, mode_cfg.min_rr_ratio),
         confirmation_break_atr=(
             {"scalp": 0.005, "intraday": 0.02, "swing": 0.05, "position": 0.08}
             .get(mode, 0.02)
