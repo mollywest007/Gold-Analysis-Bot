@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.analysis import engine
 from src.analysis import market_data
-from src.analysis.modes import MODES
+from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 from src.analysis.engine import MarketAnalysis
 from src.handlers import callbacks
 from src.utils import formatting
@@ -79,7 +79,9 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "MODERATE ENTRY")
         self.assertEqual(result["direction"], "BUY")
-        self.assertLess(result["stop_loss"], 110.4)
+        profile = resolve_momentum_pullback_profile(MODES["intraday"], "M15")
+        expected_stop = round(min(lows[36:39]) - 2.5 * profile.stop_buffer_atr, 2)
+        self.assertEqual(result["stop_loss"], expected_stop)
         self.assertGreater(result["tp1"], 110.4)
         self.assertEqual(result["tp2"], 0.0)
         self.assertEqual(result["tp3"], 0.0)

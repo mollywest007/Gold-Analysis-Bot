@@ -2165,8 +2165,9 @@ def _momentum_pullback_decision(
 
     entry = float(price)
     swing_extreme = pullback_low if bullish else pullback_high
-    # The stop stays beyond the actual retest swing; ATR does not widen it.
-    stop_buffer = max(entry * 0.00002, 0.02)
+    # Keep the stop beyond the actual retest swing with the resolved
+    # mode/timeframe ATR buffer.
+    stop_buffer = volatility * profile.stop_buffer_atr
     minimum_noise_distance = volatility * profile.minimum_stop_distance_atr
     if bullish:
         stop = swing_extreme - stop_buffer

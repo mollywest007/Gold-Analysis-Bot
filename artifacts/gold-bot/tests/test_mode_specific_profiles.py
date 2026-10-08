@@ -72,6 +72,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         self.assertEqual(scalp_m1.pullback_candles, 2)
         self.assertEqual(scalp_m15.pullback_candles, 3)
         self.assertGreater(scalp_h1.pullback_candles, scalp_m15.pullback_candles)
+        self.assertLess(scalp_m1.stop_buffer_atr, scalp_m15.stop_buffer_atr)
         self.assertGreater(scalp_m15.structure_lookback_candles,
                            scalp_m1.structure_lookback_candles)
         self.assertLess(scalp_m1.maximum_breakout_range_atr,
