@@ -2771,16 +2771,25 @@ async def _check_and_alert_once(
                 and getattr(a, "confidence_score", 0) >= 60
                 and a.setup_quality in scan_cfg.alert_min_grades
             )
-            is_quality    = (
+            strategy_confirmed = (
+                getattr(a, "setup_status", "") == "MODERATE ENTRY"
+                and getattr(a, "signal_status", "") == "MODERATE ENTRY"
+            )
+            is_quality = strategy_confirmed or (
                 a.win_probability >= scan_cfg.alert_min_win_probability
                 and a.setup_quality in scan_cfg.alert_min_grades
             ) or institutional_lead_quality
-            choch_quality = (
+            choch_quality = strategy_confirmed or (
                 choch_aligned
                 and a.win_probability >= max(50, scan_cfg.alert_min_win_probability - 4)
                 and a.setup_quality in (*scan_cfg.alert_min_grades, "B")
             )
 
+            if strategy_confirmed:
+                logger.info(
+                    f"[{tf}] Confirmed {a.action} accepted by the "
+                    "mode/timeframe momentum-pullback strategy."
+                )
             if not is_quality and not choch_quality:
                 logger.info(
                     f"[{tf}] Filtered — quality too low "

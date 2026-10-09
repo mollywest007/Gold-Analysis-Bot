@@ -9,6 +9,12 @@ Production XAU/USD entries keep the direction → pullback → rejection → str
 
 **How to apply:** Resolve one shared mode+timeframe profile before analysis and reuse it in the scanner, manual chart prompts, historical replay, and user-facing rules. Keep Scalp selectable on M1/M3/M5/M15/M30/H1 and Swing on H1/H4/D1; ensure each extended timeframe receives its own scaled profile. Evaluate the full sequence jointly; reject chop, extension, strong RSI disagreement, stops above the resolved ATR cap, or insufficient room to a real opposing pivot under its RR/room floor. Do not label a quiet range as chop from candle-range compression alone; require failed directional progress with repeated reversals or EMA whipsaws, or a genuinely bounded support/resistance box. Put the stop beyond the pullback extreme with the resolved ATR noise buffer. Use only actual opposing selected-timeframe swing/liquidity pivots for targets; extra targets are optional, and a lone credible TP1 is final. Incomplete or ambiguous plans must not invent entries, stops, targets, or confirmation.
 
+Once the mode/timeframe strategy reports a confirmed entry, do not veto it again with generic grade, win-probability, ADX, or ChoCH requirements. Keep market-data validation, structural risk checks, deduplication, and active-trade guards.
+
+**Why:** The user explicitly requires the price-action checklist to be the confirmation standard and does not want extra indicators to suppress an otherwise valid setup.
+
+**How to apply:** Bypass generic quality filters only when both setup and signal status explicitly report a confirmed strategy entry; keep them for legacy analysis without that confirmation.
+
 ## Backtest evidence boundary
 
 Existing trade summaries without historical OHLCV cannot replay this strategy.

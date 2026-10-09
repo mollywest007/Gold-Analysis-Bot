@@ -1044,9 +1044,9 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         def signal(tf, mode):
             return SimpleNamespace(
                 action="BUY",
-                setup_quality="A",
+                setup_quality="C",
                 confidence=85,
-                win_probability=80,
+                win_probability=40,
                 buy_votes=7,
                 sell_votes=1,
                 adx=25.0,
@@ -1066,6 +1066,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                 atr=10.0,
                 timeframe=tf,
                 trade_type="Scalp" if mode == "scalp" else "Intraday",
+                setup_status="MODERATE ENTRY",
+                signal_status="MODERATE ENTRY",
             )
 
         context = SimpleNamespace(application=SimpleNamespace(bot=AsyncMock()))
