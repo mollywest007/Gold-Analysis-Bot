@@ -1438,7 +1438,6 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     atr = float(getattr(a, "atr", 0.0) or 0.0)
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
-    skipped_setup = report.get("skipped_setup") or {}
     quality_checks = report.get("quality_checks", []) or []
     has_timeframe_profile = (
         mode_rules.get("minimum_pullback_depth_atr") is not None
@@ -1572,22 +1571,6 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "──────────────────────────────────",
         "CURRENT CONFIRMATION",
         f"{str(getattr(a, 'current_confirmation', '') or wait_reason)[:220]}",
-        *(
-            [
-                "──────────────────────────────────",
-                "SKIPPED SETUP",
-                (
-                    f"{skipped_setup.get('mode', 'MODE')} / "
-                    f"{skipped_setup.get('timeframe', timeframe)} / "
-                    f"{skipped_setup.get('direction', 'NEUTRAL')}"
-                ),
-                f"Type: {str(skipped_setup.get('setup_type', 'Unclassified'))[:100]}",
-                f"PRIMARY REASON: {str(skipped_setup.get('skip_reason', 'Insufficient directional structure'))[:100]}",
-                f"{str(skipped_setup.get('detail', 'No entry conditions are complete.'))[:160]}",
-            ]
-            if skipped_setup
-            else []
-        ),
         "──────────────────────────────────",
         "DECISION",
         f"Alert : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",

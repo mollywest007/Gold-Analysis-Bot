@@ -521,6 +521,16 @@ class AnalysisIntegrityTests(unittest.TestCase):
             liquidity_zone="4310.0 — 4330.0",
             directional_indication="SELL",
             setup_grade="B",
+            institutional_report={
+                "skipped_setup": {
+                    "mode": "INTRADAY",
+                    "timeframe": "H1",
+                    "direction": "SELL",
+                    "setup_type": "Pullback",
+                    "skip_reason": "Confirmation not complete",
+                    "detail": "A minor swing break is still required.",
+                },
+            },
         )
 
         with patch.object(
@@ -536,6 +546,8 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIn("Conflict  : None — all clear", card)
         self.assertIn("ENTRY CONFIRMATION", card)
         self.assertIn("Waiting for:", card)
+        self.assertNotIn("SKIPPED SETUP", card)
+        self.assertNotIn("A minor swing break is still required.", card)
         self.assertNotIn("Awaiting confirmation", card)
         self.assertNotIn("Engine note", card)
 
