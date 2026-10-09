@@ -555,7 +555,12 @@ def format_backtest_report(report: Dict) -> str:
         )
     source = str(report.get("historical_candle_source") or "unknown")
     symbol = str(report.get("historical_symbol") or "unknown")
-    if source == "yf_futures":
+    if source == "spot_normalized_futures":
+        source_label = (
+            "Yahoo GC=F futures candles shifted to the validated live XAU/USD "
+            "spot basis (still a futures proxy, not historical spot OHLC)"
+        )
+    elif source == "yf_futures":
         source_label = "Yahoo Finance GC=F gold-futures proxy (not XAU/USD spot)"
     elif symbol != "unknown":
         source_label = f"{source} ({symbol})"

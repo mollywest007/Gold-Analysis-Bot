@@ -586,17 +586,19 @@ async def fetch_historical_ohlcv(
     data = await _fetch_ohlcv_raw(
         timeframe,
         data_range=BACKTEST_HISTORY_RANGES[timeframe],
-        include_live_spot=False,
+        include_live_spot=True,
     )
     if (
         data is None
         or data.is_simulated
         or not data.timestamps
         or len(data.timestamps) != len(data.closes)
+        or data.price_source != "spot"
+        or data.candle_source != "spot_normalized_futures"
     ):
         logger.warning(
-            "Historical replay unavailable for %s — real aligned candle "
-            "timestamps are missing.",
+            "Historical replay unavailable for %s — validated spot-normalized "
+            "candles and aligned timestamps are required.",
             timeframe,
         )
         return None
@@ -623,9 +625,9 @@ async def fetch_historical_ohlcv(
         is_simulated=False,
         timestamps=[data.timestamps[i] for i in completed_indices],
         fetched_at=data.fetched_at,
-        price_source="yf_futures",
-        candle_source="yf_futures",
-        symbol="GC=F",
+        price_source="spot",
+        candle_source="spot_normalized_futures",
+        symbol=data.symbol,
     )
 
 

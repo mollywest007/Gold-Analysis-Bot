@@ -18,6 +18,10 @@ class HistoricalCandleFetchTests(unittest.IsolatedAsyncioTestCase):
             [99.0, 100.0, 101.0],
             [100.5, 101.5, 102.5],
             [10.0, 10.0, 10.0],
+            spot_price=102.5,
+            price_source="spot",
+            candle_source="spot_normalized_futures",
+            symbol="GC=F",
             timestamps=[0.0, 900.0, 1800.0],
             fetched_at=1800.0,
         )
@@ -29,10 +33,13 @@ class HistoricalCandleFetchTests(unittest.IsolatedAsyncioTestCase):
             )
 
         fetch.assert_awaited_once_with(
-            "M15", data_range="60d", include_live_spot=False
+            "M15", data_range="60d", include_live_spot=True
         )
         self.assertEqual(result.closes, [100.5, 101.5])
         self.assertEqual(result.timestamps, [0.0, 900.0])
+        self.assertEqual(result.price_source, "spot")
+        self.assertEqual(result.candle_source, "spot_normalized_futures")
+        self.assertEqual(result.symbol, "GC=F")
         self.assertFalse(result.is_simulated)
 
     async def test_historical_fetch_rejects_simulated_data(self):
@@ -47,6 +54,26 @@ class HistoricalCandleFetchTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             market_data, "_fetch_ohlcv_raw", new=AsyncMock(return_value=simulated)
+        ):
+            result = await market_data.fetch_historical_ohlcv(
+                "M15", now=200_000.0
+            )
+        self.assertIsNone(result)
+
+    async def test_historical_fetch_rejects_futures_without_live_spot_basis(self):
+        futures_only = OHLCVData(
+            [100.0] * 120,
+            [101.0] * 120,
+            [99.0] * 120,
+            [100.0] * 120,
+            [1.0] * 120,
+            timestamps=[float(i * 900) for i in range(120)],
+            price_source="yf_futures",
+            candle_source="yf_futures",
+            symbol="GC=F",
+        )
+        with patch.object(
+            market_data, "_fetch_ohlcv_raw", new=AsyncMock(return_value=futures_only)
         ):
             result = await market_data.fetch_historical_ohlcv(
                 "M15", now=200_000.0
