@@ -31,41 +31,49 @@ To find your `ALLOWED_USER_ID`: send `/start` to the bot and check the workflow 
 
 ## Entry strategy
 
-Production entries use the selected chart only. The bot requires clear local
-HH/HL or LH/LL swings, a controlled pullback near EMA20, the protected swing,
-or a prior breakout/breakdown level, and a rejection candle followed by a
-close beyond the minor pullback swing. RSI is a momentum conflict filter;
-EMA20/EMA50 alignment does not set the trade direction, and higher-timeframe
-confirmation is not required.
+All four trade modes use one selected-timeframe price-action engine. It can
+identify a contained momentum breakout through a confirmed swing level or a
+pullback continuation at a meaningful level. Direction comes from local
+HH/HL or LH/LL structure. Normally, direction plus a valid entry location is
+enough for an early, lower-grade setup; a rejection candle or minor structure
+break adds confirmation and improves the rule-based grade. RSI14 is optional
+momentum context and only a strong conflict blocks an otherwise valid setup.
+EMA20/EMA50 are context, never standalone direction gates.
 
-The bot skips choppy conditions, extended breaks, structural stops wider than
-2.5 ATR, and setups without at least 1R of room to an actual opposing swing.
-Stops are placed beyond the pullback extreme with an ATR noise buffer.
-Targets come only from nearby opposing swing/liquidity pivots; TP2/TP3 are
-optional, and one credible TP1 is tracked as the final target. A provisional
-or incomplete setup must not receive invented stop or target levels.
+Stops sit beyond the setup's structural invalidation level with a
+mode/timeframe-specific ATR14 buffer. Reject stops outside the configured
+volatility range. TP1 must be a real opposing structural level with at least
+1.5R of clear room; further targets are optional and cannot be invented.
+Avoid extended breakouts, chop, and obstructed targets. A setup without a
+defensible entry, stop, or target remains `WAIT`/`DEVELOPING` rather than
+receiving fabricated prices.
 
-Analysis statuses remain `WAIT`, `DEVELOPING`, `MODERATE ENTRY`, `MISSED`, or
-`INVALID`. Alerts must distinguish a confirmed entry from an incomplete setup.
+Modes retain their existing timeframe scope and holding windows:
 
-## Mode- and timeframe-aware execution
+| Mode | Selectable timeframes | Typical intent |
+|---|---|---|
+| Scalp | M1, M3, M5, M15, M30, H1 | Short-term momentum and local structure |
+| Intraday | M15, M30, H1 | Session/day moves |
+| Swing | H1, H4, D1 | Multi-day moves and wider structure |
+| Position | D1, W1, MN1 | Longer-horizon structure |
 
-The shared Momentum-Pullback sequence stays direction → pullback → rejection →
-structure confirmation → entry, but its structural pivot radius, pullback
-window/depth, breakout chase limit, confirmation displacement, structural stop
-buffer/risk ceiling, and target clearance adapt to both the active mode and
-selected timeframe. Measurements remain ATR-relative; no fixed pip or point
-distances are shared across charts. EMA20 is pullback context, not a direction
-gate. RSI14 is a soft preference (BUY above 45 and rising; SELL below 55 and
-falling) and only strongly opposing RSI blocks an otherwise valid structure.
+Each mode/timeframe resolves its own pivot scale, lookback, pullback depth,
+extension limit, ATR stop buffer/cap, target room, and expected holding bars.
+Combined mode resolves the Scalp and Intraday alert streams independently.
+Invalid explicit modes/timeframes must fail rather than silently inherit a
+different profile. No higher-timeframe confirmation is required.
 
-The momentum-pullback sequence is shared, but its thresholds and risk rules are
-selected from the user's active mode before analysis begins. Scalp, Intraday,
-Swing, and Position each keep their own sensitivity, pullback window, rejection
-strictness, ATR limits, structural target requirements, and response timeframe.
-Combined mode must resolve each stream to its own profile. Never fall back to a
-different mode when an explicit mode is invalid, and show the active mode on
-setup cards.
+The bot sends analysis alerts and tracks plans; it does not connect to a broker
+or submit orders. It therefore cannot determine broker-specific contract/tick
+specifications, position size, account equity, commission, or slippage. Do not
+present its alerts as broker-sized orders or claim account-wide daily-loss/open-
+risk enforcement.
+
+Historical replay uses real completed candles, but the available history is a
+futures proxy normalized to spot—not executable broker XAU/USD data. The feed
+does not contain historical bid/ask spread, commissions, slippage, or lot size.
+Replay metrics are first-touch estimates before costs, not net P&L; forward
+testing and old-strategy comparisons require suitable execution-cost data.
 
 The saved trade history does not include the OHLCV candles needed to replay this
 strategy. Do not present the old trade summaries as a backtest of the new

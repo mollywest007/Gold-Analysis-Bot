@@ -2106,7 +2106,33 @@ def _momentum_pullback_decision(
         abs(price - ema20) > volatility * profile.maximum_ema_distance_atr
         and not retest_is_controlled
     )
-    if not (controlled and structure_holds and had_counter_move and support_held):
+    pullback_location_valid = (
+        controlled and structure_holds and had_counter_move and support_held
+    )
+    breakout_level = last_high if bullish else last_low
+    breakout_close_confirmed = (
+        closes[-1] > breakout_level + volatility * profile.confirmation_break_atr
+        if bullish
+        else closes[-1] < breakout_level - volatility * profile.confirmation_break_atr
+    )
+    breakout_at_valid_location = (
+        0.0
+        <= (
+            closes[-1] - breakout_level
+            if bullish
+            else breakout_level - closes[-1]
+        )
+        <= volatility * profile.level_tolerance_atr
+        and abs(price - ema20)
+        <= volatility * profile.maximum_ema_distance_atr
+    )
+    breakout_ready = (
+        profile.breakout_enabled
+        and breakout_close_confirmed
+        and breakout_at_valid_location
+        and not current_breakout_oversized
+    )
+    if not pullback_location_valid and not breakout_ready:
         pullback_destroyed = (
             not structure_holds
             or pullback_depth > volatility * profile.maximum_pullback_depth_atr
@@ -2128,26 +2154,30 @@ def _momentum_pullback_decision(
                 else "Waiting for a controlled touch and hold at a meaningful area."
             ),
         }
-    checks.append("Controlled pullback held nearby support/resistance")
-    if not rejection or not minor_break:
-        return {
-            **empty,
-            "status": "DEVELOPING",
-            "direction": direction,
-            "setup": "Pullback held; waiting for rejection and minor structure break",
-            "confirmation": (
-                "Waiting for a rejection candle and close beyond the latest minor "
-                f"{'high' if bullish else 'low'}."
-            ),
-            "quality_checks": checks,
-            "skip_reason": "No valid rejection" if not rejection else "No structure break",
-            "skip_detail": (
-                "A simple rejection and one mode/timeframe-appropriate swing break are sufficient."
-            ),
-        }
-    checks.append("Rejection and minor structure break confirmed")
+    pullback_confirmed = rejection or minor_break
+    if pullback_location_valid:
+        checks.append("Controlled pullback held nearby support/resistance")
+    if breakout_ready:
+        checks.extend([
+            "Directional structure supports the breakout",
+            "Selected-timeframe swing level broke on a completed candle",
+            "Breakout remains within the configured level and extension limits",
+        ])
+        setup_type = "Momentum breakout"
+        swing_extreme = float(breakout_level)
+    else:
+        checks.append(
+            (
+                "Pullback confirmed by "
+                + ("rejection and structure break" if rejection and minor_break
+                   else "rejection" if rejection else "minor structure break")
+            )
+            if pullback_confirmed
+            else "Early pullback entry: direction and location support; no rejection/break trigger yet"
+        )
+        swing_extreme = pullback_low if bullish else pullback_high
 
-    if extended:
+    if extended and not breakout_ready:
         return {
             **empty,
             "status": "MISSED",
@@ -2164,7 +2194,6 @@ def _momentum_pullback_decision(
         }
 
     entry = float(price)
-    swing_extreme = pullback_low if bullish else pullback_high
     # Keep the stop beyond the actual retest swing with the resolved
     # mode/timeframe ATR buffer.
     stop_buffer = volatility * profile.stop_buffer_atr
@@ -2249,12 +2278,30 @@ def _momentum_pullback_decision(
     return {
         "status": "MODERATE ENTRY",
         "direction": direction,
-        "setup": "Fast momentum pullback: rejection + minor structure break",
+        "setup": (
+            "Selected-timeframe momentum breakout"
+            if breakout_ready
+            else "Momentum pullback continuation"
+            if pullback_confirmed
+            else "Early momentum pullback continuation"
+        ),
         "confirmation": (
-            f"Selected-timeframe {direction.lower()} structure; controlled "
-            f"{profile.pullback_candles}-bar pullback held; rejection and "
-            f"{'minor' if mode_cfg.name == 'scalp' else 'mode-scaled'} structure "
-            f"break confirmed. {rsi_confirmation}"
+            (
+                f"Selected-timeframe {direction.lower()} structure; completed "
+                "candle closed beyond a confirmed swing level without exceeding "
+                "the mode's extension limits."
+                if breakout_ready
+                else (
+                    f"Selected-timeframe {direction.lower()} structure; controlled "
+                    f"{profile.pullback_candles}-bar pullback held at a meaningful level; "
+                    + (
+                        f"{'rejection and structure break' if rejection and minor_break else 'rejection' if rejection else 'minor structure break'} confirmed."
+                        if pullback_confirmed
+                        else "the two-factor entry is early; rejection or a minor structure break is not yet present."
+                    )
+                )
+            )
+            + f" {rsi_confirmation}"
         ),
         "entry_low": round(entry - half_zone, 2),
         "entry_high": round(entry + half_zone, 2),
@@ -2265,6 +2312,7 @@ def _momentum_pullback_decision(
         "tp3": tp3,
         "rr": rr,
         "setup_type": setup_type,
+        "quality_grade": "A" if breakout_ready or pullback_confirmed else "B",
         "quality_checks": checks,
         "skip_reason": "",
         "skip_detail": "",
@@ -2396,7 +2444,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     data_quality = "SIMULATED" if data.is_simulated else "REAL_OHLCV"
     simple_direction = plan_direction or "NEUTRAL"
     report = {
-        "framework": "selected-timeframe swing momentum + pullback rejection + minor structure break",
+        "framework": "shared selected-timeframe momentum breakout/pullback strategy",
         "data_quality": data_quality,
         "price_source": data.price_source,
         "candle_source": data.candle_source,
@@ -2407,6 +2455,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "rsi14": round(rsi, 2),
         "atr14": round(atr, 2),
         "price_action": setup or "None",
+        "setup_type": decision.get("setup_type", ""),
         "signal_status": signal_status,
         "setup_status": setup_status,
         "current_confirmation": wait_reason,
@@ -2420,6 +2469,10 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             "maximum_pullback_depth_atr": profile.maximum_pullback_depth_atr,
             "minimum_target_rr": profile.minimum_target_rr,
             "maximum_stop_atr": profile.maximum_stop_distance_atr,
+            "stop_buffer_atr": profile.stop_buffer_atr,
+            "entry_sensitivity_atr": profile.level_tolerance_atr,
+            "maximum_extension_atr": profile.maximum_ema_distance_atr,
+            "breakout_enabled": profile.breakout_enabled,
             "structure_pivot_radius": profile.structure_pivot_radius,
             "structure_lookback_candles": profile.structure_lookback_candles,
             "confirmation_break_atr": profile.confirmation_break_atr,
@@ -2432,9 +2485,9 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,
         "score_breakdown": {
-            "local_structure": 40 if plan_direction else 0,
-            "rsi_momentum": 15 if rsi_supports else 0,
-            "pullback_confirmation": 45 if setup_status == "MODERATE ENTRY" else 0,
+            "direction_structure": 40 if plan_direction else 0,
+            "entry_location": 35 if decision.get("entry_low", 0.0) else 0,
+            "confirmation": 25 if decision.get("quality_grade") == "A" else 0,
         },
     }
     reasons_against = [wait_reason] if setup_status != "MODERATE ENTRY" else []
@@ -2484,7 +2537,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         trade_type=mode_cfg.trade_type_label,
         analysis_mode=mode_cfg.name,
         limit_entry=entry,
-        entry_note="Market price; pullback-swing stop; opposing-structure target",
+        entry_note="Market price; structural invalidation stop; opposing-structure target",
         rsi_value=rsi,
         market_structure=(
             "HH_HL" if direction == "BUY"
@@ -2500,8 +2553,18 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         directional_indication=simple_direction,
         confluence_list=confluence,
         tp3=tp3,
-        setup_quality="A" if setup_status == "MODERATE ENTRY" else "B" if setup_status == "DEVELOPING" else "WAIT",
-        setup_grade="A" if setup_status == "MODERATE ENTRY" else "B" if setup_status == "DEVELOPING" else "WAIT",
+        setup_quality=(
+            decision.get("quality_grade", "B")
+            if setup_status == "MODERATE ENTRY"
+            else "B" if setup_status == "DEVELOPING"
+            else "WAIT"
+        ),
+        setup_grade=(
+            decision.get("quality_grade", "B")
+            if setup_status == "MODERATE ENTRY"
+            else "B" if setup_status == "DEVELOPING"
+            else "WAIT"
+        ),
         is_simulated=data.is_simulated,
         daily_bias=condition,
         liquidity_evidence="Not used",

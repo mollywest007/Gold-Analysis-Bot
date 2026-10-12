@@ -130,8 +130,11 @@ class ModeSpecificProfileTests(unittest.TestCase):
         )
 
         self.assertGreater(scalp_plan[0], 100.0)
-        self.assertIn("too little room", position_plan[3])
-        self.assertEqual(position_plan[:3], (0.0, 0.0, 0.0))
+        self.assertEqual(
+            [MODES[mode].min_rr_ratio for mode in ("scalp", "intraday", "swing", "position")],
+            [1.5, 1.5, 1.5, 1.5],
+        )
+        self.assertGreater(position_plan[0], 100.0)
 
     def test_combined_coordinator_cannot_fall_back_to_a_trade_profile(self):
         with self.assertRaisesRegex(ValueError, "resolve a combined mode"):
@@ -161,7 +164,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         prompt_rules = _mode_prompt_instructions("swing", "H4", None)
 
         self.assertIn("Selected mode: Swing", prompt_rules)
-        self.assertIn("at least 1:2.5 R:R", prompt_rules)
+        self.assertIn("at least 1:1.5 R:R", prompt_rules)
         self.assertIn("Do not wait for a complete trend", prompt_rules)
 
     def test_combined_manual_routes_keep_each_timeframe_in_its_own_mode(self):

@@ -51,6 +51,7 @@ class MomentumPullbackProfile:
     range_trap_minimum_touches: int = 2
     expected_holding_bars: int = 24
     minimum_target_rr: float = 1.5
+    breakout_enabled: bool = True
 
 
 @dataclass
@@ -476,7 +477,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.5,
         breakout_lookback = 20,
         liquidity_lookback = 15,
-        min_rr_ratio = 2.0,
+        min_rr_ratio = 1.5,
         feature_weights = {
             "breakout": 0.08, "liquidity_sweep": 0.06, "volume_spike": 0.06,
             "momentum_shift": 0.05, "trend_regime": 0.08, "macro_alignment": 0.0,
@@ -518,7 +519,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.6,
         breakout_lookback = 30,
         liquidity_lookback = 25,
-        min_rr_ratio = 2.5,
+        min_rr_ratio = 1.5,
         feature_weights = {
             "breakout": 0.04, "liquidity_sweep": 0.05, "volume_spike": 0.04,
             "momentum_shift": 0.02, "trend_regime": 0.12, "macro_alignment": 0.0,
@@ -565,7 +566,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.8,
         breakout_lookback = 50,
         liquidity_lookback = 40,
-        min_rr_ratio = 3.0,
+        min_rr_ratio = 1.5,
         feature_weights = {
             "breakout": 0.03, "liquidity_sweep": 0.03, "volume_spike": 0.03,
             "momentum_shift": 0.01, "trend_regime": 0.16, "macro_alignment": 0.0,

@@ -87,7 +87,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(result["tp3"], 0.0)
         self.assertGreaterEqual(result["rr"], 1.0)
 
-    def test_pullback_without_minor_swing_close_stays_developing(self):
+    def test_direction_and_location_allow_early_pullback_without_minor_break(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
         closes[-1] = 110.25
         swings = (
@@ -103,9 +103,63 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 timeframe="M15",
             )
 
-        self.assertEqual(result["status"], "DEVELOPING")
+        self.assertEqual(result["status"], "MODERATE ENTRY")
         self.assertEqual(result["direction"], "BUY")
-        self.assertEqual(result["tp1"], 0.0)
+        self.assertEqual(result["quality_grade"], "A")
+        self.assertIn("rejection confirmed", result["confirmation"])
+        self.assertGreater(result["tp1"], result["entry_high"])
+
+    def test_direction_and_location_allow_early_pullback_without_trigger(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        lows[37] = 109.9
+        lows[38] = 109.9
+        closes[-1] = 110.25
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 110.25, 110.0, 111.5,
+                2.5, 55.0, 54.0,
+                mode_cfg=MODES["intraday"],
+                timeframe="M15",
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["quality_grade"], "B")
+        self.assertIn("two-factor entry is early", result["confirmation"])
+        self.assertGreaterEqual(result["rr"], 1.5)
+
+    def test_contained_structural_breakout_can_enter_without_waiting_for_retest(self):
+        size = 40
+        opens = [100.0] * size
+        highs = [100.2] * size
+        lows = [99.8] * size
+        closes = [100.0] * size
+        highs[10], highs[20], highs[30] = 106.5, 100.0, 102.0
+        lows[11], lows[22] = 95.0, 97.0
+        opens[-1], highs[-1], lows[-1], closes[-1] = 102.1, 102.6, 102.0, 102.4
+        swings = (
+            [(10, 106.5), (20, 100.0), (30, 102.0)],
+            [(11, 95.0), (22, 97.0)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes, 102.4, 101.0, 100.5,
+                2.5, 58.0, 57.0,
+                mode_cfg=MODES["intraday"],
+                timeframe="M15",
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertEqual(result["setup_type"], "Momentum breakout")
+        self.assertEqual(result["quality_grade"], "A")
+        self.assertLess(result["stop_loss"], 102.0)
+        self.assertGreaterEqual(result["rr"], 1.5)
 
     def test_quiet_consolidation_alone_is_not_classified_as_chop(self):
         size = 40
