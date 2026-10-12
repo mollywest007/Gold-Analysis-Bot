@@ -16,11 +16,11 @@
         "M15": "SELL"
       },
       "forming_alert_last_sent": {
-        "M15": 1791784606.7719362
+        "M15": 1791806106.8047166
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 7150
+          "8039158711": 7162
         }
       },
       "reminded_trade_ids": {
