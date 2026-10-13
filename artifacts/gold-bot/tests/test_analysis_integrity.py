@@ -262,6 +262,59 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(analysis.stop_loss, 0.0)
         self.assertEqual(analysis.price_source, "yf_futures")
         self.assertIn("futures-proxy data is context only", analysis.wait_reason)
+        self.assertEqual(
+            analysis.institutional_report["trade_action"], "NO TRADE"
+        )
+
+    def test_rule_based_plan_reports_no_untested_probability_or_fake_size(self):
+        closes = [100.0 + index * 0.1 for index in range(40)]
+        data = market_data.OHLCVData(
+            [value - 0.02 for value in closes],
+            [value + 0.05 for value in closes],
+            [value - 0.05 for value in closes],
+            closes,
+            [10.0] * len(closes),
+            spot_price=closes[-1],
+            price_source="spot",
+            candle_source="spot_normalized_futures",
+        )
+        decision = {
+            "status": "MODERATE ENTRY",
+            "direction": "BUY",
+            "setup": "Early momentum pullback continuation",
+            "confirmation": "Direction and location agree; entry is early.",
+            "entry_low": closes[-1] - 0.2,
+            "entry_high": closes[-1] + 0.2,
+            "invalidation": closes[-1] - 1.0,
+            "stop_loss": closes[-1] - 1.0,
+            "tp1": closes[-1] + 2.0,
+            "tp2": 0.0,
+            "tp3": 0.0,
+            "rr": 2.0,
+            "setup_type": "EMA20 retest",
+            "entry_type": "pullback_continuation",
+            "quality_grade": "B",
+            "quality_checks": ["Direction", "Entry location"],
+        }
+        with patch.object(
+            engine, "_momentum_pullback_decision", return_value=decision
+        ):
+            analysis = engine._analyze_simple_data(
+                data, "M15", MODES["intraday"]
+            )
+
+        summary = analysis.institutional_report["decision_summary"]
+        self.assertEqual(analysis.action, "BUY")
+        self.assertEqual(analysis.win_probability, 0)
+        self.assertEqual(analysis.confidence_score, 75)
+        self.assertEqual(summary["action"], "BUY")
+        self.assertEqual(summary["rule_based_setup_quality"], "B")
+        self.assertIsNone(summary["position_size"])
+        self.assertFalse(summary["execution_costs_applied"])
+        card = formatting._simple_analysis_card(analysis)
+        self.assertIn("Rule score 75/100", card)
+        self.assertIn("Win % : Not backtested", card)
+        self.assertIn("Position size: Unavailable", card)
 
     def test_only_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()

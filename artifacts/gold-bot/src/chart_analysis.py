@@ -208,17 +208,17 @@ WRITING STYLE — always use probabilistic language:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — CONFLUENCE SCORING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-List every factor supporting the trade direction. Record confluence clearly,
-but do not turn a fixed confluence count into a mechanical entry gate:
-- Selected-timeframe swing structure
-- Pullback to a nearby swing, EMA20 context, or prior local level
-- Rejection and minor-swing close that complete the entry sequence
-- Visible volume or momentum behavior as supporting context
+Evaluate three factors: (1) directional selected-timeframe structure, (2) a
+defensible entry location, and (3) a confirmation cue such as a rejection,
+minor-swing break, or contained breakout close. Normally, two factors are
+enough when the remaining factor has no major contradiction. A rejection or
+minor break improves a pullback's quality but is not mandatory. EMA20/EMA50 and
+RSI14 are context, not independent gates.
 
-Entry speed is relative to the selected mode and timeframe. Use ONE strong
-price-action sequence: a controlled pullback, rejection at a nearby level, and
-a close beyond the relevant minor swing. Do not force globally fast behavior,
-add extra indicators, or require higher-timeframe alignment.
+The shared engine supports a contained close beyond a confirmed swing level
+and a pullback continuation from meaningful structure. Do not force globally
+fast behavior, add extra indicators, require three confirmations, or require
+higher-timeframe alignment. Avoid chasing extended breakouts.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 7 — TRADE LEVELS & DIRECT ENTRY
@@ -233,42 +233,44 @@ MISSED — confirmation happened but price has moved too far, so wait for a
 pullback/retest and do not chase;
 INVALID — the setup thesis has failed.
 
-Before using MODERATE ENTRY, verify the selected mode's local swing, controlled
-pullback, nearby-level rejection, and minor-swing close are visible. One strong
-price-action sequence is enough; do not wait for extra indicators or timeframes.
-If the pullback or rejection is still forming, use DEVELOPING. If the sequence
-is complete but price is extended, use MISSED and wait for a mode-appropriate
-retest. If screenshot quality prevents reliable price or structure reading, use
-WAIT and record insufficient directional structure.
+Before using MODERATE ENTRY, verify directional structure and a valid location
+for either a contained breakout or pullback continuation. A third-factor
+confirmation raises quality; its absence alone does not invalidate a setup
+when the other two factors agree and there is no major contradiction. If the
+direction or location is still unclear, use DEVELOPING. If price is extended,
+use MISSED and wait for a mode-appropriate retest. If screenshot quality
+prevents reliable price or structure reading, use WAIT and record why.
 
 Whenever setup_status is WAIT, DEVELOPING, MISSED, or INVALID, record a primary
 skip_reason from this exact list: Insufficient TP room; Strong opposing
 resistance/support; Ranging/choppy market; Pullback destroyed structure; RSI
 strongly disagrees; Breakout too extended; Invalid SL structure; Insufficient
-directional structure; No valid rejection; No structure break; Setup already
-extended. Also record the active mode, chart timeframe, direction, setup type,
-and a short skip_detail. Never return a bare WAIT without its reason.
+directional structure; No valid entry location; Setup already extended. Also
+record the active mode, chart timeframe, direction, setup type, and a short
+skip_detail. Never return a bare WAIT without its reason.
 
-• Entry: current price after the selected timeframe's pullback rejection and minor swing break
+• Entry: a contained close beyond a confirmed swing, or a timely pullback
+  continuation from meaningful structure; report the observed entry zone
 • Oversized breakout: do not enter its extreme; wait for one controlled retest
   appropriate to mode/timeframe. Enter promptly after a valid scalp retest;
   Intraday/Swing may wait longer for a meaningful retest. No second long sequence.
 • Chop: require repeated alternation/compression and weak progress, or repeatedly
   tested nearby boundaries. Do not call ordinary higher-timeframe consolidation
   chop based only on several sideways candles.
-• Stop Loss: BUY below the relevant pullback swing low; SELL above its swing
-  high. ATR14 is only a volatility sanity check. If the structural stop is too
-  tight or wider than the profile cap, skip; never widen it away from structure.
-• TP1: a real opposing swing/liquidity level on this chart, with at least 1.5R
+• Stop Loss: beyond the setup's structural invalidation swing/level with the
+  mode/timeframe ATR14 buffer. If the structural stop is unreasonable or wider
+  than the profile cap, skip; never widen it away from structure.
+• TP1: a real opposing swing/liquidity level visible on this chart or a
+  higher-timeframe level explicitly shown in the input, with at least 1.5R
   realistic room. If opposing structure blocks it, use WAIT rather than invent
   or extend a target.
-• TP2 / TP3: only farther, distinct opposing structural levels visible on this chart.
-  Never invent measured-move, higher-timeframe, or fixed-R targets.
+• TP2 / TP3: only farther, distinct opposing structural levels actually visible.
+  Never invent measured-move or fixed-R targets.
 • Invalidation: the specific candle CLOSE that definitively cancels the setup thesis
 • Trade Quality:
-     Excellent — clear selected-timeframe structure and complete entry sequence
-    Good      — valid sequence with ordinary uncertainty
-    Average   — setup is developing or evidence is incomplete
+     Excellent — clear structure, location, and confirmation
+     Good      — valid two-factor setup with ordinary uncertainty
+     Average   — setup is developing or evidence is incomplete
     Poor      — choppy/ranging structure or ambiguous levels
 • Risk Level:
      Low    — clear pullback swing and structural stop within the mode's risk limit
@@ -363,13 +365,14 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
 }}
 
 Critical rules:
-- Gold (XAU/USD) currently trades around 3200–3500. Read EXACT prices from the Y-axis.
-- Never force a trade. Require the selected mode's pullback-rejection-minor-break
-  sequence and one strong price-action confirmation; do not substitute a stack
-  of weaker confirmations.
-- Keep the stop beyond the structural pullback swing. ATR14 is a volatility
-  sanity check only; reject too-tight or profile-cap-exceeding structure rather
-  than widening a stop away from its swing.
+- Read exact XAU/USD prices from the visible chart scale; do not assume a fixed
+  current price range.
+- Never force a trade. Use the shared direction/location/confirmation factors:
+  two supportive factors with no major contradiction can qualify; do not
+  substitute a stack of indicators.
+- Keep the stop beyond structural invalidation with the mode/timeframe ATR14
+  buffer; reject unreasonable or profile-cap-exceeding structure rather than
+  widening a stop away from its level.
 - Targets must be real opposing levels from this chart. Never claim profitability
   or present an untested win probability as a historical statistic.
 - For any non-entry status, populate mode, timeframe, direction, setup_type,
@@ -414,27 +417,27 @@ def _profile_instructions(mode_name: str, timeframe: str) -> str:
     profile = resolve_momentum_pullback_profile(config, timeframe)
     mode_guidance = {
         "scalp": (
-            "Use recent, relatively small structure and a controlled shallow "
-            "pullback; confirm promptly with rejection and the minor pullback "
-            "swing break. On charts above M15, widen the structure to the "
-            "selected chart instead of reusing M1/M5 assumptions."
+            "Use recent small structure and evaluate spread/execution costs "
+            "when the chart shows them. A contained local breakout or controlled "
+            "shallow pullback can qualify without waiting for both rejection "
+            "and a minor swing break. On charts above M15, use the selected "
+            "chart's own structure."
         ),
         "intraday": (
-            "Be more selective than Scalp but remain responsive. Use selected-"
-            "chart intraday swings, a moderate pullback, and a meaningful "
-            "minor/intermediate break; avoid obvious ranges."
+            "Be selective but responsive. Use meaningful session-scale swings "
+            "and a moderate pullback or contained structural breakout; avoid "
+            "obvious ranges and extended moves."
         ),
         "swing": (
-            "Wait for broader selected-chart swing structure and a deeper "
-            "pullback. Ignore small intraday fluctuations; require a stronger "
-            "selected-chart structure break before confirming. Do not wait for "
-            "a complete trend—confirm when the mode-appropriate structural "
-            "sequence is complete."
+            "Use broader selected-chart structure and more volatility room. "
+            "Ignore small intraday fluctuations. Prefer visible higher-timeframe "
+            "targets only when the chart explicitly provides them; do not delay "
+            "a valid two-factor entry for a complete trend."
         ),
         "position": (
-            "Prioritize major selected-chart swing highs/lows and deeper "
-            "pullbacks. Ignore insignificant fluctuations; a small rejection "
-            "or intraday break is not position confirmation."
+            "Prioritize major daily/weekly/monthly swing levels and wider "
+            "volatility room. Ignore insignificant fluctuations. Use only "
+            "higher-timeframe target levels actually visible in the input."
         ),
     }.get(mode_name, "")
     return (
@@ -447,9 +450,12 @@ def _profile_instructions(mode_name: str, timeframe: str) -> str:
         f"bar(s), with ATR-relative depth "
         f"{profile.minimum_pullback_depth_atr:g}–"
         f"{profile.maximum_pullback_depth_atr:g} ATR while the protected swing "
-        f"holds. A simple rejection and close beyond the relevant pullback swing "
-        f"by at least {profile.confirmation_break_atr:g} ATR is sufficient; do "
-        "not require multiple candle patterns or three confirmation candles. "
+        f"holds. Direction plus valid location can be an early two-factor entry; "
+        f"rejection or a close beyond the relevant minor swing by at least "
+        f"{profile.confirmation_break_atr:g} ATR improves quality but is not "
+        "mandatory. A breakout must close beyond a confirmed swing and stay "
+        f"within {profile.level_tolerance_atr:g} ATR of that level. Do not "
+        "require multiple candle patterns or three confirmation candles. "
         f"Chop checks use {profile.chop_lookback_candles} candles and "
         f"{profile.range_trap_minimum_touches} repeated touches; sideways candles "
         "alone do not make higher-timeframe consolidation chop. If an unusually "
@@ -463,12 +469,12 @@ def _profile_instructions(mode_name: str, timeframe: str) -> str:
         "prefer BUY above 45 and rising, SELL below 55 and falling; skip only "
         f"for strong disagreement (BUY below {profile.buy_rsi_veto_below:g} or "
         f"SELL above {profile.sell_rsi_veto_above:g}), never for missing a 50 "
-        f"cross. Put BUY SL below the pullback swing low or SELL SL above the "
-        f"pullback swing high. ATR14 is only a volatility sanity check: if the "
+        f"cross. Put BUY SL below or SELL SL above the setup's structural "
+        f"invalidation level with the mode/timeframe ATR14 buffer. If the "
         f"structural stop is tighter than {profile.minimum_stop_distance_atr:g} "
         f"ATR or wider than {profile.maximum_stop_distance_atr:g} ATR, skip; "
         "never widen it away from structure. TP1 must be a real opposing "
-        f"selected-timeframe level with at least 1:{profile.minimum_target_rr:g} "
+        f"structural level visible in the input with at least 1:{profile.minimum_target_rr:g} "
         f"R:R and {profile.minimum_target_room_atr:g} ATR of room; if the "
         "structure cannot support that target, skip instead of inventing one. "
         f"Expected holding window: about {profile.expected_holding_bars} "
@@ -762,8 +768,7 @@ async def analyse_chart_bytes(
         "Breakout too extended",
         "Invalid SL structure",
         "Insufficient directional structure",
-        "No valid rejection",
-        "No structure break",
+        "No valid entry location",
         "Setup already extended",
     }
     if setup_status == "MODERATE ENTRY":
@@ -792,10 +797,8 @@ async def analyse_chart_bytes(
             skip_reason = "Insufficient TP room"
         elif "destroy" in reason_text or "invalidated" in reason_text:
             skip_reason = "Pullback destroyed structure"
-        elif "rejection" in reason_text:
-            skip_reason = "No valid rejection"
-        elif "break" in reason_text:
-            skip_reason = "No structure break"
+        elif any(word in reason_text for word in ("location", "entry zone", "rejection", "break")):
+            skip_reason = "No valid entry location"
         else:
             skip_reason = "Insufficient directional structure"
     parsed["direction"] = direction

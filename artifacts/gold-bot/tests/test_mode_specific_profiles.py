@@ -165,7 +165,14 @@ class ModeSpecificProfileTests(unittest.TestCase):
 
         self.assertIn("Selected mode: Swing", prompt_rules)
         self.assertIn("at least 1:1.5 R:R", prompt_rules)
-        self.assertIn("Do not wait for a complete trend", prompt_rules)
+        self.assertIn("do not delay a valid two-factor entry", prompt_rules)
+
+    def test_chart_prompt_allows_contained_breakouts_and_early_two_factor_entries(self):
+        prompt_rules = _mode_prompt_instructions("scalp", "M5", None)
+
+        self.assertIn("early two-factor entry", prompt_rules)
+        self.assertIn("A breakout must close beyond a confirmed swing", prompt_rules)
+        self.assertIn("without waiting for both rejection", prompt_rules)
 
     def test_combined_manual_routes_keep_each_timeframe_in_its_own_mode(self):
         selected_timeframes = {"scalp": "M15", "interval": "H1"}

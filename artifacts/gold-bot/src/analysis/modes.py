@@ -499,7 +499,7 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning M15, M30 and H1. Standard risk management. "
             "Targets are realistic for same-session trades."
         ),
-        risk_note = "Balanced intraday stop; TP1 targets 2R and TP2 extends the day move.",
+        risk_note = "Balanced intraday stop; TP1 needs 1.5R of clear structural room.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["intraday"],
         analysis_scan_interval_seconds = 15,
     ),
@@ -546,7 +546,7 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning H1, H4 and D1. Wider stops, larger targets. "
             "Expect fewer signals — only high-quality setups fire."
         ),
-        risk_note = "Structural swing stop with room for normal 4H/D1 noise; targets seek 2.5R+.",
+        risk_note = "Structural swing stop with room for normal higher-timeframe noise; minimum planned target is 1.5R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["swing"],
         analysis_scan_interval_seconds = 60,
     ),
@@ -592,7 +592,7 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning D1, W1 and MN1. Very few signals — only macro-confirmed moves. "
             "Stops are wide; targets are large. This is a long-term strategy."
         ),
-        risk_note = "Macro ATR/structure stop; targets are deliberately wide for multi-week moves.",
+        risk_note = "Wide structural stop for longer holds; targets require at least 1.5R of clear room.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["position"],
         analysis_scan_interval_seconds = 300,
     ),

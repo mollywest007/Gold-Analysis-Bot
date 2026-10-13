@@ -52,8 +52,18 @@ def _mkt_line() -> str:
 
 
 def _win_bar(pct: int) -> str:
+    if pct <= 0:
+        return "Not backtested"
     filled = round(pct / 10)
     return "[" + "█" * filled + "░" * (10 - filled) + f"] {pct}%"
+
+
+def _uses_rule_based_strategy(a: MarketAnalysis) -> bool:
+    report = getattr(a, "institutional_report", {}) or {}
+    return (
+        report.get("framework")
+        == "shared selected-timeframe momentum breakout/pullback strategy"
+    )
 
 
 def _struct_label(s: str) -> str:
@@ -1439,6 +1449,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
     quality_checks = report.get("quality_checks", []) or []
+    decision_summary = report.get("decision_summary", {}) or {}
     has_timeframe_profile = (
         mode_rules.get("minimum_pullback_depth_atr") is not None
         and mode_rules.get("structure_pivot_radius") is not None
@@ -1617,13 +1628,18 @@ def _reference_style_analysis_card(
     )
 
     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+    rule_based = _uses_rule_based_strategy(a)
     indication = str(
         getattr(a, "directional_indication", "NEUTRAL") or "NEUTRAL"
     ).upper()
     direction = action if action in ("BUY", "SELL") else (
         indication if indication in ("BUY", "SELL") else "WAIT"
     )
-    what_to_do = action if action in ("BUY", "SELL") else "WAIT"
+    what_to_do = (
+        action if action in ("BUY", "SELL")
+        else "NO TRADE" if rule_based
+        else "WAIT"
+    )
     data_is_real = (
         not getattr(a, "is_simulated", False)
         and report.get("data_quality", "REAL_OHLCV") == "REAL_OHLCV"
@@ -1639,6 +1655,21 @@ def _reference_style_analysis_card(
     win_probability = int(getattr(a, "win_probability", 0) or 0)
     if action not in ("BUY", "SELL"):
         win_probability = 0
+    confidence_display = (
+        f"Rule score {score}/100"
+        if rule_based
+        else f"{int(getattr(a, 'confidence', 0) or 0)}%"
+    )
+    win_display = (
+        "Not backtested"
+        if rule_based
+        else _win_bar(win_probability) if win_probability else "—"
+    )
+    rejection_reasons = decision_summary.get("rejection_reasons", []) or []
+    rejection_text = "; ".join(str(reason) for reason in rejection_reasons)
+    invalidation_conditions = (
+        decision_summary.get("invalidation_conditions", []) or []
+    )
     rr_ratio = float(getattr(a, "rr_ratio", 0.0) or 0.0)
 
     def _value(value, fallback="—"):
@@ -1696,7 +1727,7 @@ def _reference_style_analysis_card(
         f"  Conflict  : {conflict}",
         f"  Bias      : {bias} ({strength})",
         f"  Trend     : {trend}  |  ADX {adx:.0f}",
-        f"  Confidence: {int(getattr(a, 'confidence', 0) or 0)}%",
+        f"  {confidence_display}",
         *_entry_confirmation_lines(a),
         "",
         sep,
@@ -1708,8 +1739,28 @@ def _reference_style_analysis_card(
         f"  TP2   : {_price(getattr(a, 'tp2', 0))}",
         f"  TP3   : {_price(getattr(a, 'tp3', 0))}",
         f"  R:R   : {f'1:{rr_ratio:g}' if rr_ratio > 0 else '—'}",
-        f"  Win % : {_win_bar(win_probability) if win_probability else '—'}",
+        f"  Win % : {win_display}",
         f"  Grade : {grade}",
+        (
+            "  Position size: Unavailable — broker specifications and account equity not connected."
+            if rule_based
+            else ""
+        ),
+        (
+            "  Execution costs: Not applied — broker spread, commissions, and slippage unavailable."
+            if rule_based
+            else ""
+        ),
+        (
+            "  Rejection reason: " + rejection_text
+            if rule_based and rejection_text
+            else ""
+        ),
+        (
+            "  Invalidation: " + "; ".join(str(item) for item in invalidation_conditions)
+            if rule_based and invalidation_conditions
+            else ""
+        ),
         f"  Alert : {alert}",
         "",
         sep,
@@ -3267,6 +3318,7 @@ def outlook_card(a: MarketAnalysis) -> str:
     ms  = market_status()
     mkt = f"CLOSED — {ms['note']}" if not ms["is_open"] else ms["note"]
     SEP = "──────────────────────────────────"
+    rule_based = _uses_rule_based_strategy(a)
 
     # Determine HTF vs LTF context. These are calculated independently from
     # OHLC data; do not substitute the current signal for a trend label.
@@ -3280,16 +3332,36 @@ def outlook_card(a: MarketAnalysis) -> str:
     struct = _struct_label(a.market_structure)
     choch  = _choch_label(a.choch)
 
-    # Probability distribution
-    if a.action == "BUY":
-        bull_pct, bear_pct = a.win_probability, 100 - a.win_probability
-    elif a.action == "SELL":
-        bull_pct, bear_pct = 100 - a.win_probability, a.win_probability
+    # The adaptive rules have not been backtested with execution costs, so
+    # report the deterministic setup score without manufacturing probabilities.
+    if rule_based:
+        probability_lines = [
+            "",
+            SEP,
+            "  RULE-BASED QUALITY",
+            SEP,
+            "  Win probability: Not backtested",
+            f"  Setup score    : {a.confidence_score}/100",
+        ]
     else:
-        bull_pct = bear_pct = 50
-    bull_bar = "█" * round(bull_pct / 10) + "░" * (10 - round(bull_pct / 10))
-    bear_bar = "█" * round(bear_pct / 10) + "░" * (10 - round(bear_pct / 10))
-    conf_bar = _win_bar(a.confidence)
+        if a.action == "BUY":
+            bull_pct, bear_pct = a.win_probability, 100 - a.win_probability
+        elif a.action == "SELL":
+            bull_pct, bear_pct = 100 - a.win_probability, a.win_probability
+        else:
+            bull_pct = bear_pct = 50
+        bull_bar = "█" * round(bull_pct / 10) + "░" * (10 - round(bull_pct / 10))
+        bear_bar = "█" * round(bear_pct / 10) + "░" * (10 - round(bear_pct / 10))
+        conf_bar = _win_bar(a.confidence)
+        probability_lines = [
+            "",
+            SEP,
+            "  PROBABILITY",
+            SEP,
+            f"  Bullish [{bull_bar}] {bull_pct}%",
+            f"  Bearish [{bear_bar}] {bear_pct}%",
+            f"  Confidence  {conf_bar}",
+        ]
 
     # Evidence-first pressure narrative. The engine compares recent candle
     # bodies and +DI/-DI; the report must not claim HH/HL or rejection unless
@@ -3349,8 +3421,11 @@ def outlook_card(a: MarketAnalysis) -> str:
         bear_scene = f"A close below {fmt_price(a.support1)} with strong momentum would favour sellers."
         inval = "No directional invalidation; range break is required"
 
-    # Trade quality
-    if a.action in ("BUY", "SELL"):
+    # Rule grades are qualitative; do not convert them into a win-rate claim.
+    if rule_based and a.action in ("BUY", "SELL"):
+        quality = f"Rule grade {a.setup_quality}"
+        risk = getattr(a, "risk_level", "MODERATE").title()
+    elif a.action in ("BUY", "SELL"):
         if a.win_probability >= 68 and a.setup_quality in ("A+", "A"):
             quality, risk = "Excellent", "Low"
         elif a.win_probability >= 62:
@@ -3415,16 +3490,7 @@ def outlook_card(a: MarketAnalysis) -> str:
         lines.append(f"  Sell | {line}")
     lines.append(f"  Advantage: {advantage}")
 
-    # Probability
-    lines += [
-        "",
-        SEP,
-        "  PROBABILITY",
-        SEP,
-        f"  Bullish [{bull_bar}] {bull_pct}%",
-        f"  Bearish [{bear_bar}] {bear_pct}%",
-        f"  Confidence  {conf_bar}",
-    ]
+    lines += probability_lines
 
     # Trade setup when there is a signal
     if a.action in ("BUY", "SELL"):
@@ -3568,13 +3634,24 @@ def outlook_card(a: MarketAnalysis) -> str:
 def alert_card(a: MarketAnalysis) -> str:
     ms  = market_status()
     mkt = f"[CLOSED] {ms['note']}" if not ms["is_open"] else ms["note"]
+    rule_based = _uses_rule_based_strategy(a)
+    win_line = (
+        "  Win Rate  : Not backtested"
+        if rule_based
+        else f"  Win Rate  : {_win_bar(a.win_probability)}"
+    )
+    confidence_line = (
+        f"  Rule score: {a.confidence_score}/100"
+        if rule_based
+        else f"  Confidence: {a.confidence}%"
+    )
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         f"║  SIGNAL ALERT  XAU/USD  {a.action:<9}║",
         "╚══════════════════════════════════╝",
         "",
-        f"  Win Rate  : {_win_bar(a.win_probability)}",
-        f"  Confidence: {a.confidence}%   ADX: {a.adx:.1f}",
+        win_line,
+        f"{confidence_line}   ADX: {a.adx:.1f}",
         f"  Type      : {_trade_type_label(a)}",
         "",
         f"  Price     : {fmt_price(a.price)}",

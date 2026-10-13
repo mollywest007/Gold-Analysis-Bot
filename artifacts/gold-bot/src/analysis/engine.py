@@ -1697,7 +1697,7 @@ def _momentum_pullback_decision(
     ema50_history: List[float] = None,
     timeframe: str = None,
 ) -> dict:
-    """Mode- and timeframe-scaled trend → pullback → rejection → structure gate."""
+    """Mode-scaled structural breakout and pullback-continuation entry engine."""
     if mode_cfg is None:
         from src.mode_manager import get_mode_config
         mode_cfg = get_mode_config()
@@ -2140,14 +2140,14 @@ def _momentum_pullback_decision(
         return {
             **empty,
             "direction": direction,
-            "setup": "Waiting for a controlled pullback to hold support/resistance",
-            "confirmation": "Direction is clear, but the pullback is missing, too deep, or not holding a nearby level.",
-            "quality_checks": checks,
-            "skip_reason": (
-                "Pullback destroyed structure"
-                if pullback_destroyed
-                else "No valid rejection"
+            "setup": "Waiting for a valid entry location",
+            "confirmation": (
+                "Direction is clear, but neither a controlled pullback location "
+                "nor a contained breakout is currently valid."
             ),
+            "quality_checks": checks,
+            "skip_reason": "Pullback destroyed structure" if pullback_destroyed
+            else "No valid entry location",
             "skip_detail": (
                 "The pullback exceeded its structural depth or invalidated the protected swing."
                 if pullback_destroyed
@@ -2209,7 +2209,7 @@ def _momentum_pullback_decision(
             "direction": direction,
             "setup": "Structural stop is too tight for current volatility",
             "confirmation": (
-                "The pullback-swing stop is inside the volatility sanity floor; "
+            "The structural stop is inside the volatility sanity floor; "
                 "skip rather than widening it away from structure."
             ),
             "quality_checks": checks,
@@ -2222,7 +2222,7 @@ def _momentum_pullback_decision(
             "direction": direction,
             "setup": "Structural stop is too wide for the expected move",
             "confirmation": (
-                "The pullback swing exceeds this mode's maximum structural risk "
+                "The setup's structural swing exceeds this mode's maximum risk "
                 f"of {profile.maximum_stop_distance_atr:g} ATR; skipping instead "
                 "of widening or compressing the stop."
             ),
@@ -2259,7 +2259,7 @@ def _momentum_pullback_decision(
         }
 
     checks.extend([
-        "Stop is beyond the pullback swing with an ATR noise buffer",
+        "Stop is beyond structural invalidation with an ATR noise buffer",
         (
             "Nearest structural target offers at least "
             f"{profile.minimum_target_rr:g}R of clear room"
@@ -2272,7 +2272,7 @@ def _momentum_pullback_decision(
         if rsi_supports
         else (
             f"RSI {rsi:.1f} does not strongly disagree; "
-            "price structure and the pullback confirmation drive this entry."
+            "price structure and the selected entry path drive this entry."
         )
     )
     return {
@@ -2312,6 +2312,9 @@ def _momentum_pullback_decision(
         "tp3": tp3,
         "rr": rr,
         "setup_type": setup_type,
+        "entry_type": (
+            "momentum_breakout" if breakout_ready else "pullback_continuation"
+        ),
         "quality_grade": "A" if breakout_ready or pullback_confirmed else "B",
         "quality_checks": checks,
         "skip_reason": "",
@@ -2419,13 +2422,6 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         if action not in ("BUY", "SELL")
         else None
     )
-    confidence = (
-        78 if setup_status == "MODERATE ENTRY"
-        else 68 if setup_status == "MISSED"
-        else 61 if plan_direction
-        else 50
-    )
-
     bias = {
         "BULLISH": "Bullish",
         "BEARISH": "Bearish",
@@ -2433,6 +2429,19 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     }[condition]
     trend = bias
     strength = "Strong" if plan_direction else "Unclear"
+    rule_score_breakdown = {
+        "direction_structure": 40 if plan_direction else 0,
+        "entry_location": (
+            35 if plan_direction and decision.get("entry_low", 0.0) else 0
+        ),
+        "confirmation": (
+            25
+            if plan_direction and decision.get("quality_grade") == "A"
+            else 0
+        ),
+    }
+    rule_score = sum(rule_score_breakdown.values())
+    confidence = rule_score
     momentum = (
         "Bullish" if rsi > 50 else "Bearish" if rsi < 50 else "Neutral"
     )
@@ -2449,6 +2458,10 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "price_source": data.price_source,
         "candle_source": data.candle_source,
         "direction": simple_direction,
+        "mode": mode_cfg.name,
+        "timeframe": timeframe,
+        "market_bias": bias,
+        "trade_action": action if action in ("BUY", "SELL") else "NO TRADE",
         "market_condition": condition,
         "ema20": round(ema20, 2),
         "ema50": round(ema50, 2),
@@ -2456,6 +2469,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "atr14": round(atr, 2),
         "price_action": setup or "None",
         "setup_type": decision.get("setup_type", ""),
+        "entry_type": decision.get("entry_type", ""),
         "signal_status": signal_status,
         "setup_status": setup_status,
         "current_confirmation": wait_reason,
@@ -2484,10 +2498,61 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         "entry_zone": {"low": zone_low, "high": zone_high},
         "invalidation": invalidation,
         "recommended_rr": rr_ratio,
-        "score_breakdown": {
-            "direction_structure": 40 if plan_direction else 0,
-            "entry_location": 35 if decision.get("entry_low", 0.0) else 0,
-            "confirmation": 25 if decision.get("quality_grade") == "A" else 0,
+        "score_breakdown": rule_score_breakdown,
+        "probability_status": "Not backtested; no win-rate estimate is reported",
+        "decision_summary": {
+            "mode": mode_cfg.name,
+            "timeframe": timeframe,
+            "market_bias": bias,
+            "action": action if action in ("BUY", "SELL") else "NO TRADE",
+            "entry_zone": (
+                {"low": zone_low, "high": zone_high}
+                if action in ("BUY", "SELL")
+                else None
+            ),
+            "stop_loss": stop_loss if action in ("BUY", "SELL") else None,
+            "take_profit": (
+                [target for target in (tp1, tp2, tp3) if target]
+                if action in ("BUY", "SELL")
+                else None
+            ),
+            "risk_reward": rr_ratio if action in ("BUY", "SELL") else None,
+            "position_size": None,
+            "position_size_unavailable_reason": (
+                "No broker contract/tick specifications or account equity are connected."
+            ),
+            "rule_based_setup_quality": (
+                decision.get("quality_grade", "B")
+                if action in ("BUY", "SELL")
+                else "WAIT"
+            ),
+            "entry_type": decision.get("entry_type"),
+            "rule_score": rule_score,
+            "reasoning": wait_reason,
+            "rejection_reasons": (
+                []
+                if action in ("BUY", "SELL")
+                else [skip_reason or "Insufficient directional structure"]
+            ),
+            "invalidation_conditions": (
+                [
+                    (
+                        f"BUY thesis invalidated by a selected-timeframe close "
+                        f"below {invalidation:.2f}"
+                    )
+                    if action == "BUY"
+                    else (
+                        f"SELL thesis invalidated by a selected-timeframe close "
+                        f"above {invalidation:.2f}"
+                    )
+                ]
+                if invalidation
+                else ["No active directional setup"]
+            ),
+            "execution_costs_applied": False,
+            "execution_cost_note": (
+                "Broker-specific spread, commission, and slippage are not available."
+            ),
         },
     }
     reasons_against = [wait_reason] if setup_status != "MODERATE ENTRY" else []
@@ -2549,7 +2614,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             if plan_direction
             else "No clear selected-timeframe swing sequence"
         ),
-        win_probability=confidence if simple_direction in ("BUY", "SELL") else 0,
+        win_probability=0,
         directional_indication=simple_direction,
         confluence_list=confluence,
         tp3=tp3,
@@ -2576,8 +2641,8 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         pressure_advantage="Not used",
         market_regime=condition,
         institutional_report=report,
-        bullish_probability=confidence if condition == "BULLISH" else 100 - confidence,
-        bearish_probability=confidence if condition == "BEARISH" else 100 - confidence,
+        bullish_probability=0,
+        bearish_probability=0,
         confidence_score=confidence,
         legacy_direction=simple_direction or "WAIT",
         legacy_confirmation="ALIGNED" if rsi_supports else "NEUTRAL",
