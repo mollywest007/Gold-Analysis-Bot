@@ -14,14 +14,43 @@ from src.analysis.market_data import (
 from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 
 
-STANDARD_BACKTESTS = (
-    ("scalp", "M5"),
-    ("scalp", "M15"),
-    ("intraday", "M15"),
-    ("intraday", "H1"),
-    ("swing", "H4"),
-    ("swing", "D1"),
+STANDARD_BACKTESTS = tuple(
+    (mode, timeframe)
+    for mode in ("scalp", "intraday", "swing", "position")
+    for timeframe in MODES[mode].scan_timeframes
 )
+
+OUT_OF_SAMPLE_FRACTION = 0.30
+MINIMUM_METRIC_SAMPLE = 50
+
+
+def _performance_metrics(trades: list[dict]) -> Dict:
+    """Summarize closed first-touch outcomes in gross R, not broker P&L."""
+    realized_rs = [float(trade["realized_r"]) for trade in trades]
+    wins = sum(value > 0 for value in realized_rs)
+    gross_profit = sum(value for value in realized_rs if value > 0)
+    gross_loss = abs(sum(value for value in realized_rs if value < 0))
+
+    cumulative_r = 0.0
+    peak_r = 0.0
+    maximum_drawdown_r = 0.0
+    for trade_r in realized_rs:
+        cumulative_r += trade_r
+        peak_r = max(peak_r, cumulative_r)
+        maximum_drawdown_r = max(maximum_drawdown_r, peak_r - cumulative_r)
+
+    return {
+        "trade_count": len(trades),
+        "win_rate": round(wins / len(trades) * 100.0, 1) if trades else None,
+        "gross_profit_factor": (
+            round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
+        ),
+        "average_r_per_trade": (
+            round(sum(realized_rs) / len(realized_rs), 2) if trades else None
+        ),
+        "maximum_drawdown_r": round(maximum_drawdown_r, 2),
+        "sample_sufficient": len(trades) >= MINIMUM_METRIC_SAMPLE,
+    }
 
 
 def _timeframe_seconds(timeframe: str) -> int:
@@ -201,6 +230,14 @@ def replay_momentum_pullback(
 
     expected_bar_seconds = _timeframe_seconds(timeframe)
     max_age_seconds = profile.expected_holding_bars * expected_bar_seconds
+    out_of_sample_start_index = min(
+        len(closes) - 1,
+        first_signal_index
+        + int((len(closes) - first_signal_index) * (1.0 - OUT_OF_SAMPLE_FRACTION)),
+    )
+    out_of_sample_start_timestamp = float(
+        data.timestamps[out_of_sample_start_index]
+    )
 
     trades = []
     generated_signals = 0
@@ -341,6 +378,9 @@ def replay_momentum_pullback(
                 "entry_delay_minutes": entry_delay_minutes,
                 "signal_timestamp": float(data.timestamps[index]),
                 "exit_timestamp": float(data.timestamps[exit_index]),
+                "out_of_sample": (
+                    float(data.timestamps[index]) >= out_of_sample_start_timestamp
+                ),
             })
             index = exit_index + 1
             continue
@@ -361,15 +401,13 @@ def replay_momentum_pullback(
     loss_reason_counts = Counter(
         trade["loss_reason"] for trade in trades if trade["outcome"] == "SL"
     )
-    cumulative_r = 0.0
-    peak_r = 0.0
-    maximum_drawdown_r = 0.0
-    for trade_r in realized_rs:
-        cumulative_r += trade_r
-        peak_r = max(peak_r, cumulative_r)
-        maximum_drawdown_r = max(
-            maximum_drawdown_r, peak_r - cumulative_r
-        )
+    performance = _performance_metrics(trades)
+    in_sample_trades = [
+        trade for trade in trades if not trade["out_of_sample"]
+    ]
+    out_of_sample_trades = [
+        trade for trade in trades if trade["out_of_sample"]
+    ]
     longest_losing_streak = 0
     current_losing_streak = 0
     for trade in trades:
@@ -435,7 +473,13 @@ def replay_momentum_pullback(
             round(sum(realized_rs) / len(realized_rs), 2)
             if realized_rs else None
         ),
-        "maximum_drawdown_r": round(maximum_drawdown_r, 2),
+        "gross_profit_factor": performance["gross_profit_factor"],
+        "maximum_drawdown_r": performance["maximum_drawdown_r"],
+        "in_sample": _performance_metrics(in_sample_trades),
+        "out_of_sample": _performance_metrics(out_of_sample_trades),
+        "out_of_sample_start_timestamp": out_of_sample_start_timestamp,
+        "execution_costs_applied": False,
+        "cost_adjusted_metrics_available": False,
         "average_bars_to_event": (
             round(sum(bars_to_events) / len(bars_to_events), 1)
             if bars_to_events else None
@@ -517,11 +561,44 @@ def format_backtest_report(report: Dict) -> str:
         metrics = (
             f"Avg planned R:R: 1:{report['average_planned_rr']:.2f} | "
             f"Avg realized: {report['average_r_per_trade']:+.2f}R/trade | "
-            f"Max drawdown: {report['maximum_drawdown_r']:.2f}R\n"
+            f"Gross PF: "
+            f"{report['gross_profit_factor']:.2f}"
+            if report.get("gross_profit_factor") is not None
+            else f"Avg planned R:R: 1:{report['average_planned_rr']:.2f} | "
+            f"Avg realized: {report['average_r_per_trade']:+.2f}R/trade | "
+            "Gross PF: unavailable"
+        )
+        metrics += (
+            f" | Max drawdown: {report['maximum_drawdown_r']:.2f}R\n"
             f"Longest SL streak: {report['longest_losing_streak']} | "
             f"Avg time to entry: {report['average_entry_delay_candles']:.1f} "
             f"candle(s) / {report['average_entry_delay_minutes']:.1f} min | "
             f"Avg candles to TP/SL: {report['average_bars_to_event']:.1f}\n"
+        )
+        oos = report["out_of_sample"]
+        oos_win_rate = (
+            f"{oos['win_rate']:.1f}%" if oos["win_rate"] is not None else "—"
+        )
+        oos_pf = (
+            f"{oos['gross_profit_factor']:.2f}"
+            if oos["gross_profit_factor"] is not None
+            else "—"
+        )
+        oos_avg_r = (
+            f"{oos['average_r_per_trade']:+.2f}R"
+            if oos["average_r_per_trade"] is not None
+            else "—"
+        )
+        oos_note = (
+            "50+ outcomes"
+            if oos["sample_sufficient"]
+            else f"small sample ({oos['trade_count']}/50)"
+        )
+        oos_metrics = (
+            f"Chronological holdout ({OUT_OF_SAMPLE_FRACTION:.0%} of candles): "
+            f"{oos['trade_count']} trades | win {oos_win_rate} | "
+            f"gross PF {oos_pf} | avg {oos_avg_r} | "
+            f"max DD {oos['maximum_drawdown_r']:.2f}R ({oos_note})\n"
         )
         loss_setup = (
             f"{report['most_loss_setup_type']} "
@@ -546,7 +623,12 @@ def format_backtest_report(report: Dict) -> str:
     else:
         outcomes = "Trades: 0 | Win rate: unavailable | TP: 0 | SL: 0\n"
         metrics = (
-            "Average R:R, realized R, drawdown, streaks, and timing: unavailable.\n"
+            "Average R:R, realized R, gross PF, drawdown, streaks, and timing: unavailable.\n"
+        )
+        out_of_sample = report["out_of_sample"]
+        oos_metrics = (
+            f"Chronological holdout ({OUT_OF_SAMPLE_FRACTION:.0%} of candles): "
+            f"{out_of_sample['trade_count']} trades | performance metrics unavailable.\n"
         )
         loss_setup_line = "Losing-trade reason and setup type: no closed losses.\n"
         coverage = (
@@ -575,12 +657,14 @@ def format_backtest_report(report: Dict) -> str:
         f"(stale next-open entries skipped: {report['skipped_stale_entries']})\n"
         f"Skipped setup checks: {report['skipped_setups']} | "
         f"Most common skip: {skip_reason}\n"
-        f"{outcomes}{metrics}{loss_setup_line}{coverage}"
+        f"{outcomes}{metrics}{oos_metrics}{loss_setup_line}{coverage}"
         f"<i>{sample_note}</i>\n"
         "<i>First-touch replay only: same-candle SL/TP counts as SL. "
         "Skipped checks are per candle, not unique opportunities. "
-        "Spread, fees, slippage, and partial-position sizing are not modeled; "
-        "this is not net P&amp;L.</i>"
+        "Profit factor and R metrics are gross, not cost-adjusted. Historical "
+        "spread, commission, slippage, and partial-position sizing are missing; "
+        "this is not net P&amp;L. The holdout is not a forward test and is not "
+        "a comparison with the legacy strategy.</i>"
     )
 
 

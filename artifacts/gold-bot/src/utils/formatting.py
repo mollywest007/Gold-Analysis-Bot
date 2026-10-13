@@ -1566,7 +1566,9 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Price act.: {setup}",
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
         f"Risk      : ATR14 {fmt_price(atr)} sanity | structural swing SL, {maximum_stop_atr:g} ATR max",
-        f"Evidence  : Score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
+        f"Evidence  : Rule score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
+        f"Win % : Not backtested",
+        f"Grade     : {getattr(a, 'setup_quality', 'WAIT') or 'WAIT'}",
         f"Setup checks: {len(quality_checks)} confirmed",
         "──────────────────────────────────",
         "TRADE PLAN",
@@ -1579,6 +1581,36 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"TP3     : {fmt_price(getattr(a, 'tp3', 0.0)) if getattr(a, 'tp3', 0.0) else '—'}",
         f"R:R     : {f'1:{rr:g}' if rr else '—'}",
         f"Invalid : {fmt_price(invalidation) if invalidation else '—'}",
+        *(
+            [
+                "Position size: Unavailable — broker specifications and account equity not connected.",
+                "Execution costs: Not applied — broker spread, commissions, and slippage unavailable.",
+            ]
+        ),
+        *(
+            [
+                "Rejection: "
+                + "; ".join(
+                    str(reason)
+                    for reason in decision_summary.get("rejection_reasons", [])
+                )[:180]
+            ]
+            if decision_summary.get("rejection_reasons")
+            else []
+        ),
+        *(
+            [
+                "Invalidation: "
+                + "; ".join(
+                    str(condition)
+                    for condition in decision_summary.get(
+                        "invalidation_conditions", []
+                    )
+                )[:180]
+            ]
+            if decision_summary.get("invalidation_conditions")
+            else []
+        ),
         "──────────────────────────────────",
         "CURRENT CONFIRMATION",
         f"{str(getattr(a, 'current_confirmation', '') or wait_reason)[:220]}",

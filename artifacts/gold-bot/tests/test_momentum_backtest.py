@@ -136,10 +136,39 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(report["average_planned_rr"], 2.0)
         self.assertEqual(report["average_entry_delay_minutes"], 1.0)
         self.assertFalse(report["sample_sufficient"])
+        self.assertIsNone(report["gross_profit_factor"])
+        self.assertFalse(report["execution_costs_applied"])
+        self.assertEqual(report["out_of_sample"]["trade_count"], 0)
         formatted = backtest.format_backtest_report(report)
         self.assertIn("Only 1 closed outcomes", formatted)
         self.assertIn("TP1-first rate: 100.0%", formatted)
         self.assertIn("TP1 first: 1, SL first: 0", formatted)
+        self.assertIn("Chronological holdout (30% of candles)", formatted)
+        self.assertIn("not a forward test", formatted)
+
+    def test_gross_performance_metrics_include_profit_factor_and_drawdown(self):
+        metrics = backtest._performance_metrics([
+            {"realized_r": 2.0},
+            {"realized_r": -1.0},
+            {"realized_r": -0.5},
+        ])
+
+        self.assertEqual(metrics["trade_count"], 3)
+        self.assertEqual(metrics["win_rate"], 33.3)
+        self.assertEqual(metrics["gross_profit_factor"], 1.33)
+        self.assertEqual(metrics["average_r_per_trade"], 0.17)
+        self.assertEqual(metrics["maximum_drawdown_r"], 1.5)
+        self.assertFalse(metrics["sample_sufficient"])
+
+    def test_standard_replays_cover_every_selectable_standalone_mode_timeframe(self):
+        expected = {
+            (mode, timeframe)
+            for mode in ("scalp", "intraday", "swing", "position")
+            for timeframe in backtest.MODES[mode].scan_timeframes
+        }
+
+        self.assertEqual(set(backtest.STANDARD_BACKTESTS), expected)
+        self.assertEqual(len(backtest.STANDARD_BACKTESTS), len(expected))
 
     def test_replay_counts_stop_first_when_both_levels_touch_same_candle(self):
         report = self._run_one_signal(stop_and_target_same_candle=True)
@@ -161,6 +190,21 @@ class ReplayTests(unittest.TestCase):
 
         self.assertIn("MIT XAU/USD sample (XAU/USD)", formatted)
         self.assertNotIn("Yahoo Finance GC=F", formatted)
+
+    def test_zero_trade_report_includes_holdout_without_crashing(self):
+        data = self._data()
+        with patch.object(
+            backtest.engine,
+            "_momentum_pullback_decision",
+            return_value={"status": "WAIT", "skip_reason": "No setup"},
+        ):
+            report = backtest.replay_momentum_pullback(data, "scalp", "M1")
+
+        formatted = backtest.format_backtest_report(report)
+
+        self.assertEqual(report["closed_trades"], 0)
+        self.assertEqual(report["out_of_sample"]["trade_count"], 0)
+        self.assertIn("Chronological holdout (30% of candles)", formatted)
 
     def test_replay_rejects_simulated_candles_and_wrong_mode_timeframe(self):
         data = self._data()

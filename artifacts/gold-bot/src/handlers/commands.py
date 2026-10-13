@@ -578,7 +578,7 @@ async def cmd_backtest(
     chat_id = update.effective_chat.id
     await _begin_panel(context, chat_id, "backtest")
     message = await update.message.reply_text(
-        "Replaying six mode/timeframe profiles separately on completed real gold candles..."
+        "Replaying every selectable standalone mode/timeframe separately on completed real gold candles..."
     )
     await _track_panel(context, chat_id, "backtest", message)
     try:
