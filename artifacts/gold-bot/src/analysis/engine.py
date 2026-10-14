@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 
-from .market_data import fetch_ohlcv, OHLCVData
+from .market_data import fetch_ohlcv, get_cached_gold_quote, OHLCVData
 from .institutional import (
     as_dict as institutional_as_dict,
     build_context as build_institutional_context,
@@ -1696,6 +1696,7 @@ def _momentum_pullback_decision(
     ema20_history: List[float] = None,
     ema50_history: List[float] = None,
     timeframe: str = None,
+    market_spread: Optional[float] = None,
 ) -> dict:
     """Mode-scaled structural breakout and pullback-continuation entry engine."""
     if mode_cfg is None:
@@ -1721,6 +1722,7 @@ def _momentum_pullback_decision(
         "quality_checks": [],
         "skip_reason": "Insufficient directional structure",
         "skip_detail": "",
+        "spread_filter_status": "not_evaluated",
     }
     if len(closes) < 18 or min(len(opens), len(highs), len(lows)) < len(closes):
         return {
@@ -2266,6 +2268,61 @@ def _momentum_pullback_decision(
         ),
     ])
     rr = round(abs(tp1 - entry) / risk, 2)
+    spread_atr = (
+        float(market_spread) / volatility
+        if market_spread is not None and math.isfinite(float(market_spread))
+        else None
+    )
+    if spread_atr is not None and spread_atr > profile.maximum_spread_atr:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Observed XAU/USD spread is wide for this mode/timeframe",
+            "confirmation": (
+                f"Validated reference spread is {spread_atr:.2f} ATR; "
+                f"the configured cap is {profile.maximum_spread_atr:.2f} ATR."
+            ),
+            "quality_checks": checks,
+            "skip_reason": "Spread exceeds mode limit",
+            "skip_detail": (
+                "Wait for a narrower validated reference spread; this quote is "
+                "a market-data screen, not a broker execution guarantee."
+            ),
+            "spread_filter_status": "rejected",
+            "observed_market_spread": float(market_spread),
+            "spread_atr": round(spread_atr, 4),
+        }
+    reference_spread_rr = None
+    if market_spread is not None and spread_atr is not None:
+        # Conservative estimate from midpoint-based levels: budget the observed
+        # spread against reward and half-spread against stop risk. Commissions
+        # and slippage remain unavailable and are not implied here.
+        reference_spread_rr = round(
+            (abs(tp1 - entry) - float(market_spread))
+            / (risk + float(market_spread) / 2.0),
+            2,
+        )
+        if reference_spread_rr < profile.minimum_target_rr:
+            return {
+                **empty,
+                "direction": direction,
+                "setup": "Reference spread reduces the plan below its R:R floor",
+                "confirmation": (
+                    f"Estimated R:R after reference spread is "
+                    f"1:{reference_spread_rr:g}, below the configured "
+                    f"1:{profile.minimum_target_rr:g} minimum."
+                ),
+                "quality_checks": checks,
+                "skip_reason": "Spread-adjusted R:R below minimum",
+                "skip_detail": (
+                    "The structural target does not leave enough room after the "
+                    "observed spread estimate."
+                ),
+                "spread_filter_status": "rejected",
+                "observed_market_spread": float(market_spread),
+                "spread_atr": round(spread_atr, 4),
+                "reference_spread_rr": reference_spread_rr,
+            }
     half_zone = volatility * profile.entry_zone_atr
     rsi_confirmation = (
         f"RSI {rsi:.1f} supports momentum."
@@ -2311,6 +2368,14 @@ def _momentum_pullback_decision(
         "tp2": tp2,
         "tp3": tp3,
         "rr": rr,
+        "spread_filter_status": (
+            "passed" if spread_atr is not None else "unavailable"
+        ),
+        "observed_market_spread": (
+            round(float(market_spread), 5) if market_spread is not None else None
+        ),
+        "spread_atr": round(spread_atr, 4) if spread_atr is not None else None,
+        "reference_spread_rr": reference_spread_rr,
         "setup_type": setup_type,
         "entry_type": (
             "momentum_breakout" if breakout_ready else "pullback_continuation"
@@ -2335,6 +2400,12 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
     previous_rsi = compute_rsi(closes[:-1], 14) if len(closes) > 15 else rsi
     atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
     profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
+    quote = get_cached_gold_quote(price)
+    market_spread = (
+        float(quote["ask"]) - float(quote["bid"])
+        if quote.get("spread_available")
+        else None
+    )
     decision = _momentum_pullback_decision(
         opens,
         highs,
@@ -2348,6 +2419,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         previous_rsi,
         mode_cfg=mode_cfg,
         timeframe=timeframe,
+        market_spread=market_spread,
     )
     direction = decision["direction"]
     setup = decision["setup"]
@@ -2398,6 +2470,11 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
         )
     skip_reason = str(decision.get("skip_reason") or "")
     skip_detail = str(decision.get("skip_detail") or decision["confirmation"])
+    spread_filter_status = str(
+        decision.get("spread_filter_status") or "not_evaluated"
+    )
+    if market_spread is None and spread_filter_status == "not_evaluated":
+        spread_filter_status = "unavailable"
     if setup_status != "MODERATE ENTRY" and (
         data.is_simulated or not spot_context_usable
     ):
@@ -2486,6 +2563,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
             "stop_buffer_atr": profile.stop_buffer_atr,
             "entry_sensitivity_atr": profile.level_tolerance_atr,
             "maximum_extension_atr": profile.maximum_ema_distance_atr,
+            "maximum_spread_atr": profile.maximum_spread_atr,
             "breakout_enabled": profile.breakout_enabled,
             "structure_pivot_radius": profile.structure_pivot_radius,
             "structure_lookback_candles": profile.structure_lookback_candles,
@@ -2550,8 +2628,18 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg) -> MarketAna
                 else ["No active directional setup"]
             ),
             "execution_costs_applied": False,
+            "spread_filter_status": spread_filter_status,
+            "observed_market_spread": market_spread,
+            "spread_atr": decision.get("spread_atr"),
+            "reference_spread_rr": decision.get("reference_spread_rr"),
+            "maximum_spread_atr": profile.maximum_spread_atr,
+            "source_quote_symbol": quote.get("symbol"),
             "execution_cost_note": (
-                "Broker-specific spread, commission, and slippage are not available."
+                "A fresh validated market spread is used only as a configurable "
+                "screen; broker commissions and slippage are unavailable."
+                if market_spread is not None
+                else "No fresh validated two-sided quote was available; spread was "
+                "not screened. Broker commissions and slippage are unavailable."
             ),
         },
     }

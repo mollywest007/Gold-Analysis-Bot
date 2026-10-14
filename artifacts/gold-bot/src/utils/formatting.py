@@ -1460,6 +1460,11 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"{float(mode_rules['maximum_pullback_depth_atr']):g} ATR · "
         f"pivot ±{int(mode_rules['structure_pivot_radius'])} bars"
         + (
+            f" · spread ≤{float(mode_rules['maximum_spread_atr']):g} ATR"
+            if mode_rules.get("maximum_spread_atr") is not None
+            else ""
+        )
+        + (
             f" · hold ≤{int(mode_rules['expected_holding_bars'])} bars"
             if mode_rules.get("expected_holding_bars") is not None
             else ""
@@ -1487,6 +1492,22 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     target = float(getattr(a, "tp1", 0.0) or 0.0)
     invalidation = float(getattr(a, "invalidation", 0.0) or 0.0)
     rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
+    spread_status = str(decision_summary.get("spread_filter_status") or "unavailable")
+    observed_spread = decision_summary.get("observed_market_spread")
+    spread_atr = decision_summary.get("spread_atr")
+    spread_cap = decision_summary.get("maximum_spread_atr")
+    if spread_status in ("passed", "rejected") and observed_spread is not None:
+        spread_line = (
+            f"Reference spread screen: {spread_status.upper()} — "
+            f"{float(observed_spread):.2f} ({float(spread_atr):.2f} ATR; "
+            f"cap {float(spread_cap):.2f} ATR)."
+            if spread_atr is not None and spread_cap is not None
+            else f"Reference spread screen: {spread_status.upper()}."
+        )
+    else:
+        spread_line = (
+            "Reference spread screen: unavailable — no fresh validated two-sided quote."
+        )
     zone_low = float(getattr(a, "entry_zone_low", 0.0) or 0.0)
     zone_high = float(getattr(a, "entry_zone_high", 0.0) or 0.0)
     zone = (
@@ -1584,7 +1605,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         *(
             [
                 "Position size: Unavailable — broker specifications and account equity not connected.",
-                "Execution costs: Not applied — broker spread, commissions, and slippage unavailable.",
+                spread_line,
+                "Costs: broker commissions and slippage are unavailable; not included.",
             ]
         ),
         *(

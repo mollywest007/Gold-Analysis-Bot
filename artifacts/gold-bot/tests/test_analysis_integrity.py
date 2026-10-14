@@ -87,6 +87,68 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertEqual(result["tp3"], 0.0)
         self.assertGreaterEqual(result["rr"], 1.0)
 
+    def test_reference_spread_filter_rejects_spread_above_mode_atr_cap(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes,
+                price=110.35,
+                ema20=110.0,
+                ema50=111.5,
+                atr=2.5,
+                rsi=55.0,
+                previous_rsi=54.0,
+                mode_cfg=MODES["intraday"],
+                timeframe="M15",
+                market_spread=0.46,
+            )
+
+        self.assertEqual(result["status"], "WAIT")
+        self.assertEqual(result["direction"], "BUY")
+        self.assertEqual(result["spread_filter_status"], "rejected")
+        self.assertEqual(result["skip_reason"], "Spread exceeds mode limit")
+        self.assertGreater(
+            result["spread_atr"],
+            resolve_momentum_pullback_profile(
+                MODES["intraday"], "M15"
+            ).maximum_spread_atr,
+        )
+
+    def test_reference_spread_is_costed_against_minimum_reward_risk(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes,
+                price=110.35,
+                ema20=110.0,
+                ema50=111.5,
+                atr=2.5,
+                rsi=55.0,
+                previous_rsi=54.0,
+                mode_cfg=MODES["intraday"],
+                timeframe="M15",
+                market_spread=0.05,
+            )
+
+        self.assertEqual(result["status"], "MODERATE ENTRY")
+        self.assertEqual(result["spread_filter_status"], "passed")
+        self.assertGreaterEqual(
+            result["reference_spread_rr"],
+            resolve_momentum_pullback_profile(
+                MODES["intraday"], "M15"
+            ).minimum_target_rr,
+        )
+
     def test_direction_and_location_allow_early_pullback_without_minor_break(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
         closes[-1] = 110.25
@@ -315,6 +377,8 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIn("Rule score 75/100", card)
         self.assertIn("Win % : Not backtested", card)
         self.assertIn("Position size: Unavailable", card)
+        self.assertIn("Reference spread screen: unavailable", card)
+        self.assertIn("spread ≤0.18 ATR", card)
 
     def test_only_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()

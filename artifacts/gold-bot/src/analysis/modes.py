@@ -52,6 +52,9 @@ class MomentumPullbackProfile:
     expected_holding_bars: int = 24
     minimum_target_rr: float = 1.5
     breakout_enabled: bool = True
+    # Maximum validated reference-market spread relative to ATR14. These are
+    # conservative policy caps, not values optimized from historical results.
+    maximum_spread_atr: float = 0.20
 
 
 @dataclass
@@ -143,6 +146,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         entry_zone_atr=0.08,
         range_trap_lookback_candles=16,
         range_trap_max_width_atr=2.25,
+        maximum_spread_atr=0.12,
     ),
     "intraday": MomentumPullbackProfile(
         swing_change_atr=0.03,
@@ -171,6 +175,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         entry_zone_atr=0.12,
         range_trap_lookback_candles=20,
         range_trap_max_width_atr=2.50,
+        maximum_spread_atr=0.18,
     ),
     "swing": MomentumPullbackProfile(
         swing_change_atr=0.05,
@@ -199,6 +204,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         entry_zone_atr=0.16,
         range_trap_lookback_candles=24,
         range_trap_max_width_atr=2.75,
+        maximum_spread_atr=0.25,
     ),
     "position": MomentumPullbackProfile(
         swing_change_atr=0.07,
@@ -227,6 +233,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         entry_zone_atr=0.20,
         range_trap_lookback_candles=30,
         range_trap_max_width_atr=3.00,
+        maximum_spread_atr=0.30,
     ),
 }
 

@@ -91,6 +91,26 @@ class ModeSpecificProfileTests(unittest.TestCase):
             self.assertEqual(profile.buy_rsi_veto_below, 35.0)
             self.assertEqual(profile.sell_rsi_veto_above, 65.0)
 
+    def test_reference_spread_caps_get_stricter_for_shorter_holding_modes(self):
+        spread_caps = {
+            mode: resolve_momentum_pullback_profile(
+                MODES[mode], MODES[mode].preferred_timeframe
+            ).maximum_spread_atr
+            for mode in ("scalp", "intraday", "swing", "position")
+        }
+
+        self.assertEqual(
+            spread_caps,
+            {
+                "scalp": 0.12,
+                "intraday": 0.18,
+                "swing": 0.25,
+                "position": 0.30,
+            },
+        )
+        self.assertLess(spread_caps["scalp"], spread_caps["intraday"])
+        self.assertLess(spread_caps["intraday"], spread_caps["swing"])
+
     def test_selectable_timeframes_match_the_mode_strategy_scope(self):
         self.assertEqual(
             MODES["scalp"].scan_timeframes,
@@ -166,6 +186,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         self.assertIn("Selected mode: Swing", prompt_rules)
         self.assertIn("at least 1:1.5 R:R", prompt_rules)
         self.assertIn("do not delay a valid two-factor entry", prompt_rules)
+        self.assertIn("Reject a verified reference spread above 0.25 ATR", prompt_rules)
 
     def test_chart_prompt_allows_contained_breakouts_and_early_two_factor_entries(self):
         prompt_rules = _mode_prompt_instructions("scalp", "M5", None)

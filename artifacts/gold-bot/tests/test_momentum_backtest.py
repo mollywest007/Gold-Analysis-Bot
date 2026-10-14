@@ -138,6 +138,7 @@ class ReplayTests(unittest.TestCase):
         self.assertFalse(report["sample_sufficient"])
         self.assertIsNone(report["gross_profit_factor"])
         self.assertFalse(report["execution_costs_applied"])
+        self.assertFalse(report["spread_filter_tested"])
         self.assertEqual(report["out_of_sample"]["trade_count"], 0)
         formatted = backtest.format_backtest_report(report)
         self.assertIn("Only 1 closed outcomes", formatted)
@@ -145,6 +146,7 @@ class ReplayTests(unittest.TestCase):
         self.assertIn("TP1 first: 1, SL first: 0", formatted)
         self.assertIn("Chronological holdout (30% of candles)", formatted)
         self.assertIn("not a forward test", formatted)
+        self.assertIn("live spread screen is not tested", formatted)
 
     def test_gross_performance_metrics_include_profit_factor_and_drawdown(self):
         metrics = backtest._performance_metrics([

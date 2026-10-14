@@ -480,6 +480,7 @@ def replay_momentum_pullback(
         "out_of_sample_start_timestamp": out_of_sample_start_timestamp,
         "execution_costs_applied": False,
         "cost_adjusted_metrics_available": False,
+        "spread_filter_tested": False,
         "average_bars_to_event": (
             round(sum(bars_to_events) / len(bars_to_events), 1)
             if bars_to_events else None
@@ -662,9 +663,10 @@ def format_backtest_report(report: Dict) -> str:
         "<i>First-touch replay only: same-candle SL/TP counts as SL. "
         "Skipped checks are per candle, not unique opportunities. "
         "Profit factor and R metrics are gross, not cost-adjusted. Historical "
-        "spread, commission, slippage, and partial-position sizing are missing; "
-        "this is not net P&amp;L. The holdout is not a forward test and is not "
-        "a comparison with the legacy strategy.</i>"
+        "bid/ask spread, commission, slippage, and partial-position sizing are "
+        "missing; the live spread screen is not tested and this is not net "
+        "P&amp;L. The holdout is not a forward test and is not a comparison with "
+        "the legacy strategy.</i>"
     )
 
 
