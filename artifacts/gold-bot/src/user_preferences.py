@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 COMBINED_MODE = "scalp_interval"
 SCALP_STREAM = "scalp"
 INTERVAL_STREAM = "interval"
+_COMBINED_DEFAULT_TIMEFRAMES = {
+    SCALP_STREAM: "M15",
+    INTERVAL_STREAM: "H1",
+}
 
 PREFERENCES_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "user_preferences.json"
@@ -79,13 +83,13 @@ def get_preferences(chat_id: int) -> Dict[str, str]:
             scalp_timeframe = (
                 legacy_tf
                 if legacy_tf in scalp_cfg.scan_timeframes
-                else scalp_cfg.preferred_timeframe
+                else _COMBINED_DEFAULT_TIMEFRAMES[SCALP_STREAM]
             )
         if interval_timeframe not in interval_cfg.scan_timeframes:
             interval_timeframe = (
                 legacy_tf
                 if legacy_tf in interval_cfg.scan_timeframes
-                else interval_cfg.preferred_timeframe
+                else _COMBINED_DEFAULT_TIMEFRAMES[INTERVAL_STREAM]
             )
         normalized = {
             "mode": mode,
@@ -163,12 +167,12 @@ def set_mode(chat_id: int, mode: str) -> ModeConfig:
             # A combined session starts with its documented independent
             # defaults instead of copying one single-mode timeframe into both
             # streams.
-            scalp_timeframe = scalp_cfg.preferred_timeframe
-            interval_timeframe = interval_cfg.preferred_timeframe
+            scalp_timeframe = _COMBINED_DEFAULT_TIMEFRAMES[SCALP_STREAM]
+            interval_timeframe = _COMBINED_DEFAULT_TIMEFRAMES[INTERVAL_STREAM]
         if scalp_timeframe not in scalp_cfg.scan_timeframes:
-            scalp_timeframe = scalp_cfg.preferred_timeframe
+            scalp_timeframe = _COMBINED_DEFAULT_TIMEFRAMES[SCALP_STREAM]
         if interval_timeframe not in interval_cfg.scan_timeframes:
-            interval_timeframe = interval_cfg.preferred_timeframe
+            interval_timeframe = _COMBINED_DEFAULT_TIMEFRAMES[INTERVAL_STREAM]
         data[_key(chat_id)] = {
             "mode": mode,
             "timeframe": scalp_timeframe,

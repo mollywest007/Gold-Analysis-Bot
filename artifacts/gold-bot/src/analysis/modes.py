@@ -401,7 +401,7 @@ def resolve_momentum_pullback_profile(
         expected_holding_bars=_MODE_HOLDING_BARS.get(
             mode, _MODE_HOLDING_BARS["intraday"]
         )[rank],
-        minimum_target_rr=max(1.5, mode_cfg.min_rr_ratio),
+        minimum_target_rr=max(1.3, mode_cfg.min_rr_ratio),
         confirmation_break_atr=(
             {"scalp": 0.005, "intraday": 0.02, "swing": 0.05, "position": 0.08}
             .get(mode, 0.02)
@@ -423,7 +423,7 @@ MODES: Dict[str, ModeConfig] = {
         scan_timeframes = ["M1", "M3", "M5", "M15", "M30", "H1"],
         # M15 is the stable default for a new Scalp session. M1/M3/M5 remain
         # available for faster execution; M30/H1 use broader scaled profiles.
-        preferred_timeframe = "M15",
+        preferred_timeframe = "M5",
         confirmation_map = {
             "M1": "M15", "M3": "M15", "M5": "M30", "M15": "H1",
             "M30": "H1", "H1": "H4",
@@ -435,7 +435,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.25,
         breakout_lookback = 8,
         liquidity_lookback = 8,
-        min_rr_ratio = 1.5,
+        min_rr_ratio = 1.3,
         feature_weights = {
             "breakout": 0.12, "liquidity_sweep": 0.12, "volume_spike": 0.08,
             "momentum_shift": 0.10, "trend_regime": 0.06, "macro_alignment": 0.0,
@@ -464,7 +464,7 @@ MODES: Dict[str, ModeConfig] = {
             "Signals fire from M1 through H1. M30/H1 use broader structure "
             "than the lower-timeframe scalp rules."
         ),
-        risk_note = "Tight volatility stop; TP1 is a quick 1.5R target.",
+        risk_note = "Micro-structure stop; the adaptive engine requires at least 1.3R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
         analysis_scan_interval_seconds = 5,
     ),
@@ -475,7 +475,7 @@ MODES: Dict[str, ModeConfig] = {
         emoji       = "📊",
         description = "Day-trade setups on M15/M30/H1. Balanced risk, same-day exits.",
         scan_timeframes = ["M15", "M30", "H1"],
-        preferred_timeframe = "H1",
+        preferred_timeframe = "M15",
         confirmation_map = {"M15": "H1", "M30": "H1", "H1": "H4"},
         context_timeframes = ["H1", "H4", "D1"],
         min_votes           = 4,   # current engine default
@@ -526,7 +526,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.6,
         breakout_lookback = 30,
         liquidity_lookback = 25,
-        min_rr_ratio = 1.5,
+        min_rr_ratio = 2.0,
         feature_weights = {
             "breakout": 0.04, "liquidity_sweep": 0.05, "volume_spike": 0.04,
             "momentum_shift": 0.02, "trend_regime": 0.12, "macro_alignment": 0.0,
@@ -553,7 +553,7 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning H1, H4 and D1. Wider stops, larger targets. "
             "Expect fewer signals — only high-quality setups fire."
         ),
-        risk_note = "Structural swing stop with room for normal higher-timeframe noise; minimum planned target is 1.5R.",
+        risk_note = "Structural swing stop with room for higher-timeframe noise; minimum planned target is 2R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["swing"],
         analysis_scan_interval_seconds = 60,
     ),
@@ -573,7 +573,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.8,
         breakout_lookback = 50,
         liquidity_lookback = 40,
-        min_rr_ratio = 1.5,
+        min_rr_ratio = 2.0,
         feature_weights = {
             "breakout": 0.03, "liquidity_sweep": 0.03, "volume_spike": 0.03,
             "momentum_shift": 0.01, "trend_regime": 0.16, "macro_alignment": 0.0,
@@ -599,7 +599,7 @@ MODES: Dict[str, ModeConfig] = {
             "Scanning D1, W1 and MN1. Very few signals — only macro-confirmed moves. "
             "Stops are wide; targets are large. This is a long-term strategy."
         ),
-        risk_note = "Wide structural stop for longer holds; targets require at least 1.5R of clear room.",
+        risk_note = "Wide structural stop for longer holds; minimum target is 2R, preferring 3R when structure permits.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["position"],
         analysis_scan_interval_seconds = 300,
     ),

@@ -152,7 +152,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         self.assertGreater(scalp_plan[0], 100.0)
         self.assertEqual(
             [MODES[mode].min_rr_ratio for mode in ("scalp", "intraday", "swing", "position")],
-            [1.5, 1.5, 1.5, 1.5],
+            [1.3, 1.5, 2.0, 2.0],
         )
         self.assertGreater(position_plan[0], 100.0)
 
@@ -184,7 +184,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         prompt_rules = _mode_prompt_instructions("swing", "H4", None)
 
         self.assertIn("Selected mode: Swing", prompt_rules)
-        self.assertIn("at least 1:1.5 R:R", prompt_rules)
+        self.assertIn("at least 1:2 R:R", prompt_rules)
         self.assertIn("do not delay a valid two-factor entry", prompt_rules)
         self.assertIn("Reject a verified reference spread above 0.25 ATR", prompt_rules)
 
@@ -277,8 +277,11 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         data = CandleData()
         seen = []
 
-        def analyze_with_profile(candles, timeframe, mode_cfg):
-            seen.append((timeframe, mode_cfg.name, mode_cfg.momentum_pullback))
+        def analyze_with_profile(candles, timeframe, mode_cfg, **kwargs):
+            seen.append((
+                timeframe, mode_cfg.name, mode_cfg.momentum_pullback,
+                tuple(sorted((kwargs.get("frame_rejections") or {}).keys())),
+            ))
             return mode_cfg
 
         with (
@@ -288,8 +291,8 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             for mode, timeframe in (
-                ("scalp", "M15"),
-                ("intraday", "H1"),
+                ("scalp", "M5"),
+                ("intraday", "M15"),
                 ("swing", "H4"),
                 ("position", "D1"),
             ):
@@ -299,13 +302,19 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             seen,
             [
-                (timeframe, mode, MODES[mode].momentum_pullback)
+                (timeframe, mode, MODES[mode].momentum_pullback, frames)
                 for mode, timeframe in (
-                    ("scalp", "M15"),
-                    ("intraday", "H1"),
+                    ("scalp", "M5"),
+                    ("intraday", "M15"),
                     ("swing", "H4"),
                     ("position", "D1"),
                 )
+                for frames in [tuple(sorted({
+                    "scalp": ("M15", "M5", "M1"),
+                    "intraday": ("H1", "M15", "M5"),
+                    "swing": ("D1", "H4", "H1"),
+                    "position": ("W1", "D1", "H4"),
+                }[mode]))]
             ],
         )
 

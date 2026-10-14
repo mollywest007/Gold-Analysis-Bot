@@ -66,7 +66,7 @@ class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
             use_higher_timeframe_context=False,
         )
 
-    async def test_single_analysis_fetches_only_the_selected_timeframe(self):
+    async def test_single_analysis_fetches_mode_context_setup_and_refinement(self):
         with patch.object(
             engine,
             "fetch_ohlcv",
@@ -81,12 +81,18 @@ class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(side_effect=AssertionError("HTF must not be fetched")),
         ):
             result = await engine._analyze_single(
-                "M15",
+                "M5",
                 mode="scalp",
                 use_higher_timeframe_context=True,
             )
 
-        self.assertEqual(result.timeframe, "M15")
-        self.assertEqual(result.htf_bias, "Not used")
+        self.assertEqual(result.timeframe, "M5")
+        self.assertEqual(
+            result.analysis_timeframes,
+            {"context": "M15", "setup": "M5", "refinement": "M1"},
+        )
         self.assertEqual(result.ltf_trends, {})
-        fetch_ohlcv.assert_awaited_once_with("M15")
+        self.assertEqual(
+            {call.args[0] for call in fetch_ohlcv.await_args_list},
+            {"M15", "M5", "M1"},
+        )

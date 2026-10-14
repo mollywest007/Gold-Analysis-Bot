@@ -22,10 +22,10 @@ class ModeManagerTests(unittest.TestCase):
         self.path_patch.stop()
         os.unlink(self.tmp.name)
 
-    def test_scalp_defaults_to_m15(self):
+    def test_scalp_defaults_to_m5(self):
         with open(self.tmp.name, "w") as f:
             json.dump({"mode": "scalp"}, f)
-        self.assertEqual(mode_manager.get_timeframe(), "M15")
+        self.assertEqual(mode_manager.get_timeframe(), "M5")
 
     def test_selected_timeframe_survives_reload(self):
         mode_manager.set_mode("scalp")
