@@ -66,7 +66,7 @@ class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
             use_higher_timeframe_context=False,
         )
 
-    async def test_single_analysis_fetches_mode_context_setup_and_refinement(self):
+    async def test_single_analysis_fetches_only_the_selected_timeframe(self):
         with patch.object(
             engine,
             "fetch_ohlcv",
@@ -87,12 +87,6 @@ class ConsensusGateTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result.timeframe, "M5")
-        self.assertEqual(
-            result.analysis_timeframes,
-            {"context": "M15", "setup": "M5", "refinement": "M1"},
-        )
+        self.assertEqual(result.analysis_timeframes, {})
         self.assertEqual(result.ltf_trends, {})
-        self.assertEqual(
-            {call.args[0] for call in fetch_ohlcv.await_args_list},
-            {"M15", "M5", "M1"},
-        )
+        fetch_ohlcv.assert_awaited_once_with("M5")

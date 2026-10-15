@@ -17,13 +17,12 @@ Improvements over v2:
 import asyncio
 import logging
 import math
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 
 from .market_data import (
-    fetch_ohlcv, get_cached_gold_quote, OHLCVData, _candle_end_timestamp,
+    fetch_ohlcv, get_cached_gold_quote, OHLCVData,
 )
 from .institutional import (
     as_dict as institutional_as_dict,
@@ -32,8 +31,6 @@ from .institutional import (
     fetch_intermarket_snapshot,
 )
 from .modes import resolve_momentum_pullback_profile
-from .adaptive.config import PROFILES as ADAPTIVE_PROFILES, resolve_timeframes
-from .adaptive.engine import evaluate as evaluate_adaptive
 
 logger = logging.getLogger(__name__)
 
@@ -194,8 +191,8 @@ class MarketAnalysis:
     latest_candle_timestamp: float = 0.0
     price_source: str = "unknown"
     candle_source: str = "unknown"
-    # Weighted multi-timeframe signal output. These fields are rule-based
-    # evidence, not a win-rate estimate.
+    # Selected-timeframe signal output. These fields are rule-based evidence,
+    # not a win-rate estimate.
     signal_category: str = "WAIT"
     buy_score: int = 0
     sell_score: int = 0
@@ -2398,218 +2395,10 @@ def _momentum_pullback_decision(
     }
 
 
-_TIMEFRAME_SECONDS = {
-    "M1": 60, "M3": 180, "M5": 300, "M15": 900, "M30": 1800,
-    "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800,
-}
-
-
-def _completed_strategy_candles(data, timeframe, now=None):
-    """Copy only timestamped, fully closed candles; unknown status is not assumed complete."""
-    if data is None:
-        return None, "No candle series was returned."
-    timestamps = getattr(data, "timestamps", None) or []
-    if len(timestamps) != len(getattr(data, "closes", [])):
-        return None, "Candle timestamps are missing or misaligned; completion cannot be verified."
-    now = float(now if now is not None else time.time())
-    try:
-        indices = [
-            i for i, stamp in enumerate(timestamps)
-            if _candle_end_timestamp(float(stamp), timeframe) <= now
-        ]
-    except (TypeError, ValueError, OSError):
-        return None, "Candle timestamps are invalid for the selected timeframe."
-    if not indices:
-        return None, "No completed candles are available yet."
-    last_end = _candle_end_timestamp(float(timestamps[indices[-1]]), timeframe)
-    duration = _TIMEFRAME_SECONDS.get(timeframe, 30 * 86400)
-    if now - last_end > duration * 3:
-        return None, "The latest completed candle is stale for this timeframe."
-    fetched_at = float(getattr(data, "fetched_at", 0.0) or 0.0)
-    if fetched_at and now - fetched_at > max(duration * 3, 600):
-        return None, "The market-data snapshot is stale."
-    return OHLCVData(
-        [data.opens[i] for i in indices],
-        [data.highs[i] for i in indices],
-        [data.lows[i] for i in indices],
-        [data.closes[i] for i in indices],
-        [data.volumes[i] for i in indices] if getattr(data, "volumes", None) else [0] * len(indices),
-        spot_price=float(getattr(data, "price", 0.0) or 0.0),
-        is_simulated=bool(getattr(data, "is_simulated", False)),
-        timestamps=[float(timestamps[i]) for i in indices],
-        fetched_at=fetched_at,
-        price_source=getattr(data, "price_source", "unknown"),
-        candle_source=getattr(data, "candle_source", "unknown"),
-        symbol=getattr(data, "symbol", "unknown"),
-    ), ""
-
-
-def _analyze_adaptive_data(data, timeframe, mode_cfg, frame_data, frame_rejections=None):
-    """Adapt the multi-timeframe rule engine to the bot's stable MarketAnalysis contract."""
-    roles = resolve_timeframes(mode_cfg.name, timeframe)
-    quote = get_cached_gold_quote(float(getattr(data, "price", 0.0) or 0.0)) if data else {}
-    spread = (
-        float(quote["ask"]) - float(quote["bid"])
-        if quote.get("spread_available") else None
-    )
-    decision = evaluate_adaptive(mode_cfg.name, timeframe, frame_data, spread)
-    rejections = list(decision.get("rejection_reasons") or [])
-    for role in ("context", "setup"):
-        tf = roles.get(role)
-        if tf and (frame_rejections or {}).get(tf):
-            reason = f"{role.title()} {tf}: {(frame_rejections or {})[tf]}"
-            if reason not in rejections:
-                rejections.append(reason)
-
-    source_frames = [roles["setup"]]
-    if roles.get("context"):
-        source_frames.append(roles["context"])
-    source_ok = all(
-        (frame_data.get(tf) is not None)
-        and not getattr(frame_data[tf], "is_simulated", True)
-        and getattr(frame_data[tf], "price_source", "") == "spot"
-        and getattr(frame_data[tf], "candle_source", "") == "spot_normalized_futures"
-        for tf in source_frames
-    )
-    action = decision["action"] if source_ok else "NO TRADE"
-    if not source_ok:
-        rejections.append(
-            "Verified live XAU/USD spot and spot-normalized candles are required for context and setup timeframes."
-        )
-    if action == "NO TRADE":
-        category = "WAIT"
-    else:
-        category = decision["category"]
-    status = {
-        "EARLY": "EARLY ENTRY",
-        "MODERATE": "MODERATE ENTRY",
-        "STRONG": "STRONG ENTRY",
-    }.get(category, "WAIT")
-    score = max(int(decision.get("buy_score", 0)), int(decision.get("sell_score", 0)))
-    directional = (
-        "BUY" if decision.get("buy_score", 0) > decision.get("sell_score", 0)
-        else "SELL" if decision.get("sell_score", 0) > decision.get("buy_score", 0)
-        else "NEUTRAL"
-    )
-    price = float(getattr(data, "price", 0.0) or 0.0) if data else 0.0
-    price_source = getattr(data, "price_source", "unavailable") if data else "unavailable"
-    candle_source = getattr(data, "candle_source", "unavailable") if data else "unavailable"
-    trend = str(decision.get("structure") or "UNCLEAR")
-    bias = {
-        "BULLISH": "Bullish", "BEARISH": "Bearish", "RANGE": "Ranging",
-        "UNCLEAR": "Unclear",
-    }.get(trend, "Unclear")
-    entry = decision["entry"] if action in ("BUY", "SELL") else 0.0
-    stop = decision["stop"] if action in ("BUY", "SELL") else 0.0
-    target = decision["target"] if action in ("BUY", "SELL") else 0.0
-    rr = decision["rr"] if action in ("BUY", "SELL") else 0.0
-    atr_value = float(decision.get("atr") or 0.0)
-    zone_half = atr_value * (0.08 if mode_cfg.name == "scalp" else 0.12)
-    zone_low = round(entry - zone_half, 2) if action in ("BUY", "SELL") else 0.0
-    zone_high = round(entry + zone_half, 2) if action in ("BUY", "SELL") else 0.0
-    reasoning = decision.get("reasoning") or (
-        "; ".join(rejections) if rejections else "No qualifying setup."
-    )
-    if not source_ok:
-        reasoning = "; ".join(rejections)
-    report = {
-        "framework": "adaptive weighted multi-timeframe price-action engine",
-        "data_quality": "REAL_OHLCV" if source_ok else "UNAVAILABLE_OR_UNVERIFIED",
-        "mode": mode_cfg.name,
-        "timeframe_roles": roles,
-        "mode_thresholds": {
-            "early": ADAPTIVE_PROFILES[mode_cfg.name].early_threshold,
-            "moderate": ADAPTIVE_PROFILES[mode_cfg.name].score_threshold,
-            "strong": ADAPTIVE_PROFILES[mode_cfg.name].strong_threshold,
-            "minimum_rr": ADAPTIVE_PROFILES[mode_cfg.name].minimum_rr,
-        },
-        "market_bias": bias,
-        "market_regime": decision.get("regime"),
-        "structure": decision.get("structure"),
-        "buy_score": decision.get("buy_score"),
-        "sell_score": decision.get("sell_score"),
-        "score_breakdown": decision.get("score_breakdown"),
-        "signal_category": category,
-        "setup_types": decision.get("setup_type"),
-        "supporting_evidence": decision.get("supporting_evidence"),
-        "rejection_reasons": rejections,
-        "execution_costs_applied": False,
-        "reference_spread_status": decision.get("spread_status"),
-        "observed_market_spread": spread,
-        "execution_cost_note": "Only a fresh reference spread is screened; broker commission and slippage data are unavailable.",
-        "position_size": None,
-        "win_rate": None,
-    }
-    active_indicators = []
-    for name, value, signal in (
-        ("EMA20 context", decision.get("ema20"), directional),
-        ("EMA50 context", decision.get("ema50"), directional),
-        ("RSI14 context", decision.get("rsi"), "SUPPORTING"),
-        ("MACD histogram", decision.get("macd"), "SUPPORTING"),
-        ("ATR14", decision.get("atr"), "VOLATILITY"),
-    ):
-        if value is not None:
-            active_indicators.append(Indicator(name, float(value), signal, 0.0))
-    return MarketAnalysis(
-        price=price, timeframe=timeframe, bias=bias, trend=bias,
-        strength=category.title() if action in ("BUY", "SELL") else "Unclear",
-        momentum=("Bullish" if (decision.get("macd") or 0) > 0 else "Bearish" if (decision.get("macd") or 0) < 0 else "Neutral"),
-        confidence=score, entry=entry, stop_loss=stop, tp1=target, tp2=0.0,
-        rr_ratio=rr, action=action, wait_reason=reasoning,
-        resistance1=float(decision.get("resistance") or 0.0),
-        resistance2=float(decision.get("resistance_next") or 0.0),
-        support1=float(decision.get("support") or 0.0),
-        support2=float(decision.get("support_next") or 0.0),
-        breakout=bool(action in ("BUY","SELL") and "breakout" in str(decision.get("setup_type",""))),
-        reversal="liquidity_sweep" in str(decision.get("setup_type","")),
-        liquidity_zone=str(decision.get("setup_type") or "Not detected"),
-        atr=atr_value, indicators=active_indicators,
-        buy_votes=sum(v > 0 for v in decision.get("score_breakdown",{}).get("BUY",{}).values()),
-        sell_votes=sum(v > 0 for v in decision.get("score_breakdown",{}).get("SELL",{}).values()),
-        wait_votes=0 if action in ("BUY","SELL") else 1,
-        verdict_reason=reasoning, trade_type=mode_cfg.trade_type_label,
-        analysis_mode=mode_cfg.name, limit_entry=entry,
-        entry_note="Spot market reference; structural stop and observed opposing-level target.",
-        is_simulated=not source_ok,
-        rsi_value=float(decision.get("rsi") or 0.0),
-        market_structure=("HH_HL" if trend=="BULLISH" else "LH_LL" if trend=="BEARISH" else "RANGING" if trend=="RANGE" else "TRANSITION"),
-        directional_indication=directional,
-        confluence_list=list(decision.get("supporting_evidence") or []),
-        setup_quality=category if action in ("BUY","SELL") else "WAIT",
-        setup_grade=category if action in ("BUY","SELL") else "WAIT",
-        daily_bias=trend, market_regime=decision.get("regime","TRANSITIONING / UNCLEAR"),
-        institutional_report=report, confidence_score=score,
-        legacy_direction=directional, legacy_confirmation="NEUTRAL",
-        combined_direction=action if action in ("BUY","SELL") else "WAIT",
-        risk_level="HIGH" if decision.get("regime")=="HIGH-VOLATILITY / UNSTABLE" else "MODERATE",
-        reasons_supporting=list(decision.get("supporting_evidence") or []),
-        reasons_against=rejections,
-        invalidating_conditions=list(decision.get("invalidation_conditions") or ["No active directional setup"]),
-        best_entry_zone={"low":zone_low,"high":zone_high} if zone_low else {},
-        recommended_rr=rr, ema20=float(decision.get("ema20") or 0.0),
-        ema50=float(decision.get("ema50") or 0.0),
-        market_condition=trend, entry_zone_low=zone_low, entry_zone_high=zone_high,
-        early_entry=entry, invalidation=stop,
-        signal_status=status, signal_category=category,
-        early_direction=directional if category=="EARLY" else "",
-        price_action_setup=str(decision.get("setup_type") or ""),
-        setup_status=status,
-        current_confirmation=reasoning,
-        key_zone=f"Support {decision.get('support')} / resistance {decision.get('resistance')}",
-        moderate_entry_low=zone_low, moderate_entry_high=zone_high,
-        latest_candle_timestamp=float(data.timestamps[-1]) if data and data.timestamps else 0.0,
-        price_source=price_source, candle_source=candle_source,
-        buy_score=int(decision.get("buy_score",0)),
-        sell_score=int(decision.get("sell_score",0)),
-        analysis_timeframes=roles,
-        htf_bias=str(decision.get("context_structure") or "Unavailable"),
-    )
-
-
-def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg, frame_data=None, frame_rejections=None) -> MarketAnalysis:
+def _analyze_simple_data(
+    data: OHLCVData, timeframe: str, mode_cfg, profile=None
+) -> MarketAnalysis:
     """Analyze only the selected chart with a fast momentum-pullback strategy."""
-    if frame_data is not None:
-        return _analyze_adaptive_data(data, timeframe, mode_cfg, frame_data, frame_rejections)
     closes = data.closes
     highs = data.highs
     lows = data.lows
@@ -2620,7 +2409,7 @@ def _analyze_simple_data(data: OHLCVData, timeframe: str, mode_cfg, frame_data=N
     rsi = compute_rsi(closes, 14)
     previous_rsi = compute_rsi(closes[:-1], 14) if len(closes) > 15 else rsi
     atr = max(compute_atr(highs, lows, closes, 14), price * 0.0001)
-    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
+    profile = profile or resolve_momentum_pullback_profile(mode_cfg, timeframe)
     quote = get_cached_gold_quote(price)
     market_spread = (
         float(quote["ask"]) - float(quote["bid"])
@@ -3001,7 +2790,7 @@ async def _analyze_single(
     mode: str = None,
     use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
-    """Analyze the selected setup chart with its mode-configured MTF context."""
+    """Analyze only the selected chart with its existing mode profile."""
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode)
@@ -3011,37 +2800,15 @@ async def _analyze_single(
             "resolve a combined mode to its stream first."
         )
     timeframe = timeframe or mode_cfg.preferred_timeframe
+    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
 
-    if timeframe not in _TIMEFRAME_SECONDS and timeframe != "MN1":
-        raise ValueError(f"Unsupported analysis timeframe: {timeframe}")
-
-    roles = resolve_timeframes(mode_cfg.name, timeframe)
-    requested = list(dict.fromkeys(
-        tf for tf in (roles["context"], roles["setup"], roles["refinement"]) if tf
-    ))
-    fetched = await asyncio.gather(
-        *(fetch_ohlcv(tf) for tf in requested),
-        return_exceptions=True,
-    )
-    raw_by_tf = {
-        tf: (value if not isinstance(value, Exception) else None)
-        for tf, value in zip(requested, fetched)
-    }
-    completed, frame_rejections = {}, {}
-    for tf, raw in raw_by_tf.items():
-        candles, reason = _completed_strategy_candles(raw, tf)
-        if candles is not None:
-            completed[tf] = candles
-        else:
-            frame_rejections[tf] = reason
-
-    data = raw_by_tf.get(roles["setup"])
+    data = await fetch_ohlcv(timeframe)
     if data is None:
-        logger.warning("No setup timeframe data for %s/%s", mode_cfg.name, timeframe)
-    return _analyze_simple_data(
-        data, timeframe, mode_cfg, frame_data=completed,
-        frame_rejections=frame_rejections,
-    )
+        raise ValueError(
+            f"Market data is unavailable for {mode_cfg.name}/{timeframe}; "
+            "analysis cannot continue."
+        )
+    return _analyze_simple_data(data, timeframe, mode_cfg, profile=profile)
 
     # The institutional layer is independent from the legacy vote engine.  It
     # gets the same candle set, plus a cached cross-asset snapshot, and is
@@ -4175,7 +3942,7 @@ async def analyze(
     include_full_context: bool = False,
     use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
-    """Return the selected mode's adaptive context/setup/refinement analysis."""
+    """Return the selected mode's analysis for the requested timeframe."""
     return await _analyze_single(
         timeframe,
         mode=mode,

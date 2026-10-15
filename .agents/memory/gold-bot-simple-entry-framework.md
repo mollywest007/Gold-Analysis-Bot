@@ -1,25 +1,19 @@
 ---
-name: Gold Bot Adaptive Entry Strategy
-description: The shared mode-scaled XAU/USD breakout/pullback rules and backtest evidence boundary.
+name: Gold Bot Single-Timeframe Entry Strategy
+description: The retained selected-timeframe XAU/USD entry path and backtest evidence boundary.
 ---
 
-Production XAU/USD analysis uses one configurable weighted multi-timeframe engine with distinct Scalp, Intraday, Swing, and Position profiles. Each profile defines context, setup, and optional refinement frames, thresholds, holding scope, and volatility/risk filters; an explicitly selected chart timeframe adapts the role frames without changing the selected mode. Setups include pullbacks, sweeps, breakouts, retests, and support/resistance reactions. EMA, RSI, and MACD are supporting context rather than mandatory gates; missing evidence earns no points. A score never overrides stale or incomplete data, an invalid structural stop, an obstructed target, or the configured minimum R:R. Combined mode remains an independent Scalp/Intraday coordinator, and invalid explicit modes must fail rather than inherit another profile.
+Live analysis uses the selected chart timeframe and its mode-scaled MomentumPullbackProfile. The adaptive weighted multi-timeframe engine was explicitly removed; do not reintroduce it. Preserve the Scalp, Intraday, Swing, and Position modes, combined Scalp/Intraday monitoring, alerts, and trade tracking.
 
-**Why:** The user replaced the earlier selected-timeframe-only strategy with four distinct multi-timeframe profiles and requested early-to-moderate setups without requiring every indicator to agree. Risk/target levels must stay tied to observed structure and mode/timeframe volatility.
+**Why:** The user chose to remove the adaptive strategy while retaining other bot features and the separate existing analysis path.
 
-**How to apply:** Resolve the active mode and its frame roles before analysis; do not collapse the four modes into one timeframe or one threshold. Preserve the existing UI, selectable modes, combined streams, and non-analysis bot features. Keep scores and category thresholds rule-based and configurable, prevent correlated indicators from counting as separate confirmations, and fail closed on incomplete or stale data. Do not invent market prices, stops, targets, or execution costs. Do not describe starting thresholds as proven profitable.
-
-Once the mode/timeframe strategy reports a valid entry, do not veto it again with generic win-probability, ADX, or ChoCH requirements. Keep market-data validation, structural risk checks, deduplication, and active-trade guards.
-
-**Why:** The user explicitly requires the shared price-action rules to decide entries and does not want extra indicators to suppress an otherwise valid setup.
-
-**How to apply:** Do not route valid shared-engine entries through generic confluence or win-probability gates; preserve the rule-based setup grade in the analysis/report.
+**How to apply:** Analyze the selected timeframe with the profile resolved for the active mode and timeframe. Keep mode switching, combined streams, and non-analysis bot features intact. Do not label the retained path as adaptive or use the removed multi-timeframe engine.
 
 ## Backtest evidence boundary
 
-Existing trade summaries without historical OHLCV cannot replay this strategy.
+Existing trade summaries without historical OHLCV cannot replay the active strategy.
 
-**Why:** The user explicitly said not to claim this strategy is profitable or superior without evidence; old entry/exit summaries are not a strategy backtest.
+**Why:** The user explicitly said not to claim a strategy is profitable or superior without evidence; old entry/exit summaries are not a strategy backtest.
 
 **How to apply:** Only report backtest metrics from suitable historical candle data and at least 50 replayable closed outcomes. If candles are missing, label the metrics unavailable instead of substituting old trade outcomes.
 

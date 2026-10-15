@@ -3386,8 +3386,8 @@ def outlook_card(a: MarketAnalysis) -> str:
     struct = _struct_label(a.market_structure)
     choch  = _choch_label(a.choch)
 
-    # The adaptive rules have not been backtested with execution costs, so
-    # report the deterministic setup score without manufacturing probabilities.
+    # Rule-based setups have no verified win-rate estimate, so show their
+    # deterministic quality score without presenting a probability.
     if rule_based:
         probability_lines = [
             "",

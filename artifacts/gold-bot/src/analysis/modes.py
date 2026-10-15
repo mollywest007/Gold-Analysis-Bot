@@ -464,7 +464,7 @@ MODES: Dict[str, ModeConfig] = {
             "Signals fire from M1 through H1. M30/H1 use broader structure "
             "than the lower-timeframe scalp rules."
         ),
-        risk_note = "Micro-structure stop; the adaptive engine requires at least 1.3R.",
+        risk_note = "Micro-structure stop; target requires at least 1.3R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
         analysis_scan_interval_seconds = 5,
     ),

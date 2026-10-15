@@ -269,7 +269,7 @@ class ModeScopedBroadcastTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_analysis_loads_the_requested_mode_profile_before_scanning(self):
+    async def test_analysis_uses_one_requested_timeframe_and_its_mode_profile(self):
         class CandleData:
             def __len__(self):
                 return 40
@@ -277,15 +277,14 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         data = CandleData()
         seen = []
 
-        def analyze_with_profile(candles, timeframe, mode_cfg, **kwargs):
-            seen.append((
-                timeframe, mode_cfg.name, mode_cfg.momentum_pullback,
-                tuple(sorted((kwargs.get("frame_rejections") or {}).keys())),
-            ))
+        def analyze_with_profile(candles, timeframe, mode_cfg, profile):
+            seen.append((timeframe, mode_cfg.name, profile))
             return mode_cfg
 
         with (
-            patch.object(engine, "fetch_ohlcv", new=AsyncMock(return_value=data)),
+            patch.object(
+                engine, "fetch_ohlcv", new=AsyncMock(return_value=data)
+            ) as fetch,
             patch.object(
                 engine, "_analyze_simple_data", side_effect=analyze_with_profile
             ),
@@ -302,19 +301,26 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             seen,
             [
-                (timeframe, mode, MODES[mode].momentum_pullback, frames)
+                (
+                    timeframe,
+                    mode,
+                    resolve_momentum_pullback_profile(MODES[mode], timeframe),
+                )
                 for mode, timeframe in (
                     ("scalp", "M5"),
                     ("intraday", "M15"),
                     ("swing", "H4"),
                     ("position", "D1"),
                 )
-                for frames in [tuple(sorted({
-                    "scalp": ("M15", "M5", "M1"),
-                    "intraday": ("H1", "M15", "M5"),
-                    "swing": ("D1", "H4", "H1"),
-                    "position": ("W1", "D1", "H4"),
-                }[mode]))]
+            ],
+        )
+        self.assertEqual(
+            fetch.await_args_list,
+            [
+                unittest.mock.call("M5"),
+                unittest.mock.call("M15"),
+                unittest.mock.call("H4"),
+                unittest.mock.call("D1"),
             ],
         )
 
@@ -327,6 +333,23 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "no standalone"):
                 await engine._analyze_single("M15", mode="scalp_interval")
             fetch.assert_not_awaited()
+
+            with self.assertRaisesRegex(ValueError, "Unsupported momentum"):
+                await engine._analyze_single("Y1", mode="intraday")
+            fetch.assert_not_awaited()
+
+    async def test_missing_selected_timeframe_data_fails_without_analysis(self):
+        with (
+            patch.object(
+                engine, "fetch_ohlcv", new=AsyncMock(return_value=None)
+            ) as fetch,
+            patch.object(engine, "_analyze_simple_data") as analyze,
+        ):
+            with self.assertRaisesRegex(ValueError, "Market data is unavailable"):
+                await engine._analyze_single("M15", mode="intraday")
+
+        fetch.assert_awaited_once_with("M15")
+        analyze.assert_not_called()
 
 
 if __name__ == "__main__":
