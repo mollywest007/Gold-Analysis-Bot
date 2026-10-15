@@ -100,6 +100,21 @@ class ModeConfig:
     # Background entry-analysis cadence. Combined mode uses the interval
     # belonging to each independently resolved stream, not this coordinator.
     analysis_scan_interval_seconds: int = 15
+    # Weighted multi-timeframe analysis defaults. The user's selected chart
+    # timeframe remains the setup timeframe; context/refinement roles are
+    # resolved relative to these mode defaults.
+    analysis_context_timeframe: str = ""
+    analysis_setup_timeframe: str = ""
+    analysis_refinement_timeframe: str = ""
+    analysis_min_score: int = 60
+    analysis_early_score: int = 55
+    analysis_strong_score: int = 82
+    analysis_context_weight: float = 0.35
+    analysis_setup_weight: float = 0.50
+    analysis_refinement_weight: float = 0.15
+    analysis_atr_expansion_limit: float = 2.25
+    analysis_max_candle_age_bars: float = 3.0
+    preferred_rr_ratio: float = 2.0
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
     # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default
@@ -467,6 +482,18 @@ MODES: Dict[str, ModeConfig] = {
         risk_note = "Micro-structure stop; target requires at least 1.3R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
         analysis_scan_interval_seconds = 5,
+        analysis_context_timeframe = "M15",
+        analysis_setup_timeframe = "M5",
+        analysis_refinement_timeframe = "M1",
+        analysis_min_score = 55,
+        analysis_early_score = 49,
+        analysis_strong_score = 78,
+        analysis_context_weight = 0.25,
+        analysis_setup_weight = 0.55,
+        analysis_refinement_weight = 0.20,
+        analysis_atr_expansion_limit = 2.00,
+        analysis_max_candle_age_bars = 2.0,
+        preferred_rr_ratio = 1.5,
     ),
 
     "intraday": ModeConfig(
@@ -509,6 +536,18 @@ MODES: Dict[str, ModeConfig] = {
         risk_note = "Balanced intraday stop; TP1 needs 1.5R of clear structural room.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["intraday"],
         analysis_scan_interval_seconds = 15,
+        analysis_context_timeframe = "H1",
+        analysis_setup_timeframe = "M15",
+        analysis_refinement_timeframe = "M5",
+        analysis_min_score = 58,
+        analysis_early_score = 52,
+        analysis_strong_score = 81,
+        analysis_context_weight = 0.35,
+        analysis_setup_weight = 0.50,
+        analysis_refinement_weight = 0.15,
+        analysis_atr_expansion_limit = 2.10,
+        analysis_max_candle_age_bars = 2.5,
+        preferred_rr_ratio = 1.8,
     ),
 
     "swing": ModeConfig(
@@ -556,6 +595,18 @@ MODES: Dict[str, ModeConfig] = {
         risk_note = "Structural swing stop with room for higher-timeframe noise; minimum planned target is 2R.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["swing"],
         analysis_scan_interval_seconds = 60,
+        analysis_context_timeframe = "D1",
+        analysis_setup_timeframe = "H4",
+        analysis_refinement_timeframe = "H1",
+        analysis_min_score = 62,
+        analysis_early_score = 56,
+        analysis_strong_score = 84,
+        analysis_context_weight = 0.45,
+        analysis_setup_weight = 0.45,
+        analysis_refinement_weight = 0.10,
+        analysis_atr_expansion_limit = 2.25,
+        analysis_max_candle_age_bars = 3.0,
+        preferred_rr_ratio = 2.0,
     ),
 
     "position": ModeConfig(
@@ -602,6 +653,18 @@ MODES: Dict[str, ModeConfig] = {
         risk_note = "Wide structural stop for longer holds; minimum target is 2R, preferring 3R when structure permits.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["position"],
         analysis_scan_interval_seconds = 300,
+        analysis_context_timeframe = "W1",
+        analysis_setup_timeframe = "D1",
+        analysis_refinement_timeframe = "H4",
+        analysis_min_score = 65,
+        analysis_early_score = 59,
+        analysis_strong_score = 87,
+        analysis_context_weight = 0.55,
+        analysis_setup_weight = 0.40,
+        analysis_refinement_weight = 0.05,
+        analysis_atr_expansion_limit = 2.50,
+        analysis_max_candle_age_bars = 4.0,
+        preferred_rr_ratio = 3.0,
     ),
 
     # This is a coordinator profile for the UI and persistence layer.  The
