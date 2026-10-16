@@ -34,14 +34,19 @@ class RiskPolicy:
             raise ValueError("Default risk cannot exceed maximum suggested risk.")
         if self.max_total_risk_fraction < self.risk_per_trade_fraction:
             raise ValueError("Total risk limit cannot be below per-trade risk.")
-        if not isinstance(self.max_simultaneous_setups, int) or self.max_simultaneous_setups < 1:
+        if type(self.max_simultaneous_setups) is not int or self.max_simultaneous_setups < 1:
             raise ValueError("Maximum simultaneous setups must be a positive integer.")
         if (
             not math.isfinite(self.tp1_partial_fraction)
             or not 0 < self.tp1_partial_fraction < 1
         ):
             raise ValueError("TP1 partial fraction must be in (0, 1).")
-        if self.event_filter_before_minutes < 0 or self.event_filter_after_minutes < 0:
+        if (
+            type(self.event_filter_before_minutes) is not int
+            or type(self.event_filter_after_minutes) is not int
+            or self.event_filter_before_minutes < 0
+            or self.event_filter_after_minutes < 0
+        ):
             raise ValueError("Event-risk windows cannot be negative.")
         return self
 

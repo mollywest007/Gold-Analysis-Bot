@@ -12,6 +12,7 @@ The rest of the system picks it up automatically.
 """
 
 from dataclasses import dataclass, field, replace
+import math
 from typing import Dict, List, Optional, Tuple
 
 
@@ -50,7 +51,8 @@ class MomentumPullbackProfile:
     confirmation_break_atr: float = 0.03
     range_trap_minimum_touches: int = 2
     expected_holding_bars: int = 24
-    minimum_target_rr: float = 1.5
+    minimum_target_rr: float = 1.3
+    preferred_target_rr: float = 1.5
     breakout_enabled: bool = True
     # Maximum validated reference-market spread relative to ATR14. These are
     # conservative policy caps, not values optimized from historical results.
@@ -61,6 +63,91 @@ class MomentumPullbackProfile:
     sweep_penetration_atr: float = 0.04
     # Last-mile guard between a validated plan and the current spot quote.
     maximum_live_entry_distance_atr: float = 0.35
+
+    def __post_init__(self) -> None:
+        """Reject incomplete or unsafe per-mode execution profiles at startup."""
+        positive_fields = (
+            "maximum_pullback_depth_atr",
+            "level_tolerance_atr",
+            "chop_minimum_range_atr",
+            "maximum_breakout_range_atr",
+            "maximum_breakout_body_atr",
+            "maximum_ema_distance_atr",
+            "minimum_stop_distance_atr",
+            "maximum_stop_distance_atr",
+            "minimum_target_room_atr",
+            "range_trap_max_width_atr",
+            "minimum_target_rr",
+            "preferred_target_rr",
+            "maximum_spread_atr",
+            "maximum_live_entry_distance_atr",
+        )
+        nonnegative_fields = (
+            "swing_change_atr",
+            "minimum_pullback_depth_atr",
+            "structure_hold_tolerance_atr",
+            "rejection_wick_min_atr",
+            "rejection_wick_body_ratio",
+            "chop_max_drift_atr",
+            "buy_rsi_veto_below",
+            "sell_rsi_veto_above",
+            "stop_buffer_atr",
+            "target_buffer_atr",
+            "entry_zone_atr",
+            "confirmation_break_atr",
+            "sweep_penetration_atr",
+        )
+        for name in (*positive_fields, *nonnegative_fields):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or (value <= 0 if name in positive_fields else value < 0)
+            ):
+                raise ValueError(
+                    f"Momentum-pullback setting '{name}' must be "
+                    f"{'positive' if name in positive_fields else 'non-negative'} and finite."
+                )
+
+        integer_fields = (
+            "pullback_candles",
+            "chop_lookback_candles",
+            "impulse_lookback_candles",
+            "range_trap_lookback_candles",
+            "structure_pivot_radius",
+            "structure_lookback_candles",
+            "range_trap_minimum_touches",
+            "expected_holding_bars",
+        )
+        for name in integer_fields:
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"Momentum-pullback setting '{name}' must be a positive integer.")
+        if type(self.chop_max_alternations) is not int or self.chop_max_alternations < 0:
+            raise ValueError("chop_max_alternations must be a non-negative integer.")
+
+        for name in (
+            "buy_rsi_veto_below",
+            "sell_rsi_veto_above",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or not 0 <= value <= 100:
+                raise ValueError(f"Momentum-pullback setting '{name}' must be between 0 and 100.")
+        for name in (
+            "rejection_close_position",
+            "breakout_close_position",
+            "breakout_minimum_body_ratio",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"Momentum-pullback setting '{name}' must be between 0 and 1.")
+        if self.minimum_pullback_depth_atr > self.maximum_pullback_depth_atr:
+            raise ValueError("Minimum pullback depth cannot exceed maximum depth.")
+        if self.minimum_stop_distance_atr >= self.maximum_stop_distance_atr:
+            raise ValueError("Maximum stop distance must exceed the minimum stop distance.")
+        if self.preferred_target_rr < self.minimum_target_rr:
+            raise ValueError("Preferred target R:R cannot be below the mode minimum.")
 
 
 @dataclass
@@ -149,27 +236,135 @@ class ModeConfig:
     def __post_init__(self) -> None:
         if not (
             0 <= self.analysis_early_score
-            <= self.analysis_min_score
-            <= self.analysis_strong_score
+            < self.analysis_min_score
+            < self.analysis_strong_score
             <= 100
         ):
             raise ValueError(
                 f"{self.name}: weighted score thresholds must satisfy "
-                "0 <= early <= moderate <= strong <= 100."
+                "0 <= early < moderate < strong <= 100."
             )
-        if self.min_rr_ratio <= 0 or self.preferred_rr_ratio < self.min_rr_ratio:
+        if (
+            not math.isfinite(float(self.min_rr_ratio))
+            or not math.isfinite(float(self.preferred_rr_ratio))
+            or self.min_rr_ratio <= 0
+            or self.preferred_rr_ratio < self.min_rr_ratio
+        ):
             raise ValueError(
                 f"{self.name}: preferred R:R must be at least the positive minimum."
             )
+        if not self.scan_timeframes or len(set(self.scan_timeframes)) != len(self.scan_timeframes):
+            raise ValueError(f"{self.name}: scan timeframes must be non-empty and unique.")
+        if self.preferred_timeframe not in self.scan_timeframes:
+            raise ValueError(f"{self.name}: preferred timeframe must be selectable.")
+        known_timeframes = {
+            "M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"
+        }
+        if any(timeframe not in known_timeframes for timeframe in self.scan_timeframes):
+            raise ValueError(f"{self.name}: scan timeframe is unsupported.")
+
+        positive_settings = {
+            "volume_spike_threshold": self.volume_spike_threshold,
+            "analysis_atr_expansion_limit": self.analysis_atr_expansion_limit,
+            "analysis_max_candle_age_bars": self.analysis_max_candle_age_bars,
+            "analysis_scan_interval_seconds": self.analysis_scan_interval_seconds,
+            "breakout_lookback": self.breakout_lookback,
+            "liquidity_lookback": self.liquidity_lookback,
+            "min_votes": self.min_votes,
+            "min_votes_kill_zone": self.min_votes_kill_zone,
+            "confluence_min_tfs": self.confluence_min_tfs,
+        }
+        for name, value in positive_settings.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value <= 0
+            ):
+                raise ValueError(f"{self.name}: {name} must be positive and finite.")
+        for name, value in (
+            ("analysis_scan_interval_seconds", self.analysis_scan_interval_seconds),
+            ("breakout_lookback", self.breakout_lookback),
+            ("liquidity_lookback", self.liquidity_lookback),
+            ("min_votes", self.min_votes),
+            ("min_votes_kill_zone", self.min_votes_kill_zone),
+            ("confluence_min_tfs", self.confluence_min_tfs),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{self.name}: {name} must be a positive integer.")
+        for name, value in (
+            ("confidence_threshold", self.confidence_threshold),
+            ("alert_min_win_probability", self.alert_min_win_probability),
+        ):
+            if type(value) is not int or not 0 <= value <= 100:
+                raise ValueError(f"{self.name}: {name} must be an integer from 0 to 100.")
+
+        timeframe_weights = (
+            self.analysis_context_weight,
+            self.analysis_setup_weight,
+            self.analysis_refinement_weight,
+        )
+        if (
+            any(not math.isfinite(float(weight)) or weight < 0 for weight in timeframe_weights)
+            or abs(sum(timeframe_weights) - 1.0) > 1e-6
+        ):
+            raise ValueError(f"{self.name}: timeframe weights must be non-negative and sum to 1.")
         if self.analysis_score_weights:
             if any(
-                not isinstance(value, (int, float))
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
                 or value < 0
                 for value in self.analysis_score_weights.values()
             ):
                 raise ValueError(f"{self.name}: score weights must be non-negative.")
             if abs(sum(self.analysis_score_weights.values()) - 100.0) > 1e-6:
                 raise ValueError(f"{self.name}: score weights must sum to 100.")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value < 0
+            for value in (*self.feature_weights.values(), *self.indicator_weights.values())
+        ):
+            raise ValueError(f"{self.name}: confluence weights must be non-negative and finite.")
+        if self.indicator_weights and abs(sum(self.indicator_weights.values()) - 1.0) > 1e-6:
+            raise ValueError(f"{self.name}: indicator weights must sum to 1.")
+        expected_score_keys = {
+            "market_structure",
+            "entry_location",
+            "price_action",
+            "momentum_trend",
+            "liquidity_breakout_retest",
+            "volatility_execution",
+        }
+        if self.analysis_score_weights and set(self.analysis_score_weights) != expected_score_keys:
+            raise ValueError(f"{self.name}: weighted score groups are incomplete or unsupported.")
+        if len(self.tp_mult) != 3 or any(
+            not math.isfinite(float(value)) or float(value) <= 0
+            for value in self.tp_mult
+        ) or not self.tp_mult[0] < self.tp_mult[1] < self.tp_mult[2]:
+            raise ValueError(f"{self.name}: target multipliers must be positive and increasing.")
+        if any(
+            not math.isfinite(float(value)) or float(value) <= 0
+            for value in self.sl_mult_override.values()
+        ):
+            raise ValueError(f"{self.name}: stop multipliers must be positive and finite.")
+        if self.momentum_pullback is not None:
+            self.momentum_pullback = replace(
+                self.momentum_pullback,
+                minimum_target_rr=self.min_rr_ratio,
+                preferred_target_rr=self.preferred_rr_ratio,
+            )
+        role_timeframes = (
+            self.analysis_context_timeframe,
+            self.analysis_setup_timeframe,
+            self.analysis_refinement_timeframe,
+        )
+        if any(role_timeframes) and any(
+            timeframe not in known_timeframes for timeframe in role_timeframes
+        ):
+            raise ValueError(f"{self.name}: analysis timeframe role is unsupported.")
 
 
 MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
@@ -201,6 +396,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_lookback_candles=16,
         range_trap_max_width_atr=2.25,
         maximum_spread_atr=0.12,
+        minimum_target_rr=1.3,
+        preferred_target_rr=1.5,
     ),
     "intraday": MomentumPullbackProfile(
         swing_change_atr=0.03,
@@ -230,6 +427,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_lookback_candles=20,
         range_trap_max_width_atr=2.50,
         maximum_spread_atr=0.18,
+        minimum_target_rr=1.5,
+        preferred_target_rr=1.8,
     ),
     "swing": MomentumPullbackProfile(
         swing_change_atr=0.05,
@@ -259,6 +458,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_lookback_candles=24,
         range_trap_max_width_atr=2.75,
         maximum_spread_atr=0.25,
+        minimum_target_rr=2.0,
+        preferred_target_rr=2.0,
     ),
     "position": MomentumPullbackProfile(
         swing_change_atr=0.07,
@@ -288,6 +489,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_lookback_candles=30,
         range_trap_max_width_atr=3.00,
         maximum_spread_atr=0.30,
+        minimum_target_rr=2.0,
+        preferred_target_rr=3.0,
     ),
 }
 

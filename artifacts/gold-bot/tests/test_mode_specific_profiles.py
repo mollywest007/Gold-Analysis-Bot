@@ -278,7 +278,7 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         data = CandleData()
         seen = []
 
-        def analyze_weighted(*, config, raw_data, spread):
+        def analyze_weighted(*, config, raw_data, spread, event_risk=None):
             seen.append((config, set(raw_data), spread))
             return {
                 "setup_timeframe": config.setup_timeframe,

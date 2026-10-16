@@ -177,6 +177,8 @@ def open_trade(
         entry = float(entry)
         sl = float(sl)
         tp1 = float(tp1)
+        rr_ratio = float(rr_ratio)
+        atr = float(atr or 0.0)
         tp2 = (
             float(tp2)
             if tp2 is not None and float(tp2) > 0
@@ -205,6 +207,22 @@ def open_trade(
         )
     except (TypeError, ValueError):
         logger.error(f"[{timeframe}] Trade open rejected — non-numeric plan.")
+        return False
+
+    plan_levels = [entry, sl, tp1, rr_ratio, atr]
+    plan_levels.extend(value for value in (tp2, tp3, limit_entry) if value is not None)
+    positive_levels = [entry, sl, tp1]
+    positive_levels.extend(
+        value for value in (tp2, tp3, limit_entry) if value is not None
+    )
+    if (
+        any(not math.isfinite(value) for value in plan_levels)
+        or any(value <= 0 for value in positive_levels)
+        or atr < 0
+        or not math.isfinite(risk_fraction)
+        or (minimum_rr is not None and not math.isfinite(minimum_rr))
+    ):
+        logger.error(f"[{timeframe}] Trade open rejected — plan contains invalid levels.")
         return False
 
     if waiting_for_entry:
@@ -252,6 +270,19 @@ def open_trade(
             f"tp2={tp2 if tp2 is not None else 'none'} tp3={tp3}"
         )
         return False
+    actual_rr = abs(tp1 - entry) / abs(entry - sl)
+    if minimum_rr is not None and actual_rr + 1e-9 < minimum_rr:
+        logger.error(
+            "[%s] Trade open rejected — first structural target R:R 1:%.2f "
+            "is below the configured 1:%.2f minimum.",
+            timeframe,
+            actual_rr,
+            minimum_rr,
+        )
+        return False
+    # The first target is authoritative; never persist an approximate or stale
+    # caller-supplied ratio in place of the value implied by the actual levels.
+    rr_ratio = actual_rr
 
     # One timeframe represents one trade plan per account. Never replace or
     # stack an active trade just because a later analysis moved the entry.
@@ -261,15 +292,43 @@ def open_trade(
     account_key = _account_key(account_id)
 
     if account_key is not None:
-        active_count = sum(
-            1 for trade in trades
+        active_account_trades = [
+            trade for trade in trades
             if _belongs_to_account(trade, account_key) and is_active_trade(trade)
+        ]
+        active_count = sum(
+            1 for trade in active_account_trades
         )
         if active_count >= RISK_POLICY.max_simultaneous_setups:
             logger.info(
                 "[%s] Trade open skipped — account setup cap (%s) reached.",
                 timeframe,
                 RISK_POLICY.max_simultaneous_setups,
+            )
+            return False
+        active_risk = 0.0
+        for trade in active_account_trades:
+            try:
+                existing_risk = float(
+                    trade.get("risk_fraction")
+                    if trade.get("risk_fraction") is not None
+                    else RISK_POLICY.risk_per_trade_fraction
+                )
+            except (TypeError, ValueError, OverflowError):
+                existing_risk = float("nan")
+            if not math.isfinite(existing_risk) or not 0 < existing_risk <= RISK_POLICY.max_suggested_risk_fraction:
+                # Legacy or corrupted records cannot be assumed to have zero
+                # exposure; count them at the configured maximum suggestion.
+                existing_risk = RISK_POLICY.max_suggested_risk_fraction
+            active_risk += existing_risk
+        if active_risk + risk_fraction > RISK_POLICY.max_total_risk_fraction + 1e-12:
+            logger.info(
+                "[%s] Trade open skipped — account exposure %.2f%% plus new "
+                "risk %.2f%% exceeds the %.2f%% aggregate cap.",
+                timeframe,
+                active_risk * 100,
+                risk_fraction * 100,
+                RISK_POLICY.max_total_risk_fraction * 100,
             )
             return False
 

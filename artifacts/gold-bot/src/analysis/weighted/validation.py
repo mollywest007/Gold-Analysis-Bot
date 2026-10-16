@@ -71,6 +71,16 @@ def validate_candidate(
         return {"valid": False, "rejection_reasons": ["Candidate levels are invalid."]}
     if not math.isfinite(invalidation_level) or not math.isfinite(candidate_level):
         return {"valid": False, "rejection_reasons": ["Candidate levels are non-finite."]}
+    if (
+        (direction == "BUY" and invalidation_level >= price)
+        or (direction == "SELL" and invalidation_level <= price)
+    ):
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "Structural invalidation is not beyond entry in the risk direction."
+            ],
+        }
     spread_value = None
     if spread is not None:
         try:
@@ -162,7 +172,9 @@ def validate_candidate(
     minimum_rr = float(profile.minimum_target_rr)
     target_rr = max(
         minimum_rr,
-        float(preferred_rr) if preferred_rr is not None else minimum_rr,
+        float(preferred_rr)
+        if preferred_rr is not None
+        else float(getattr(profile, "preferred_target_rr", minimum_rr)),
     )
     preferred_target = (
         price + risk * target_rr
@@ -225,7 +237,7 @@ def validate_candidate(
                 "spread_atr": round(spread_atr, 4),
             }
         spread_rr = (reward - spread_value) / (risk + spread_value / 2.0)
-        if spread_rr < minimum_rr:
+        if spread_rr + 1e-9 < minimum_rr:
             return {
                 "valid": False,
                 "rejection_reasons": [
@@ -248,41 +260,105 @@ def validate_candidate(
     tp2 = later_targets[0] if later_targets else None
     tp3 = later_targets[1] if len(later_targets) > 1 else None
 
-    target_rrs = {"TP1": round(abs(target - price) / risk, 2)}
+    # All plan prices are published and persisted to cents. Recompute risk and
+    # reward from those exact prices so the displayed ratios describe the plan
+    # the tracker actually receives, not higher-precision intermediate values.
+    published_entry = round(price, 2)
+    published_stop = round(stop, 2)
+    published_invalidation = round(invalidation_level, 2)
+    published_targets = {
+        "TP1": round(target, 2),
+        "TP2": round(tp2, 2) if tp2 is not None else None,
+        "TP3": round(tp3, 2) if tp3 is not None else None,
+    }
+    published_risk = abs(published_entry - published_stop)
+    if published_risk <= 0:
+        return {
+            "valid": False,
+            "rejection_reasons": ["Rounded entry and stop do not define positive risk."],
+        }
+    if (
+        (
+            direction == "BUY"
+            and not published_stop < published_invalidation < published_entry
+            < published_targets["TP1"]
+        )
+        or (
+            direction == "SELL"
+            and not published_stop > published_invalidation > published_entry
+            > published_targets["TP1"]
+        )
+    ):
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "Rounded stop, invalidation, entry, and TP1 do not preserve valid trade geometry."
+            ],
+        }
+
+    target_rrs = {}
     spread_target_rrs = {}
-    for label, target_value in (("TP1", target), ("TP2", tp2), ("TP3", tp3)):
+    for label, target_value in published_targets.items():
         if target_value is None:
             continue
         reward_value = (
-            target_value - price
+            target_value - published_entry
             if direction == "BUY"
-            else price - target_value
+            else published_entry - target_value
         )
-        target_rrs[label] = round(reward_value / risk, 2)
+        target_rrs[label] = round(reward_value / published_risk, 2)
         if spread_value is not None:
             spread_target_rrs[label] = round(
-                (reward_value - spread_value) / (risk + spread_value / 2.0),
+                (reward_value - spread_value)
+                / (published_risk + spread_value / 2.0),
                 2,
             )
+    published_rr = target_rrs["TP1"]
+    published_spread_rr = spread_target_rrs.get("TP1")
+    if published_rr + 1e-9 < minimum_rr:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                f"Rounded TP1 leaves only 1:{published_rr:.2f} R:R; "
+                f"mode minimum is 1:{minimum_rr:.2f}."
+            ],
+            "rr": published_rr,
+        }
+    if (
+        published_spread_rr is not None
+        and published_spread_rr + 1e-9 < minimum_rr
+    ):
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                f"Rounded TP1 leaves reference-spread-adjusted R:R of "
+                f"1:{published_spread_rr:.2f}, below the 1:{minimum_rr:.2f} minimum."
+            ],
+            "spread_status": "rejected",
+            "spread_rr": published_spread_rr,
+        }
 
     zone_half_width = atr * float(profile.entry_zone_atr)
     return {
         "valid": True,
-        "entry": round(price, 2),
+        "entry": published_entry,
         "entry_zone_low": round(price - zone_half_width, 2),
         "entry_zone_high": round(price + zone_half_width, 2),
-        "stop_loss": round(stop, 2),
-        "invalidation_level": round(invalidation_level, 2),
-        "take_profit": round(target, 2),
-        "tp2": round(tp2, 2) if tp2 is not None else None,
-        "tp3": round(tp3, 2) if tp3 is not None else None,
-        "risk": round(risk, 5),
-        "reward": round(reward, 5),
-        "rr": round(rr, 2),
+        "stop_loss": published_stop,
+        "invalidation_level": published_invalidation,
+        "take_profit": published_targets["TP1"],
+        # Keep the old MarketAnalysis naming alongside the explicit TP alias
+        # so callers cannot accidentally drop the first target.
+        "tp1": published_targets["TP1"],
+        "tp2": published_targets["TP2"],
+        "tp3": published_targets["TP3"],
+        "risk": round(published_risk, 5),
+        "reward": round(abs(published_targets["TP1"] - published_entry), 5),
+        "rr": published_rr,
         "target_rrs": target_rrs,
         "reference_spread_target_rrs": spread_target_rrs,
         "preferred_rr": round(target_rr, 2),
-        "reference_spread_rr": round(spread_rr, 2) if spread_rr is not None else None,
+        "reference_spread_rr": published_spread_rr,
         "spread_status": spread_status,
         "spread_atr": (
             round(spread_value / atr, 4)

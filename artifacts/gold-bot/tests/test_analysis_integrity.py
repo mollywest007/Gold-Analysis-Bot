@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -379,6 +380,147 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIn("Position size: Unavailable", card)
         self.assertIn("Reference spread screen: unavailable", card)
         self.assertIn("spread ≤0.18 ATR", card)
+
+    def test_weighted_signal_card_shows_real_values_and_wait_actionability(self):
+        analysis = SimpleNamespace(
+            action="WAIT",
+            directional_indication="BUY",
+            signal_category="EARLY",
+            signal_label="EARLY BUY",
+            setup_status="DEVELOPING",
+            signal_status="DEVELOPING",
+            analysis_mode="intraday",
+            trade_type="Intraday",
+            timeframe="M15",
+            market_condition="BULLISH",
+            market_regime="BULLISH_TREND",
+            market_structure="HH_HL",
+            price_action_setup="LIQUIDITY_SWEEP",
+            key_zone="Sweep and reclaim of support",
+            current_confirmation="Waiting for the moderate score threshold.",
+            wait_reason="Score is below the configured moderate threshold.",
+            price=2350.0,
+            entry=0.0,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            tp3=0.0,
+            invalidation=0.0,
+            entry_zone_low=0.0,
+            entry_zone_high=0.0,
+            moderate_entry_low=0.0,
+            moderate_entry_high=0.0,
+            confidence_score=55,
+            buy_score=55,
+            sell_score=29,
+            score_breakdown={"BUY": {}, "SELL": {}},
+            analysis_timeframes={
+                "context": {"timeframe": "H1", "direction": "BUY"},
+                "setup": {"timeframe": "M15", "direction": "BUY"},
+                "refinement": {"timeframe": "M5", "direction": "WAIT"},
+            },
+            latest_candle_timestamp=0.0,
+            is_simulated=False,
+            data_quality="REAL_OHLCV",
+            ema20=2348.0,
+            ema50=2342.0,
+            rsi_value=56.0,
+            atr=8.0,
+            adx=22.0,
+            trend="Bullish trend",
+            session="London",
+            htf_bias="Bullish",
+            reasons_supporting=["Price swept prior lows and reclaimed support."],
+            reasons_against=[],
+            invalidating_conditions=[],
+            setup_quality="B",
+            institutional_report={
+                "analysis_engine": "weighted_multi_timeframe",
+                "data_quality": "REAL_OHLCV",
+                "mode_rules": {
+                    "context_timeframe": "H1",
+                    "setup_timeframe": "M15",
+                    "refinement_timeframe": "M5",
+                    "early_score": 52,
+                    "moderate_score": 58,
+                    "strong_score": 81,
+                    "minimum_target_rr": 1.5,
+                    "preferred_rr": 1.8,
+                    "expected_holding_bars": 32,
+                    "maximum_stop_atr": 2.0,
+                    "maximum_ema_distance_atr": 1.6,
+                },
+                "risk_policy": {
+                    "risk_per_trade_fraction": 0.005,
+                    "max_suggested_risk_fraction": 0.01,
+                    "max_total_risk_fraction": 0.02,
+                    "tp1_partial_fraction": 0.5,
+                    "breakeven_after_tp1": False,
+                    "structure_trailing_enabled": False,
+                },
+                "event_risk": {
+                    "status": "UNAVAILABLE_NO_CALENDAR_FEED",
+                    "reason": "No calendar feed.",
+                },
+                "decision_summary": {
+                    "rejection_reasons": [
+                        "Score is below the configured moderate threshold."
+                    ],
+                    "invalidation_conditions": [],
+                    "spread_filter_status": "unavailable",
+                },
+            },
+        )
+
+        card = formatting.signal_card(analysis)
+
+        self.assertIn("Signal    : EARLY BUY", card)
+        self.assertIn("Regime    : BULLISH_TREND", card)
+        self.assertIn(
+            "Reasoning : Price swept prior lows and reclaimed support.",
+            card,
+        )
+        self.assertIn("Actionable when: listed blockers clear", card)
+        self.assertIn("BUY 55/100 | SELL 29/100", card)
+        self.assertIn("Position size: Unavailable", card)
+        self.assertIn("no connected economic-calendar feed", card)
+        self.assertIn(
+            "EARLY warning: anticipatory setup with higher uncertainty",
+            card,
+        )
+
+        analysis.action = "BUY"
+        analysis.signal_category = "MODERATE"
+        analysis.signal_label = "MODERATE BUY"
+        analysis.setup_status = "MODERATE ENTRY"
+        analysis.setup_quality = "A"
+        analysis.confidence_score = 70
+        analysis.buy_score = 70
+        analysis.entry = 2350.0
+        analysis.stop_loss = 2340.0
+        analysis.tp1 = 2365.0
+        analysis.tp2 = 2370.0
+        analysis.tp3 = 2385.0
+        analysis.invalidation = 2342.0
+        analysis.entry_zone_low = 2349.0
+        analysis.entry_zone_high = 2351.0
+        analysis.moderate_entry_low = 2349.0
+        analysis.moderate_entry_high = 2351.0
+        analysis.institutional_report["decision_summary"]["rejection_reasons"] = []
+        analysis.institutional_report["decision_summary"]["invalidation_conditions"] = [
+            "A completed M15 close below 2342.00 invalidates the plan."
+        ]
+        card = formatting.signal_card(analysis)
+        self.assertIn("Signal    : MODERATE BUY", card)
+        self.assertIn("Entry : 2,350.00", card)
+        self.assertIn("SL      : 2,340.00", card)
+        self.assertIn("TP1     : 2,365.00", card)
+        self.assertIn("TP2     : 2,370.00", card)
+        self.assertIn("TP3     : 2,385.00", card)
+        self.assertIn(
+            "TP1 1:1.50 | TP2 1:2.00 | TP3 1:3.50",
+            card,
+        )
 
     def test_only_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()

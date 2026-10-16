@@ -31,6 +31,19 @@ class RiskPolicyTests(unittest.TestCase):
                 risk_per_trade_fraction=0.02,
                 max_suggested_risk_fraction=0.01,
             ).validate()
+        with self.assertRaises(ValueError):
+            RiskPolicy(max_simultaneous_setups=True).validate()
+        with self.assertRaises(ValueError):
+            RiskPolicy(event_filter_before_minutes=-1).validate()
+
+    def test_mode_profiles_reject_invalid_threshold_and_stop_configuration(self):
+        with self.assertRaises(ValueError):
+            replace(MODES["intraday"], analysis_strong_score=58)
+        with self.assertRaises(ValueError):
+            replace(
+                MODES["swing"].momentum_pullback,
+                maximum_stop_distance_atr=0.2,
+            )
 
     def test_size_requires_real_account_and_contract_inputs(self):
         unavailable = calculate_position_size(
@@ -54,6 +67,20 @@ class RiskPolicyTests(unittest.TestCase):
         self.assertTrue(size["available"])
         self.assertEqual(size["lots"], 0.05)
         self.assertEqual(size["cash_risk"], 50.0)
+
+    def test_all_four_modes_use_the_requested_minimum_target_rr(self):
+        expected = {
+            "scalp": 1.3,
+            "intraday": 1.5,
+            "swing": 2.0,
+            "position": 2.0,
+        }
+        for mode, minimum_rr in expected.items():
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    MODES[mode].momentum_pullback.minimum_target_rr,
+                    minimum_rr,
+                )
 
     def test_manual_event_schedule_is_never_presented_as_a_live_feed(self):
         now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
@@ -102,12 +129,61 @@ class StructuralTargetTests(unittest.TestCase):
         self.assertGreater(plan["stop_loss"], 0)
         self.assertLess(plan["stop_loss"], plan["entry"])
         self.assertGreater(plan["take_profit"], plan["entry"])
+        self.assertEqual(plan["tp1"], plan["take_profit"])
         self.assertGreater(plan["tp2"], plan["tp1"])
         self.assertGreater(plan["tp3"], plan["tp2"])
         self.assertEqual(set(plan["target_rrs"]), {"TP1", "TP2", "TP3"})
+        self.assertEqual(
+            plan["target_rrs"]["TP1"],
+            round(
+                abs(plan["tp1"] - plan["entry"])
+                / abs(plan["entry"] - plan["stop_loss"]),
+                2,
+            ),
+        )
         self.assertGreaterEqual(
             plan["reference_spread_target_rrs"]["TP1"],
             profile.minimum_target_rr,
+        )
+
+    def test_sell_plan_uses_real_lower_structure_and_keeps_stop_above_invalidation(self):
+        profile = resolve_momentum_pullback_profile(MODES["intraday"], "M15")
+        structure = SimpleNamespace(
+            swing_highs=[(10, 102.0)],
+            swing_lows=[(12, 96.5), (20, 93.0), (30, 89.0)],
+            resistances=[],
+            supports=[],
+        )
+        candidate = SimpleNamespace(
+            direction="SELL",
+            invalidation_level=100.5,
+            level=100.0,
+        )
+
+        plan = validate_candidate(
+            candidate,
+            price=100.0,
+            atr=1.0,
+            structure=structure,
+            profile=profile,
+            spread=0.05,
+        )
+
+        self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+        self.assertGreater(plan["stop_loss"], plan["invalidation_level"])
+        self.assertGreater(plan["stop_loss"], plan["entry"])
+        self.assertLess(plan["tp1"], plan["entry"])
+        self.assertLess(plan["tp2"], plan["tp1"])
+        self.assertLess(plan["tp3"], plan["tp2"])
+        self.assertEqual(set(plan["target_rrs"]), {"TP1", "TP2", "TP3"})
+        self.assertGreaterEqual(plan["target_rrs"]["TP1"], profile.minimum_target_rr)
+        self.assertEqual(
+            plan["target_rrs"]["TP3"],
+            round(
+                abs(plan["tp3"] - plan["entry"])
+                / abs(plan["entry"] - plan["stop_loss"]),
+                2,
+            ),
         )
 
 
@@ -218,6 +294,34 @@ class TradeLifecycleTests(unittest.TestCase):
                     account_id=9999,
                 )
             )
+
+    def test_account_aggregate_risk_cap_applies_before_another_setup_is_saved(self):
+        policy = replace(
+            RISK_POLICY,
+            max_total_risk_fraction=0.01,
+            max_simultaneous_setups=4,
+        )
+        with patch.object(trade_tracker, "RISK_POLICY", policy):
+            self.assertTrue(
+                trade_tracker.open_trade(
+                    "BUY", 100, 90, 120, 130, "M15", 75, 2,
+                    account_id=4411, risk_fraction=0.007,
+                )
+            )
+            self.assertFalse(
+                trade_tracker.open_trade(
+                    "SELL", 100, 110, 80, 70, "H1", 75, 2,
+                    account_id=4411, risk_fraction=0.004,
+                )
+            )
+        self.assertEqual(len(trade_tracker.get_all_trades(4411)), 1)
+
+    def test_persisted_trade_cannot_bypass_its_actual_rr_floor(self):
+        opened = trade_tracker.open_trade(
+            "BUY", 100, 90, 110, 120, "M15", 75, 5,
+            account_id=8822, minimum_rr=1.5,
+        )
+        self.assertFalse(opened)
 
 
 if __name__ == "__main__":

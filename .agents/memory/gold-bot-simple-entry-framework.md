@@ -30,3 +30,11 @@ A fresh validated XAU/USD bid/ask spread may be used for a configurable mode-spe
 **Why:** The bot's public spot quote is a market reference, not a connected brokerage feed, while historical OHLCV contains no bid/ask.
 
 **How to apply:** Keep broker-specific execution costs explicitly unavailable until a broker feed supplies them, and label historical replays as not testing the live spread screen.
+
+## Minimum versus preferred target R:R
+
+Each mode's hard R:R minimum is separate from its preferred target R:R. Aim for the preferred value only when confirmed structure supports it; reject targets that fall below the hard minimum after spread costs and published-price rounding.
+
+**Why:** The user requires mode-specific R:R floors and explicitly forbids inventing distant targets to reach a preferred ratio.
+
+**How to apply:** Preserve Scalp 1:1.3, Intraday 1:1.5, Swing 1:2, Position 1:2 as hard floors; derive each displayed ratio from the exact rounded entry, stop, and target.

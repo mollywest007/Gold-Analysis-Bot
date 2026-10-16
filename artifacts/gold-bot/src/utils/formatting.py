@@ -1148,6 +1148,10 @@ def entry_analysis_card(a: MarketAnalysis) -> str:
 
 
 def signal_card(a: MarketAnalysis) -> str:
+    report = getattr(a, "institutional_report", {}) or {}
+    if report.get("analysis_engine") == "weighted_multi_timeframe":
+        return _simple_analysis_card(a)
+
     ms = market_status()
 
     lines = ["<pre>"]
@@ -1591,6 +1595,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         else "None — all clear"
     )
     score = int(getattr(a, "confidence_score", 0) or 0)
+    minimum_score = int(mode_rules.get("moderate_score", 0) or 0)
+    minimum_target_rr = float(mode_rules.get("minimum_target_rr", 0.0) or 0.0)
     buy_votes = int(getattr(a, "buy_votes", 0) or 0)
     sell_votes = int(getattr(a, "sell_votes", 0) or 0)
     adx = float(getattr(a, "adx", 0.0) or 0.0)
@@ -1656,6 +1662,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Structure : {structure} | EMA20 {ema20_display} | EMA50 {ema50_display}",
         f"Price act.: {setup}",
         *([f"Regime    : {regime}"] if weighted_mtf else []),
+        f"Reasoning : {(' '.join(setup_evidence) or setup)[:200]}",
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
         f"Risk      : ATR14 {atr_display} | structural invalidation + mode buffer",
         f"Evidence  : BUY {getattr(a, 'buy_score', 0)}/100 | SELL {getattr(a, 'sell_score', 0)}/100",
@@ -1690,11 +1697,23 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             "of equity; maximum suggestion "
             f"{100 * float(risk_policy.get('max_suggested_risk_fraction', 0.01)):.2f}%."
         ),
+        (
+            "Aggregate exposure cap: "
+            f"{100 * float(risk_policy.get('max_total_risk_fraction', 0.02)):.2f}% "
+            "of equity across tracked setups."
+        ),
         f"Invalid : {fmt_price(invalidation) if invalidation else '—'}",
         *(
             [
                 "Position size: Unavailable — broker specifications and account equity not connected.",
                 "Exposure: Cannot verify account-wide risk without equity and open-position data.",
+                (
+                    "Management preferences (not executed): "
+                    f"TP1 partial {100 * float(risk_policy.get('tp1_partial_fraction', 0.50)):.0f}%; "
+                    f"breakeven {'on' if risk_policy.get('breakeven_after_tp1') else 'off'}; "
+                    f"structure trailing {'on' if risk_policy.get('structure_trailing_enabled') else 'off'}."
+                ),
+                "No broker order, partial close, or stop change is executed.",
                 spread_line,
                 str(getattr(a, "execution_note", "") or
                     "Broker commissions and slippage are unavailable; not included."),
@@ -1751,6 +1770,15 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "DECISION",
         f"Alert : {'✅ alert will fire' if action in ('BUY', 'SELL') else '⏳ no active alert'}",
         f"Waiting   : {wait_reason[:150]}",
+        *(
+            [
+                "Actionable when: listed blockers clear, the mode reaches "
+                f"MODERATE ≥{minimum_score}, and confirmed structure provides "
+                f"at least 1:{minimum_target_rr:g} R:R."
+            ]
+            if action not in ("BUY", "SELL")
+            else []
+        ),
         "──────────────────────────────────",
         "ENTRY CONFIRMATION",
         f"State     : {getattr(a, 'setup_status', status)}",

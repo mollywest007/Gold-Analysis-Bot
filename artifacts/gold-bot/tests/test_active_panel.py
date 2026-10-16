@@ -103,7 +103,7 @@ class ActivePanelTests(unittest.TestCase):
             4450.53,
         )
 
-        self.assertIn("Market Entry: 4,441.53  (tracked basis)", card)
+        self.assertIn("Market Entry: 4,441.53  (planned basis)", card)
         self.assertIn("Price Move  : +9.00 USD/oz  (IN PROFIT)", card)
         self.assertIn("SL          : 4,428.30  (distance 13.23)", card)
         self.assertIn("TP1         : 4,454.76  (distance 13.23", card)
@@ -136,7 +136,7 @@ class ActivePanelTests(unittest.TestCase):
             4426.80,
         )
 
-        self.assertIn("Market Entry: 4,431.20  (tracked basis)", card)
+        self.assertIn("Market Entry: 4,431.20  (planned basis)", card)
         self.assertIn("Limit Entry : 4,444.46  (optional pullback level)", card)
         self.assertIn("Price Move  : +4.40 USD/oz  (IN PROFIT)", card)
         self.assertIn("Limit Move  : +17.66 USD/oz  (from limit level; fill not confirmed)", card)

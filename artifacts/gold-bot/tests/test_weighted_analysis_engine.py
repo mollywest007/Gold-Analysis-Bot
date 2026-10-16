@@ -568,7 +568,10 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(accepted["valid"])
         self.assertGreaterEqual(accepted["rr"], 1.3)
-        self.assertGreaterEqual(accepted["reference_spread_rr"], 1.5)
+        self.assertGreaterEqual(
+            accepted["reference_spread_rr"],
+            profile.minimum_target_rr,
+        )
         self.assertLess(accepted["stop_loss"], candidate.invalidation_level)
 
     def test_non_finite_candidate_invalidation_fails_closed(self):
@@ -586,6 +589,22 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(result["valid"])
         self.assertIn("non-finite", " ".join(result["rejection_reasons"]))
+
+    def test_buy_invalidation_must_be_below_entry(self):
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, 100.05,
+            0.8, 0.9, 0.8, 0.2, ("support pullback",),
+        )
+        result = validate_candidate(
+            candidate,
+            price=100.0,
+            atr=1.0,
+            structure=_structure(),
+            profile=MODES["scalp"].momentum_pullback,
+            spread=None,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("invalidation", " ".join(result["rejection_reasons"]).lower())
 
     async def test_selected_mode_fetches_the_resolved_context_setup_and_refinement(self):
         now = time.time()
