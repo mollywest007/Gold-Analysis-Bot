@@ -14,6 +14,7 @@ from src.analysis.weighted.config import resolve_analysis_config
 from src.analysis.weighted.engine import _category_for_score, analyze_weighted_market
 from src.analysis.weighted.indicators import IndicatorSnapshot, calculate_indicators
 from src.analysis.weighted.market import prepare_completed_candles
+from src.analysis.weighted.regime import classify_regime
 from src.analysis.weighted.scoring import SCORE_WEIGHTS, score_directions
 from src.analysis.weighted.setups import SetupCandidate, detect_setups
 from src.analysis.weighted.structure import (
@@ -211,6 +212,65 @@ class IndicatorAndSetupTests(unittest.TestCase):
         self.assertGreater(result.atr14, 0)
         self.assertEqual(sum(SCORE_WEIGHTS.values()), 100)
 
+    def test_nearby_opposing_structure_reduces_the_directional_score(self):
+        config = resolve_analysis_config(MODES["scalp"])
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, 99.5, 0.8, 0.9, 0.8, 0.2,
+            ("pullback holding support",),
+        )
+        common = {
+            "indicators": {"context": None, "setup": None, "refinement": None},
+            "candidates": [candidate],
+            "regime": "BULLISH_TREND",
+            "price": 100.0,
+            "atr": 1.0,
+            "spread": None,
+            "profile": config.profile,
+            "config": config,
+        }
+        near = _structure(
+            direction="BUY",
+            swing_highs=((20, 100.8),),
+            swing_lows=((22, 99.0),),
+        )
+        far = _structure(
+            direction="BUY",
+            swing_highs=((20, 103.0),),
+            swing_lows=((22, 99.0),),
+        )
+        near_score = score_directions(
+            structures={"context": None, "setup": near, "refinement": None},
+            **common,
+        )["BUY"]
+        far_score = score_directions(
+            structures={"context": None, "setup": far, "refinement": None},
+            **common,
+        )["BUY"]
+        self.assertLess(near_score["score"], far_score["score"])
+        self.assertIn(
+            "nearby_opposing_structure",
+            {item["reason"] for item in near_score["penalties"]},
+        )
+
+    def test_regime_requires_directional_ema_stack_for_trend_label(self):
+        structure = _structure(direction="BUY")
+        aligned = IndicatorSnapshot(101.0, 100.0, 55.0, 54.0, 0.2, 0.1, 1.0, 1.0, 1.0)
+        crossed = IndicatorSnapshot(99.0, 100.0, 55.0, 54.0, 0.2, 0.1, 1.0, 1.0, 1.0)
+        self.assertEqual(
+            classify_regime(
+                structure, aligned, price=102.0, candle_timestamp=None,
+                volatility_limit=2.0,
+            ).label,
+            "BULLISH_TREND",
+        )
+        self.assertEqual(
+            classify_regime(
+                structure, crossed, price=102.0, candle_timestamp=None,
+                volatility_limit=2.0,
+            ).label,
+            "TRANSITIONING_OR_UNCLEAR",
+        )
+
     def test_missing_data_cannot_earn_positive_confluence_points(self):
         config = resolve_analysis_config(MODES["intraday"])
         scored = score_directions(
@@ -300,6 +360,26 @@ class IndicatorAndSetupTests(unittest.TestCase):
             sweep_lookback=15,
         )
         self.assertIn("BREAKOUT", {item.setup_type for item in breakout_result})
+
+        # A structurally close breakout must not be discarded only because
+        # price has not yet caught up with EMA20.
+        lagging_ema_indicators = IndicatorSnapshot(
+            97.0, 96.0, 52.0, 50.0, 0.2, 0.1, 1.0, 1.0, 1.0
+        )
+        early_breakout_result = detect_setups(
+            *breakout,
+            price=101.5,
+            atr=atr,
+            indicators=lagging_ema_indicators,
+            structure=_structure(direction="WAIT", label="RANGE"),
+            context_direction="WAIT",
+            refinement_direction="BUY",
+            regime="TRANSITIONING_OR_UNCLEAR",
+            profile=profile,
+            breakout_lookback=20,
+            sweep_lookback=15,
+        )
+        self.assertIn("BREAKOUT", {item.setup_type for item in early_breakout_result})
 
         # Retest: the previous completed break is retested and held by the last bar.
         retest = (opens[:], highs[:], lows[:], closes[:])
@@ -433,6 +513,22 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
             ),
             "WAIT",
         )
+        developing_candidate = SetupCandidate(
+            "BUY", "SUPPORT_RESISTANCE_REACTION", 100.0, 99.0,
+            0.8, 0.8, 0.7, 0.2, ("rejection from support",),
+        )
+        self.assertEqual(
+            _category_for_score(
+                config.early_score,
+                {"market_structure": 0, "entry_location": 0,
+                 "price_action": 0, "momentum_trend": 1,
+                 "liquidity_breakout_retest": 0, "volatility_execution": 0},
+                developing_candidate,
+                config=config,
+                major_conflict=False,
+            ),
+            "EARLY",
+        )
 
     def test_structural_stop_and_target_must_meet_mode_rr(self):
         candidate = SetupCandidate(
@@ -472,7 +568,24 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(accepted["valid"])
         self.assertGreaterEqual(accepted["rr"], 1.3)
+        self.assertGreaterEqual(accepted["reference_spread_rr"], 1.5)
         self.assertLess(accepted["stop_loss"], candidate.invalidation_level)
+
+    def test_non_finite_candidate_invalidation_fails_closed(self):
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, float("nan"),
+            0.8, 0.9, 0.8, 0.2, ("support pullback",),
+        )
+        result = validate_candidate(
+            candidate,
+            price=100.0,
+            atr=1.0,
+            structure=_structure(),
+            profile=MODES["scalp"].momentum_pullback,
+            spread=None,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("non-finite", " ".join(result["rejection_reasons"]))
 
     async def test_selected_mode_fetches_the_resolved_context_setup_and_refinement(self):
         now = time.time()

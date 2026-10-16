@@ -156,6 +156,37 @@ def score_directions(
             penalties.append(("unclear_regime", 3.0))
         if regime == "HIGH_VOLATILITY":
             penalties.append(("high_volatility", 8.0))
+        candidate = candidate_by_direction[direction]
+        if candidate is not None and setup is not None and atr is not None and atr > 0:
+            opposing_levels = (
+                [level for _, level in setup.swing_highs if level > price]
+                if direction == "BUY"
+                else [level for _, level in setup.swing_lows if level < price]
+            )
+            if opposing_levels:
+                nearest = min(opposing_levels) if direction == "BUY" else max(opposing_levels)
+                target_buffer = atr * float(profile.target_buffer_atr)
+                structural_room = (
+                    nearest - target_buffer - price
+                    if direction == "BUY"
+                    else price - nearest - target_buffer
+                )
+                stop = (
+                    candidate.invalidation_level - atr * float(profile.stop_buffer_atr)
+                    if direction == "BUY"
+                    else candidate.invalidation_level + atr * float(profile.stop_buffer_atr)
+                )
+                risk = abs(price - stop)
+                preferred_reward = risk * max(
+                    float(profile.minimum_target_rr),
+                    float(config.preferred_rr),
+                )
+                if risk > 0 and structural_room < preferred_reward:
+                    shortfall = (preferred_reward - structural_room) / risk
+                    penalties.append((
+                        "nearby_opposing_structure",
+                        min(6.0, max(2.0, round(shortfall * 4.0, 1))),
+                    ))
 
         raw_score = sum(breakdown.values())
         score = max(0, min(100, round(raw_score - sum(value for _, value in penalties))))

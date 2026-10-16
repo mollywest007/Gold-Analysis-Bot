@@ -209,20 +209,16 @@ def detect_setups(
             "BUY", "BREAKOUT", prior_high, prior_high,
             0.82, 0.78, 0.72,
             ["Completed candle closed through a recent structural high with contained range."],
-            extension=max(
-                abs(price - prior_high) / atr,
-                ema_distance or 0.0,
-            ),
+            # A breakout is judged against the broken boundary, not its
+            # distance from EMA20. A valid early break can precede EMA alignment.
+            extension=abs(price - prior_high) / atr,
         )
     if bearish_break:
         add(
             "SELL", "BREAKOUT", prior_low, prior_low,
             0.82, 0.78, 0.72,
             ["Completed candle closed through a recent structural low with contained range."],
-            extension=max(
-                abs(price - prior_low) / atr,
-                ema_distance or 0.0,
-            ),
+            extension=abs(price - prior_low) / atr,
         )
 
     retest_window = min(4, size - 2)
@@ -324,6 +320,7 @@ def detect_setups(
                     f"Price returned to {zone.kind if zone else 'EMA20 context'} in the {direction.lower()} trend.",
                     "Rejection, momentum recovery, or a refinement-timeframe shift is developing.",
                 ],
+                extension=abs(price - reference) / atr,
             )
 
     # E. Support/resistance reaction: require a meaningful retest and rejection,

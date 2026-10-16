@@ -30,6 +30,7 @@ def classify_regime(
         structure.direction == "BUY"
         and indicators.ema20 is not None
         and indicators.ema50 is not None
+        and indicators.ema20 > indicators.ema50
         and price >= indicators.ema20
     ):
         label = "BULLISH_TREND"
@@ -37,6 +38,7 @@ def classify_regime(
         structure.direction == "SELL"
         and indicators.ema20 is not None
         and indicators.ema50 is not None
+        and indicators.ema20 < indicators.ema50
         and price <= indicators.ema20
     ):
         label = "BEARISH_TREND"

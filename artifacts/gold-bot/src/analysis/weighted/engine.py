@@ -85,7 +85,10 @@ def _category_for_score(
         score >= config.early_score
         and candidate.trigger_strength > 0
         and candidate.location_strength > 0
-        and supported_categories >= 2
+        and (
+            candidate.price_action_strength > 0
+            or breakdown.get("momentum_trend", 0) > 0
+        )
     ):
         return "EARLY"
     return "WAIT"
@@ -265,10 +268,15 @@ def analyze_weighted_market(
     chosen = scores[best_direction]["candidate"]
     other_score = scores["SELL" if best_direction == "BUY" else "BUY"]["score"]
     directional_rejections = []
-    if chosen is not None and abs(scores[best_direction]["score"] - other_score) < 5:
+    opposing_direction = "SELL" if best_direction == "BUY" else "BUY"
+    if (
+        chosen is not None
+        and scores[opposing_direction]["candidate"] is not None
+        and abs(scores[best_direction]["score"] - other_score) < 5
+    ):
         chosen = None
         directional_rejections.append(
-            "BUY and SELL evidence are too close to establish a directional edge."
+            "Credible BUY and SELL setups are both present and their evidence is too close."
         )
     if (
         chosen is not None

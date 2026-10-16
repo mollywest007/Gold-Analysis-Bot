@@ -15,11 +15,27 @@ def validate_candidate(
     preferred_rr: float | None = None,
 ) -> dict:
     direction = candidate.direction
+    if direction not in ("BUY", "SELL"):
+        return {"valid": False, "rejection_reasons": ["Candidate direction is invalid."]}
     if not math.isfinite(price) or price <= 0:
         return {"valid": False, "rejection_reasons": ["Invalid entry price."]}
     if not math.isfinite(atr) or atr <= 0:
         return {"valid": False, "rejection_reasons": ["ATR14 is unavailable or invalid."]}
-    invalidation_level = float(candidate.invalidation_level)
+    try:
+        invalidation_level = float(candidate.invalidation_level)
+        candidate_level = float(candidate.level)
+    except (TypeError, ValueError, OverflowError):
+        return {"valid": False, "rejection_reasons": ["Candidate levels are invalid."]}
+    if not math.isfinite(invalidation_level) or not math.isfinite(candidate_level):
+        return {"valid": False, "rejection_reasons": ["Candidate levels are non-finite."]}
+    spread_value = None
+    if spread is not None:
+        try:
+            spread_value = float(spread)
+        except (TypeError, ValueError, OverflowError):
+            return {"valid": False, "rejection_reasons": ["Reference spread is invalid."]}
+        if not math.isfinite(spread_value) or spread_value < 0:
+            return {"valid": False, "rejection_reasons": ["Reference spread is invalid."]}
     buffer = atr * float(profile.stop_buffer_atr)
     stop = (
         invalidation_level - buffer
@@ -72,11 +88,28 @@ def validate_candidate(
         if direction == "BUY"
         else price - risk * target_rr
     )
-    target = (
+    preferred_target = (
         min(structural_target, preferred_target)
         if direction == "BUY"
         else max(structural_target, preferred_target)
     )
+    # A target placed at exactly the nominal minimum R:R will fail the
+    # reference-spread-adjusted check for any nonzero spread. Extend the target
+    # only as far as the structure permits to preserve the minimum after costs.
+    if spread_value is not None:
+        minimum_spread_reward = minimum_rr * (risk + spread_value / 2.0) + spread_value
+        minimum_spread_target = (
+            price + minimum_spread_reward
+            if direction == "BUY"
+            else price - minimum_spread_reward
+        )
+        target = (
+            min(structural_target, max(preferred_target, minimum_spread_target))
+            if direction == "BUY"
+            else max(structural_target, min(preferred_target, minimum_spread_target))
+        )
+    else:
+        target = preferred_target
     reward = target - price if direction == "BUY" else price - target
     if reward <= 0:
         return {
@@ -97,9 +130,9 @@ def validate_candidate(
 
     spread_rr = None
     spread_status = "unavailable"
-    if spread is not None and math.isfinite(float(spread)) and spread >= 0:
+    if spread_value is not None:
         spread_status = "passed"
-        spread_atr = float(spread) / atr
+        spread_atr = spread_value / atr
         if spread_atr > float(profile.maximum_spread_atr):
             spread_status = "rejected"
             return {
@@ -111,7 +144,7 @@ def validate_candidate(
                 "spread_status": spread_status,
                 "spread_atr": round(spread_atr, 4),
             }
-        spread_rr = (reward - float(spread)) / (risk + float(spread) / 2.0)
+        spread_rr = (reward - spread_value) / (risk + spread_value / 2.0)
         if spread_rr < minimum_rr:
             return {
                 "valid": False,
@@ -140,8 +173,8 @@ def validate_candidate(
         "reference_spread_rr": round(spread_rr, 2) if spread_rr is not None else None,
         "spread_status": spread_status,
         "spread_atr": (
-            round(float(spread) / atr, 4)
-            if spread is not None and atr > 0
+            round(spread_value / atr, 4)
+            if spread_value is not None and atr > 0
             else None
         ),
         "nearest_opposing_level": round(nearest_level, 2),
