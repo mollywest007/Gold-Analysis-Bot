@@ -59,6 +59,8 @@ class MomentumPullbackProfile:
     breakout_close_position: float = 0.68
     breakout_minimum_body_ratio: float = 0.35
     sweep_penetration_atr: float = 0.04
+    # Last-mile guard between a validated plan and the current spot quote.
+    maximum_live_entry_distance_atr: float = 0.35
 
 
 @dataclass
@@ -143,6 +145,31 @@ class ModeConfig:
 
     # ── Tip shown after mode switch ────────────────────────────────────────────
     tip: str = ""
+
+    def __post_init__(self) -> None:
+        if not (
+            0 <= self.analysis_early_score
+            <= self.analysis_min_score
+            <= self.analysis_strong_score
+            <= 100
+        ):
+            raise ValueError(
+                f"{self.name}: weighted score thresholds must satisfy "
+                "0 <= early <= moderate <= strong <= 100."
+            )
+        if self.min_rr_ratio <= 0 or self.preferred_rr_ratio < self.min_rr_ratio:
+            raise ValueError(
+                f"{self.name}: preferred R:R must be at least the positive minimum."
+            )
+        if self.analysis_score_weights:
+            if any(
+                not isinstance(value, (int, float))
+                or value < 0
+                for value in self.analysis_score_weights.values()
+            ):
+                raise ValueError(f"{self.name}: score weights must be non-negative.")
+            if abs(sum(self.analysis_score_weights.values()) - 100.0) > 1e-6:
+                raise ValueError(f"{self.name}: score weights must sum to 100.")
 
 
 MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {

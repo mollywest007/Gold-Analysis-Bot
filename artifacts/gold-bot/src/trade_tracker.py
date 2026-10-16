@@ -5,11 +5,14 @@ Fires WIN or LOSS result images via Telegram when a level is hit.
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
 from typing import List, Dict, Any, Set
 from uuid import uuid4
+
+from src.analysis.risk_policy import RISK_POLICY
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +87,29 @@ def is_active_trade(trade: Dict[str, Any]) -> bool:
     an intermediate milestone and the trade remains active until TP3 or SL.
     """
     status = trade.get("status")
-    if status in ("open", "tp1_hit"):
+    if status in ("open", "waiting_for_entry", "tp1_hit"):
         return True
     return (
         status == "tp2_hit"
         and bool(trade.get("tp3"))
         and not trade.get("tp3_hit")
     )
+
+
+def lifecycle_status(trade: Dict[str, Any]) -> str:
+    """Map persisted tracker codes to the plain-language lifecycle labels."""
+    return {
+        "waiting_for_entry": "WAITING FOR ENTRY",
+        "open": "ACTIVE",
+        "tp1_hit": "TP1 REACHED",
+        "tp2_hit": "TP2 REACHED",
+        "tp3_hit": "TP3 REACHED",
+        "tp1_final_hit": "TP1 REACHED",
+        "sl_hit": "STOP LOSS HIT",
+        "tp1_sl_hit": "STOP LOSS HIT",
+        "invalidated": "INVALIDATED",
+        "expired": "EXPIRED",
+    }.get(str(trade.get("status") or "").lower(), "UNKNOWN")
 
 
 def _mark_terminal(
@@ -101,6 +120,7 @@ def _mark_terminal(
 ) -> None:
     """Record an irreversible terminal transition and its result notification."""
     trade["status"] = status
+    trade["lifecycle_status"] = lifecycle_status(trade)
     trade["closed_at"] = time.time()
     trade["close_reason"] = close_reason
     if exit_evidence:
@@ -143,6 +163,10 @@ def open_trade(
     account_id: int | str | None = None,
     allow_same_timeframe_mode: bool = False,
     symbol: str = "XAU/USD",
+    waiting_for_entry: bool = False,
+    invalidation_level: float | None = None,
+    minimum_rr: float | None = None,
+    risk_fraction: float | None = None,
 ) -> bool:
     trades = _load()
 
@@ -168,8 +192,43 @@ def open_trade(
             if limit_entry is not None and float(limit_entry) > 0
             else None
         )
+        invalidation_level = (
+            float(invalidation_level)
+            if invalidation_level is not None
+            else None
+        )
+        minimum_rr = float(minimum_rr) if minimum_rr is not None else None
+        risk_fraction = (
+            float(risk_fraction)
+            if risk_fraction is not None
+            else RISK_POLICY.risk_per_trade_fraction
+        )
     except (TypeError, ValueError):
         logger.error(f"[{timeframe}] Trade open rejected — non-numeric plan.")
+        return False
+
+    if waiting_for_entry:
+        if limit_entry is None:
+            logger.error(
+                f"[{timeframe}] Pending plan rejected — a limit entry is required."
+            )
+            return False
+        # The pending level is the planned entry basis. No separate market
+        # price is silently substituted when the level is eventually touched.
+        entry = limit_entry
+
+    if (
+        not (0 < risk_fraction <= RISK_POLICY.max_suggested_risk_fraction)
+        or (minimum_rr is not None and minimum_rr <= 0)
+        or (
+            invalidation_level is not None
+            and (
+                not math.isfinite(invalidation_level)
+                or invalidation_level <= 0
+            )
+        )
+    ):
+        logger.error(f"[{timeframe}] Trade open rejected — invalid risk policy or invalidation.")
         return False
 
     if direction == "BUY":
@@ -200,6 +259,19 @@ def open_trade(
     # records are stored as unassigned and are never returned by any
     # account-scoped query. All Telegram entry paths pass a real account_id.
     account_key = _account_key(account_id)
+
+    if account_key is not None:
+        active_count = sum(
+            1 for trade in trades
+            if _belongs_to_account(trade, account_key) and is_active_trade(trade)
+        )
+        if active_count >= RISK_POLICY.max_simultaneous_setups:
+            logger.info(
+                "[%s] Trade open skipped — account setup cap (%s) reached.",
+                timeframe,
+                RISK_POLICY.max_simultaneous_setups,
+            )
+            return False
 
     for t in trades:
         same_timeframe_slot = (
@@ -260,7 +332,13 @@ def open_trade(
         "confidence":  confidence,
         "rr_ratio":    rr_ratio,
         "opened_at":   time.time(),
-        "status":      "open",
+        "status":      "waiting_for_entry" if waiting_for_entry else "open",
+        "invalidation_level": invalidation_level,
+        "minimum_rr": minimum_rr,
+        "risk_fraction": risk_fraction,
+        "lifecycle_status": (
+            "WAITING FOR ENTRY" if waiting_for_entry else "ACTIVE"
+        ),
         "tp1_hit":     False,
         "tp2_hit":     False,
         "tp3_hit":     False,
@@ -297,7 +375,7 @@ def cancel_trade(
         if (
             str(trade.get("id") or "") != trade_id
             or (account_key is not None and not _belongs_to_account(trade, account_key))
-            or trade.get("status") != "open"
+            or trade.get("status") not in ("open", "waiting_for_entry")
             or trade.get("tp1_hit")
             or trade.get("tp2_hit")
             or trade.get("tp3_hit")
@@ -382,7 +460,7 @@ def check_trades(current_price: float, recent_high: float = None,
         # Track: open, TP1 waiting for TP2, TP2 waiting for TP3 (when tp3 exists)
         if status == "tp2_hit" and not t.get("tp3"):
             continue   # TP2 was final target — truly closed, nothing to watch
-        if status not in ("open", "tp1_hit", "tp2_hit"):
+        if status not in ("open", "waiting_for_entry", "tp1_hit", "tp2_hit"):
             continue
 
         age = time.time() - t.get("opened_at", 0)
@@ -397,6 +475,9 @@ def check_trades(current_price: float, recent_high: float = None,
         )
         if age > max_age:
             t["status"] = "expired"
+            t["lifecycle_status"] = "EXPIRED"
+            t["lifecycle_notification_event"] = "EXPIRED"
+            t["lifecycle_notification_pending"] = True
             changed = True
             logger.info(f"Trade {t['id']} expired after {age/3600:.1f}h")
             # Return an EXPIRED event so alerts.py can release the signal lock
@@ -466,6 +547,95 @@ def check_trades(current_price: float, recent_high: float = None,
                 f"Trade {t.get('id')} skipped — invalid {d} SL geometry "
                 f"(entry={entry} sl={sl})."
             )
+            continue
+
+        if status == "waiting_for_entry":
+            entry_quote = (
+                ask if d == "BUY" and ask is not None
+                else bid if d == "SELL" and bid is not None
+                else current_price
+            )
+            invalidation = t.get("invalidation_level")
+            try:
+                invalidation = float(invalidation) if invalidation is not None else None
+            except (TypeError, ValueError):
+                invalidation = None
+            invalidated = (
+                invalidation is not None
+                and (
+                    (d == "BUY" and entry_quote <= invalidation)
+                    or (d == "SELL" and entry_quote >= invalidation)
+                )
+            )
+            if invalidated:
+                t["status"] = "invalidated"
+                t["lifecycle_status"] = "INVALIDATED"
+                t["closed_at"] = time.time()
+                t["close_reason"] = "pre_entry_invalidation"
+                t["invalidation_evidence"] = {
+                    "source": "live_bid_ask" if bid is not None and ask is not None else "live_spot",
+                    "quote": entry_quote,
+                    "invalidation_level": invalidation,
+                    "captured_at": time.time(),
+                }
+                t["lifecycle_notification_event"] = "INVALIDATED"
+                t["lifecycle_notification_pending"] = True
+                changed = True
+                events.append({
+                    "trade": t,
+                    "event": "INVALIDATED",
+                    "exit_price": entry_quote,
+                })
+                continue
+
+            entry_reached = (
+                entry_quote <= entry if d == "BUY" else entry_quote >= entry
+            )
+            if not entry_reached:
+                continue
+            risk_distance = abs(entry - sl)
+            reward_distance = abs(tp1 - entry)
+            realized_rr = reward_distance / risk_distance if risk_distance > 0 else 0
+            required_rr = t.get("minimum_rr")
+            try:
+                required_rr = float(required_rr) if required_rr is not None else 0.0
+            except (TypeError, ValueError):
+                required_rr = 0.0
+            if required_rr and realized_rr < required_rr:
+                t["status"] = "invalidated"
+                t["lifecycle_status"] = "INVALIDATED"
+                t["closed_at"] = time.time()
+                t["close_reason"] = "entry_touch_failed_rr_validation"
+                t["lifecycle_notification_event"] = "INVALIDATED"
+                t["lifecycle_notification_pending"] = True
+                changed = True
+                events.append({
+                    "trade": t,
+                    "event": "INVALIDATED",
+                    "exit_price": entry_quote,
+                    "reason": (
+                        f"Entry touch leaves 1:{realized_rr:.2f} R:R, "
+                        f"below the configured 1:{required_rr:.2f} minimum."
+                    ),
+                })
+                continue
+            t["status"] = "open"
+            t["lifecycle_status"] = "ACTIVE"
+            t["activated_at"] = time.time()
+            t["entry_level_touched_at"] = t["activated_at"]
+            t["entry_touch_quote"] = entry_quote
+            t["entry_fill_confirmed"] = False
+            t["lifecycle_notification_event"] = "ENTRY"
+            t["lifecycle_notification_pending"] = True
+            changed = True
+            events.append({
+                "trade": t,
+                "event": "ENTRY",
+                "exit_price": entry_quote,
+                "reason": "Entry level touched; broker fill is not confirmed.",
+            })
+            # Never use a candle range from the same scan that touched entry
+            # as post-entry TP evidence.
             continue
 
         trade_key = (t.get("mode"), t.get("timeframe"))
@@ -674,6 +844,8 @@ def check_trades(current_price: float, recent_high: float = None,
             logger.info(f"Trade {t['id']} TP1 hit @ {tp1_exit:.2f}")
 
     if changed:
+        for trade in trades:
+            trade["lifecycle_status"] = lifecycle_status(trade)
         _save(trades)
 
     return events
@@ -824,6 +996,39 @@ def get_pending_result_notifications(
     ]
 
 
+def get_pending_lifecycle_notifications(
+    account_id: int | str | None = None,
+) -> List[Dict[str, Any]]:
+    return [
+        trade for trade in get_all_trades(account_id)
+        if trade.get("lifecycle_notification_pending")
+        and trade.get("lifecycle_notification_event")
+        and _belongs_to_account(trade, account_id)
+    ]
+
+
+def mark_lifecycle_notification_sent(
+    trade_id: str,
+    event: str,
+    account_id: int | str | None = None,
+) -> bool:
+    """Consume a lifecycle notice only after a Telegram send succeeds."""
+    account_key = _account_key(account_id)
+    trades = _load()
+    for trade in trades:
+        if (
+            str(trade.get("id") or "") == str(trade_id or "")
+            and trade.get("lifecycle_notification_pending")
+            and trade.get("lifecycle_notification_event") == event
+            and _belongs_to_account(trade, account_key)
+        ):
+            trade["lifecycle_notification_pending"] = False
+            trade["lifecycle_notification_sent_at"] = time.time()
+            _save(trades)
+            return True
+    return False
+
+
 def get_active_trades(account_id: int | str | None = None) -> List[Dict[str, Any]]:
     """Return every trade that still owns its timeframe.
 
@@ -831,7 +1036,10 @@ def get_active_trades(account_id: int | str | None = None) -> List[Dict[str, Any
     reminders, and chart context cannot disagree about whether TP2 is terminal
     or still being managed toward TP3.
     """
-    return [t for t in get_all_trades(account_id) if is_active_trade(t)]
+    active = [t for t in get_all_trades(account_id) if is_active_trade(t)]
+    for trade in active:
+        trade["lifecycle_status"] = lifecycle_status(trade)
+    return active
 
 
 def get_active_trades_for_account(

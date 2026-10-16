@@ -1460,6 +1460,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     rsi_display = f"{rsi:.1f}" if 0 < rsi < 100 else "—"
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
+    risk_policy = report.get("risk_policy", {}) or {}
+    event_risk = report.get("event_risk", {}) or {}
     quality_checks = report.get("quality_checks", []) or []
     decision_summary = report.get("decision_summary", {}) or {}
     has_timeframe_profile = (
@@ -1525,6 +1527,17 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     entry = float(getattr(a, "entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     target = float(getattr(a, "tp1", 0.0) or 0.0)
+    target2 = float(getattr(a, "tp2", 0.0) or 0.0)
+    target3 = float(getattr(a, "tp3", 0.0) or 0.0)
+    risk_distance = abs(entry - stop) if entry > 0 and stop > 0 else 0.0
+    actual_target_rrs = [
+        (
+            f"TP{index} 1:{abs(target_value - entry) / risk_distance:.2f}"
+            if target_value > 0 and risk_distance > 0
+            else f"TP{index} N/A"
+        )
+        for index, target_value in enumerate((target, target2, target3), 1)
+    ]
     invalidation = float(getattr(a, "invalidation", 0.0) or 0.0)
     rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
     spread_status = str(decision_summary.get("spread_filter_status") or "unavailable")
@@ -1668,17 +1681,40 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Entry : {fmt_price(entry) if entry else '—'}",
         f"SL      : {fmt_price(stop) if stop else '—'}",
         f"TP1     : {fmt_price(target) if target else '—'}",
-        f"TP2     : {fmt_price(getattr(a, 'tp2', 0.0)) if getattr(a, 'tp2', 0.0) else '—'}",
-        f"TP3     : {fmt_price(getattr(a, 'tp3', 0.0)) if getattr(a, 'tp3', 0.0) else '—'}",
-        f"R:R     : {f'1:{rr:g}' if rr else '—'}",
+        f"TP2     : {fmt_price(target2) if target2 else 'N/A — no later confirmed level'}",
+        f"TP3     : {fmt_price(target3) if target3 else 'N/A — no later confirmed level'}",
+        "R:R     : " + " | ".join(actual_target_rrs),
+        (
+            "Suggested risk: "
+            f"{100 * float(risk_policy.get('risk_per_trade_fraction', 0.005)):.2f}% "
+            "of equity; maximum suggestion "
+            f"{100 * float(risk_policy.get('max_suggested_risk_fraction', 0.01)):.2f}%."
+        ),
         f"Invalid : {fmt_price(invalidation) if invalidation else '—'}",
         *(
             [
                 "Position size: Unavailable — broker specifications and account equity not connected.",
+                "Exposure: Cannot verify account-wide risk without equity and open-position data.",
                 spread_line,
                 str(getattr(a, "execution_note", "") or
                     "Broker commissions and slippage are unavailable; not included."),
             ]
+        ),
+        (
+            "Event risk: UNAVAILABLE — no connected economic-calendar feed; "
+            "configured operator schedule is not a live calendar."
+            if event_risk.get("status") == "UNAVAILABLE_NO_CALENDAR_FEED"
+            else (
+                "Event risk: "
+                + str(event_risk.get("status", "UNKNOWN"))
+                + " — operator-supplied schedule, not a live calendar."
+            )
+        ),
+        (
+            "EARLY warning: anticipatory setup with higher uncertainty; "
+            "not a broker order or confirmed fill."
+            if str(getattr(a, "signal_category", "")).upper() == "EARLY"
+            else "Status: monitored analysis plan only; no broker order or fill is confirmed."
         ),
         *(
             [
@@ -3279,7 +3315,7 @@ def entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
         lines += [sep, f"  ! {ms['status_text']}"]
 
     lines += [sep,
-        "  50% at TP1. Move SL to entry.",
+        "  TP milestone tracking only; no partial close or stop change is executed.",
         "  Not financial advice.",
         "</pre>"]
     return safe_html("\n".join(lines))
@@ -4201,6 +4237,8 @@ def history_card(trades: list, stats: dict) -> str:
         if s == "tp1_sl_hit":   return "TP1 / SL "
         if s == "sl_hit":       return "LOSS  SL "
         if s == "expired":      return "EXPIRED  "
+        if s == "waiting_for_entry": return "WAIT ENTRY"
+        if s == "invalidated":  return "INVALID "
         if s == "replaced":     return "REPLACED "
         return s.upper()[:9]
 
@@ -4456,7 +4494,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
 
     lines = [
         "<pre>",
-        "ACTIVE TRADES  |  XAU/USD",
+        "ACTIVE SETUPS / TRADES  |  XAU/USD",
         WIDE,
         (
             f"Live Price : {live_price:,.2f}"
@@ -4508,10 +4546,15 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
                 lines.append(WIDE)
             continue
 
+        waiting_for_entry = t.get("status") == "waiting_for_entry"
         # This is the quoted XAU/USD price move from the tracked market entry,
         # not account currency or broker pips. Pip size varies by broker, while
         # the trade levels in this bot are stored directly as XAU/USD prices.
-        if price_available:
+        if waiting_for_entry:
+            pnl_line = "Price Move  : not applicable (entry not reached)"
+            now_line = f"Now         : {live_price:,.2f}" if price_available else "Now         : unavailable"
+            limit_move_line = ""
+        elif price_available:
             pnl = (live_price - entry) if direction == "BUY" else (entry - live_price)
             pnl_sign = "+" if pnl >= 0 else ""
             pnl_label = "IN PROFIT" if pnl >= 0 else "IN LOSS"
@@ -4556,7 +4599,9 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
         # already crossed a target but the background tracker has not recorded
         # it yet (for example while the market is closed), show that explicitly
         # instead of making the trade look as though it is still before TP1.
-        if t.get("tp2_hit") and tp3:
+        if waiting_for_entry:
+            status_note = "WAITING FOR ENTRY — no fill confirmed"
+        elif t.get("tp2_hit") and tp3:
             status_note = "TP1 + TP2 HIT — next TP3"
         elif t.get("tp1_hit"):
             status_note = "TP1 HIT — next TP2"
@@ -4564,7 +4609,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             status_note = "OPEN — watching TP1"
 
         def _target_reached(target):
-            if not price_available or target is None:
+            if waiting_for_entry or not price_available or target is None:
                 return False
             return live_price >= target if direction == "BUY" else live_price <= target
 
@@ -4576,8 +4621,22 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
         ):
             if _target_reached(target_value):
                 crossed_target = target_name
-        tracker_status = ""
-        if crossed_target:
+        tracker_status = (
+            "Tracker     : WAITING FOR ENTRY"
+            if waiting_for_entry
+            else "Tracker     : " + {
+                "open": "ACTIVE",
+                "tp1_hit": "TP1 REACHED",
+                "tp2_hit": "TP2 REACHED",
+                "tp3_hit": "TP3 REACHED",
+                "tp1_final_hit": "TP1 REACHED",
+                "sl_hit": "STOP LOSS HIT",
+                "tp1_sl_hit": "STOP LOSS HIT",
+                "invalidated": "INVALIDATED",
+                "expired": "EXPIRED",
+            }.get(str(t.get("status") or "").lower(), "UNKNOWN")
+        )
+        if crossed_target and not waiting_for_entry:
             status_note = f"{crossed_target} REACHED — tracker update pending"
             tracker_status = f"Tracker     : saved as {str(t.get('status', 'unknown')).upper()}"
 
@@ -4586,7 +4645,7 @@ def active_trades_card(open_trades: list, current_price: float) -> str:
             f"{tf}  {direction}  |  {status_note}",
             f"Mode        : {mode}  |  Confidence: {conf}%",
             f"Opened      : {age_str}",
-            f"Market Entry: {entry:,.2f}  (tracked basis)",
+            f"Market Entry: {entry:,.2f}  (planned basis)",
             *(
                 [f"Limit Entry : {limit_entry:,.2f}  (optional pullback level)"]
                 if limit_entry and not math.isclose(limit_entry, entry, abs_tol=0.005)

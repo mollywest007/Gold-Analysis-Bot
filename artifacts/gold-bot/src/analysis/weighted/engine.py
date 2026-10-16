@@ -100,6 +100,7 @@ def analyze_weighted_market(
     raw_data: Mapping[str, object],
     spread: float | None,
     now: float | None = None,
+    event_risk: dict | None = None,
 ) -> dict:
     """Analyze the selected setup timeframe with mode-resolved MTF context.
 
@@ -315,6 +316,13 @@ def analyze_weighted_market(
         if chosen is not None
         else "WAIT"
     )
+    event_risk = event_risk or {
+        "status": "UNAVAILABLE_NO_CALENDAR_FEED",
+        "blocks_signal": False,
+        "source": "unavailable",
+        "event": None,
+        "reason": "No economic-calendar feed or operator event schedule is configured.",
+    }
     rejection_reasons = list(invalid_data_reasons)
     if chosen is None:
         rejection_reasons.append("No setup has sufficient, non-conflicting evidence.")
@@ -330,6 +338,11 @@ def analyze_weighted_market(
         )
     if not atr_value:
         rejection_reasons.append("ATR14 is unavailable; volatility and stop validation failed.")
+    if event_risk.get("blocks_signal"):
+        category = "WAIT"
+        rejection_reasons.append(
+            str(event_risk.get("reason") or "Configured event-risk filter blocks this setup.")
+        )
 
     required_data_valid = not invalid_data_reasons
     if (
@@ -382,7 +395,11 @@ def analyze_weighted_market(
     if category == "WAIT" and not rejection_reasons:
         rejection_reasons.append("Evidence did not reach the configured mode threshold.")
 
-    plan = validation if validation.get("valid") else {}
+    plan = (
+        validation
+        if validation.get("valid") and not event_risk.get("blocks_signal")
+        else {}
+    )
     timeframe_reports = {
         role: {
             "timeframe": role_timeframes[role],
@@ -475,17 +492,27 @@ def analyze_weighted_market(
         "stop_loss": plan.get("stop_loss", 0.0),
         "invalidation": plan.get("invalidation_level", 0.0),
         "take_profit": plan.get("take_profit", 0.0),
+        "tp2": plan.get("tp2"),
+        "tp3": plan.get("tp3"),
         "rr": plan.get("rr", 0.0),
+        "target_rrs": plan.get("target_rrs", {}),
+        "reference_spread_target_rrs": plan.get(
+            "reference_spread_target_rrs", {}
+        ),
         "reference_spread_rr": plan.get("reference_spread_rr"),
         "spread_status": validation.get("spread_status", "unavailable"),
         "spread_atr": validation.get("spread_atr"),
         "spread": spread,
+        "event_risk": event_risk,
         "preferred_rr": config.preferred_rr,
         "minimum_rr": float(config.profile.minimum_target_rr),
         "stop_buffer_atr": float(config.profile.stop_buffer_atr),
         "minimum_stop_atr": float(config.profile.minimum_stop_distance_atr),
         "maximum_stop_atr": float(config.profile.maximum_stop_distance_atr),
         "maximum_ema_distance_atr": float(config.profile.maximum_ema_distance_atr),
+        "maximum_live_entry_distance_atr": float(
+            config.profile.maximum_live_entry_distance_atr
+        ),
         "structure_lookback": int(config.profile.structure_lookback_candles),
         "breakout_lookback": config.breakout_lookback,
         "sweep_lookback": config.sweep_lookback,

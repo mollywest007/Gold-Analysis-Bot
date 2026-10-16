@@ -1142,7 +1142,19 @@ def _entry_price_is_currently_valid(
         or tp1 <= 0
     ):
         return False
-    near_entry_distance = max(abs(entry) * 0.00015, atr * 0.35, 0.05)
+    report = getattr(analysis, "institutional_report", {}) or {}
+    mode_rules = report.get("mode_rules", {}) or {}
+    maximum_entry_distance_atr = _safe_float(
+        mode_rules.get("maximum_live_entry_distance_atr"),
+        0.35,
+    )
+    if maximum_entry_distance_atr <= 0:
+        return False
+    near_entry_distance = max(
+        abs(entry) * 0.00015,
+        atr * maximum_entry_distance_atr,
+        0.05,
+    )
     if abs(price - entry) > near_entry_distance:
         return False
 
@@ -2923,6 +2935,15 @@ async def _check_and_alert_once(
                         getattr(a, "entry_zone_price", 0.0)
                         or getattr(a, "limit_entry", 0.0)
                     ),
+                    waiting_for_entry=bool(
+                        getattr(a, "waiting_for_entry", False)
+                    ),
+                    invalidation_level=getattr(a, "invalidation", None),
+                    minimum_rr=(
+                        (getattr(a, "institutional_report", {}) or {})
+                        .get("mode_rules", {})
+                        .get("minimum_target_rr")
+                    ),
                     account_id=account_id,
                     allow_same_timeframe_mode=combined_scan,
                 )
@@ -2946,7 +2967,7 @@ async def _check_and_alert_once(
                 (
                     trade for trade in trade_tracker.get_all_trades(account_id)
                     if trade.get("timeframe") == tf
-                    and trade.get("status") == "open"
+                    and trade.get("status") in ("open", "waiting_for_entry")
                     and trade.get("direction") == direction
                     and trade.get("opened_at", 0) > time.time() - 10
                 ),

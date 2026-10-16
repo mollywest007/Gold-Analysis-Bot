@@ -4,6 +4,49 @@ from __future__ import annotations
 import math
 
 
+def _zone_value(zone, key: str):
+    if isinstance(zone, dict):
+        return zone.get(key)
+    return getattr(zone, key, None)
+
+
+def _opposing_levels(structure, direction: str, price: float) -> list[float]:
+    """Return confirmed pivots and zone centers ahead of the proposed entry."""
+    if direction == "BUY":
+        pivots = [level for _, level in structure.swing_highs]
+        zones = structure.resistances
+    else:
+        pivots = [level for _, level in structure.swing_lows]
+        zones = structure.supports
+
+    levels = []
+    for raw in pivots:
+        try:
+            level = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(level) and (
+            level > price if direction == "BUY" else level < price
+        ):
+            levels.append(level)
+    for zone in zones:
+        try:
+            level = float(_zone_value(zone, "center"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(level) and (
+            level > price if direction == "BUY" else level < price
+        ):
+            levels.append(level)
+
+    levels.sort(reverse=direction == "SELL")
+    unique = []
+    for level in levels:
+        if not unique or abs(level - unique[-1]) > max(abs(price) * 1e-6, 0.01):
+            unique.append(level)
+    return unique
+
+
 def validate_candidate(
     candidate,
     *,
@@ -37,6 +80,31 @@ def validate_candidate(
         if not math.isfinite(spread_value) or spread_value < 0:
             return {"valid": False, "rejection_reasons": ["Reference spread is invalid."]}
     buffer = atr * float(profile.stop_buffer_atr)
+    if spread_value is not None:
+        buffer += spread_value / 2.0
+    # If the candidate invalidation sits within a nearby support/resistance
+    # zone, put the stop beyond the full zone rather than just its midpoint.
+    relevant_zones = (
+        structure.supports if direction == "BUY" else structure.resistances
+    )
+    zone_edges = []
+    for zone in relevant_zones:
+        try:
+            low = float(_zone_value(zone, "low"))
+            high = float(_zone_value(zone, "high"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(low) or not math.isfinite(high) or low > high:
+            continue
+        tolerance = atr * float(profile.level_tolerance_atr)
+        if low - tolerance <= invalidation_level <= high + tolerance:
+            zone_edges.append(low if direction == "BUY" else high)
+    if zone_edges:
+        invalidation_level = (
+            min([invalidation_level, *zone_edges])
+            if direction == "BUY"
+            else max([invalidation_level, *zone_edges])
+        )
     stop = (
         invalidation_level - buffer
         if direction == "BUY"
@@ -61,23 +129,36 @@ def validate_candidate(
             "rejection_reasons": ["Structural stop exceeds the mode's configured ATR risk cap."],
         }
 
-    pivot_levels = (
-        [level for _, level in structure.swing_highs if level > price]
-        if direction == "BUY"
-        else [level for _, level in structure.swing_lows if level < price]
-    )
-    if not pivot_levels:
+    opposing_levels = _opposing_levels(structure, direction, price)
+    if not opposing_levels:
         return {
             "valid": False,
             "rejection_reasons": ["No confirmed opposing structural target is available."],
         }
-    target_buffer = max(atr * float(profile.target_buffer_atr), 0.01)
-    nearest_level = min(pivot_levels) if direction == "BUY" else max(pivot_levels)
-    structural_target = (
-        nearest_level - target_buffer
-        if direction == "BUY"
-        else nearest_level + target_buffer
+    target_buffer = max(
+        atr * float(profile.target_buffer_atr),
+        spread_value / 2.0 if spread_value is not None else 0.0,
+        0.01,
     )
+    structural_targets = [
+        level - target_buffer if direction == "BUY" else level + target_buffer
+        for level in opposing_levels
+    ]
+    structural_targets = [
+        target for target in structural_targets
+        if target > price if direction == "BUY"
+    ] if direction == "BUY" else [
+        target for target in structural_targets if target < price
+    ]
+    if not structural_targets:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "The nearest opposing zone leaves no executable target room."
+            ],
+        }
+    nearest_level = opposing_levels[0]
+    structural_target = structural_targets[0]
     minimum_rr = float(profile.minimum_target_rr)
     target_rr = max(
         minimum_rr,
@@ -88,14 +169,9 @@ def validate_candidate(
         if direction == "BUY"
         else price - risk * target_rr
     )
-    preferred_target = (
-        min(structural_target, preferred_target)
-        if direction == "BUY"
-        else max(structural_target, preferred_target)
-    )
-    # A target placed at exactly the nominal minimum R:R will fail the
-    # reference-spread-adjusted check for any nonzero spread. Extend the target
-    # only as far as the structure permits to preserve the minimum after costs.
+    # TP1 is capped at the mode's preferred R:R, but never placed beyond the
+    # nearest opposing level. If spread costs require slightly more room, that
+    # room must still exist before the same real structural level.
     if spread_value is not None:
         minimum_spread_reward = minimum_rr * (risk + spread_value / 2.0) + spread_value
         minimum_spread_target = (
@@ -109,7 +185,11 @@ def validate_candidate(
             else max(structural_target, min(preferred_target, minimum_spread_target))
         )
     else:
-        target = preferred_target
+        target = (
+            min(structural_target, preferred_target)
+            if direction == "BUY"
+            else max(structural_target, preferred_target)
+        )
     reward = target - price if direction == "BUY" else price - target
     if reward <= 0:
         return {
@@ -157,6 +237,34 @@ def validate_candidate(
                 "spread_rr": round(spread_rr, 2),
             }
 
+    # Further targets must be additional confirmed opposing levels. No ATR or
+    # R-multiple projection is used to manufacture a distant TP2/TP3.
+    later_targets = [
+        value for value in structural_targets
+        if value > target + 0.01 if direction == "BUY"
+    ] if direction == "BUY" else [
+        value for value in structural_targets if value < target - 0.01
+    ]
+    tp2 = later_targets[0] if later_targets else None
+    tp3 = later_targets[1] if len(later_targets) > 1 else None
+
+    target_rrs = {"TP1": round(abs(target - price) / risk, 2)}
+    spread_target_rrs = {}
+    for label, target_value in (("TP1", target), ("TP2", tp2), ("TP3", tp3)):
+        if target_value is None:
+            continue
+        reward_value = (
+            target_value - price
+            if direction == "BUY"
+            else price - target_value
+        )
+        target_rrs[label] = round(reward_value / risk, 2)
+        if spread_value is not None:
+            spread_target_rrs[label] = round(
+                (reward_value - spread_value) / (risk + spread_value / 2.0),
+                2,
+            )
+
     zone_half_width = atr * float(profile.entry_zone_atr)
     return {
         "valid": True,
@@ -166,9 +274,13 @@ def validate_candidate(
         "stop_loss": round(stop, 2),
         "invalidation_level": round(invalidation_level, 2),
         "take_profit": round(target, 2),
+        "tp2": round(tp2, 2) if tp2 is not None else None,
+        "tp3": round(tp3, 2) if tp3 is not None else None,
         "risk": round(risk, 5),
         "reward": round(reward, 5),
         "rr": round(rr, 2),
+        "target_rrs": target_rrs,
+        "reference_spread_target_rrs": spread_target_rrs,
         "preferred_rr": round(target_rr, 2),
         "reference_spread_rr": round(spread_rr, 2) if spread_rr is not None else None,
         "spread_status": spread_status,

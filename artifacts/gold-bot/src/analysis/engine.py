@@ -2795,6 +2795,8 @@ def _analyze_simple_data(
 
 def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> MarketAnalysis:
     """Adapt the new decision contract to the bot's established analysis model."""
+    from .risk_policy import RISK_POLICY
+
     timeframe = result["setup_timeframe"]
     price = float(result.get("price", 0.0) or 0.0)
     direction = result.get("direction", "WAIT")
@@ -2804,6 +2806,8 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
     entry = float(result.get("entry", 0.0) or 0.0)
     stop = float(result.get("stop_loss", 0.0) or 0.0)
     target = float(result.get("take_profit", 0.0) or 0.0)
+    target2 = float(result.get("tp2") or 0.0)
+    target3 = float(result.get("tp3") or 0.0)
     rr = float(result.get("rr", 0.0) or 0.0)
     breakdown = result.get("score_breakdown", {})
     role_reports = result.get("timeframe_reports", {})
@@ -2860,6 +2864,28 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         "data_quality": data_quality,
         "direction": direction,
         "score_breakdown": breakdown,
+        "target_rrs": result.get("target_rrs", {}),
+        "reference_spread_target_rrs": result.get(
+            "reference_spread_target_rrs", {}
+        ),
+        "event_risk": result.get("event_risk", {
+            "status": "UNAVAILABLE_NO_CALENDAR_FEED",
+            "source": "unavailable",
+            "reason": "No economic-calendar feed is connected.",
+        }),
+        "risk_policy": {
+            "risk_per_trade_fraction": RISK_POLICY.risk_per_trade_fraction,
+            "max_suggested_risk_fraction": (
+                RISK_POLICY.max_suggested_risk_fraction
+            ),
+            "max_total_risk_fraction": RISK_POLICY.max_total_risk_fraction,
+            "max_simultaneous_setups": RISK_POLICY.max_simultaneous_setups,
+            "tp1_partial_fraction": RISK_POLICY.tp1_partial_fraction,
+            "breakeven_after_tp1": RISK_POLICY.breakeven_after_tp1,
+            "structure_trailing_enabled": (
+                RISK_POLICY.structure_trailing_enabled
+            ),
+        },
         "mode_rules": {
             "context_timeframe": result.get("context_timeframe"),
             "setup_timeframe": result.get("setup_timeframe"),
@@ -2870,6 +2896,9 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
             "minimum_stop_atr": result.get("minimum_stop_atr"),
             "maximum_stop_atr": result.get("maximum_stop_atr"),
             "maximum_ema_distance_atr": result.get("maximum_ema_distance_atr"),
+            "maximum_live_entry_distance_atr": result.get(
+                "maximum_live_entry_distance_atr", 0.35
+            ),
             "structure_lookback": result.get("structure_lookback"),
             "breakout_lookback": result.get("breakout_lookback"),
             "sweep_lookback": result.get("sweep_lookback"),
@@ -2944,7 +2973,7 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         entry=entry,
         stop_loss=stop,
         tp1=target,
-        tp2=0.0,
+        tp2=target2,
         rr_ratio=rr,
         action=action,
         wait_reason=wait_reason,
@@ -3031,7 +3060,7 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         ),
         setup_quality=category_grade,
         setup_grade=category_grade,
-        tp3=0.0,
+        tp3=target3,
         bos=(
             "BULLISH_BOS" if setup_report.get("structure_break") == "BUY"
             else "BEARISH_BOS" if setup_report.get("structure_break") == "SELL"
@@ -3084,10 +3113,13 @@ async def _analyze_single(
         if quote.get("spread_available"):
             spread = float(quote["ask"]) - float(quote["bid"])
 
+    from .event_risk import assess_event_risk
+
     result = analyze_weighted_market(
         config=config,
         raw_data=data_by_timeframe,
         spread=spread,
+        event_risk=assess_event_risk(),
     )
     return _weighted_result_to_analysis(result, mode_cfg, data_by_timeframe)
 
