@@ -1148,6 +1148,8 @@ def entry_analysis_card(a: MarketAnalysis) -> str:
 
 
 def signal_card(a: MarketAnalysis) -> str:
+    return _simple_analysis_card(a)
+
     report = getattr(a, "institutional_report", {}) or {}
     if report.get("analysis_engine") == "weighted_multi_timeframe":
         return _simple_analysis_card(a)
@@ -1386,7 +1388,7 @@ def _normal_entry_conditions(a: MarketAnalysis) -> tuple[str, str, str]:
     )
 
 
-def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
+def _verbose_legacy_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     """Render a compact, single-scope Telegram analysis card.
 
     The card is intentionally written as one selected mode/timeframe report.
@@ -1793,6 +1795,286 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "</pre>",
     ]
     return safe_html("\n".join(lines))
+
+
+def _analysis_setup_label(value: str) -> str:
+     labels = {
+         "BREAKOUT": "Breakout",
+         "BREAKOUT_RETEST": "Breakout retest",
+         "LIQUIDITY_SWEEP": "Liquidity sweep",
+         "TREND_PULLBACK": "Trend pullback",
+         "SUPPORT_RESISTANCE_REACTION": "Support/resistance reaction",
+     }
+     normalized = str(value or "").strip().upper()
+     return labels.get(normalized, normalized.replace("_", " ").title())
+
+
+def _analysis_trend_label(a: MarketAnalysis) -> str:
+     descriptions = (
+         getattr(a, "trend", ""),
+         getattr(a, "market_condition", ""),
+         getattr(a, "market_regime", ""),
+     )
+     condition = " ".join(str(value or "") for value in descriptions).upper()
+     if "BULLISH" in condition:
+         return "Bullish"
+     if "BEARISH" in condition:
+         return "Bearish"
+     if "RANG" in condition or "RANGE_BOUND" in condition:
+         return "Ranging"
+     if "VOLATIL" in condition:
+         return "Volatile"
+     return "Transitioning / unclear"
+
+
+def _analysis_waiting_text(
+     a: MarketAnalysis,
+     *,
+     action: str,
+     category: str,
+     score: int,
+     mode_rules: dict,
+     report: dict,
+ ) -> str:
+     if action in ("BUY", "SELL"):
+         return "No blocker — entry conditions are met."
+
+     summary = report.get("decision_summary", {}) or {}
+     blockers = (
+         summary.get("rejection_reasons")
+         or report.get("rejection_reasons")
+         or getattr(a, "rejection_reasons", None)
+         or getattr(a, "reasons_against", None)
+         or []
+     )
+     blockers = [str(reason).strip() for reason in blockers if str(reason).strip()]
+
+     if category == "EARLY":
+         threshold = mode_rules.get("moderate_score")
+         if threshold is not None:
+              if score < int(threshold):
+                  return (
+                      f"MODERATE entry: score ≥{int(threshold)}/100 "
+                      f"(currently {score}) plus valid entry location and "
+                      "price-action evidence."
+                  )
+              return (
+                  f"MODERATE price-action confirmation; score gate already "
+                  f"met ({score}/{int(threshold)})."
+              )
+
+     if blockers:
+         return "; ".join(dict.fromkeys(blockers))[:260]
+
+     reason = (
+         getattr(a, "current_confirmation", "")
+         or getattr(a, "wait_reason", "")
+         or getattr(a, "verdict_reason", "")
+     )
+     reason = str(reason).strip()
+     if category == "WAIT" and reason.upper().startswith("WAIT:"):
+         reason = reason.split(":", 1)[1].strip()
+     if reason:
+         return reason[:260]
+     return "A directional setup must pass the selected mode's score and validation gates."
+
+
+def _analysis_trigger_text(
+     a: MarketAnalysis,
+     *,
+     action: str,
+     direction: str,
+     category: str,
+     score: int,
+     mode_rules: dict,
+     report: dict,
+ ) -> str:
+     if report.get("analysis_engine") != "weighted_multi_timeframe":
+         return str(
+             getattr(a, "current_confirmation", "")
+             or getattr(a, "wait_reason", "")
+             or "No separate entry-trigger detail was provided by this analysis."
+         )[:220]
+
+     threshold = mode_rules.get("moderate_score")
+     threshold_text = (
+         f"score ≥{int(threshold)}/100"
+         if threshold is not None
+         else "the selected mode's entry threshold"
+     )
+     setup = _analysis_setup_label(getattr(a, "price_action_setup", ""))
+     if action in ("BUY", "SELL"):
+         return (
+             f"{direction} setup passed {threshold_text}, entry-location, "
+             "price-action, data and risk checks."
+         )
+     if category == "EARLY":
+         return (
+             f"{direction} setup reaches {threshold_text} with valid "
+             "entry-location and price-action evidence."
+         )
+     if setup and direction in ("BUY", "SELL"):
+         return (
+             f"{direction} {setup.lower()} reaches {threshold_text} and passes "
+             "entry-location, price-action, data and risk checks."
+         )
+     return (
+         f"A directional price-action setup reaches {threshold_text}; "
+         "data, structure and risk checks must also pass."
+     )
+
+
+def _analysis_invalidation_text(
+     a: MarketAnalysis, direction: str, report: dict
+ ) -> str:
+     summary = report.get("decision_summary", {}) or {}
+     conditions = (
+         summary.get("invalidation_conditions")
+         or getattr(a, "invalidating_conditions", None)
+         or []
+     )
+     conditions = [
+         str(condition).strip()
+         for condition in conditions
+         if str(condition).strip()
+         and "no validated active setup" not in str(condition).lower()
+         and "no directional setup is active" not in str(condition).lower()
+     ]
+     if conditions:
+         return "; ".join(conditions[:2])[:220]
+
+     level = float(getattr(a, "invalidation", 0.0) or 0.0)
+     if level > 0:
+         return (
+             f"Completed {getattr(a, 'timeframe', 'setup-timeframe')} close "
+             f"beyond {fmt_price(level)}."
+         )
+     return "Not set — no validated setup has a structural invalidation level."
+
+
+def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
+     """Render the shared compact analysis card used across Telegram paths."""
+     report = getattr(a, "institutional_report", {}) or {}
+     mode_rules = report.get("mode_rules", {}) or {}
+     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+     if action not in ("BUY", "SELL"):
+         action = "WAIT"
+     direction = str(
+         getattr(a, "directional_indication", "")
+         or getattr(a, "early_direction", "")
+         or ""
+     ).upper()
+     if action in ("BUY", "SELL"):
+         direction = action
+     elif direction not in ("BUY", "SELL"):
+         direction = "WAIT"
+
+     setup_status = str(getattr(a, "setup_status", "") or "").upper()
+     if action in ("BUY", "SELL") and setup_status in (
+         "WAIT", "DEVELOPING", "MISSED", "INVALID"
+     ):
+         action = "WAIT"
+
+     category = str(
+         getattr(a, "signal_category", "")
+         or getattr(a, "signal_status", "")
+         or ""
+     ).upper()
+     score = int(getattr(a, "confidence_score", 0) or 0)
+     mode = str(getattr(a, "analysis_mode", "") or "").lower()
+     mode_label = {
+         "scalp": "Scalping",
+         "intraday": "Intraday",
+         "swing": "Swing",
+         "position": "Position",
+     }.get(
+         mode,
+         {
+             "scalp": "Scalping",
+         }.get(
+             str(getattr(a, "trade_type", "") or "").lower(),
+             str(getattr(a, "trade_type", "") or "Selected mode"),
+         ),
+     )
+     timeframe = str(getattr(a, "timeframe", "") or "")
+     price = float(getattr(a, "price", 0.0) or 0.0)
+     price_text = f" · {fmt_price(price)}" if price > 0 else ""
+     setup_type = _analysis_setup_label(
+         getattr(a, "price_action_setup", "")
+     )
+     has_setup = bool(setup_type)
+     setup = (
+         f"Potential {direction} · {setup_type}"
+         if direction in ("BUY", "SELL") and has_setup
+         else f"Potential {direction}"
+         if direction in ("BUY", "SELL")
+         else "No directional setup formed"
+     )
+
+     price_action = str(getattr(a, "key_zone", "") or "").strip()
+     if price_action in (
+         "No defined support/resistance zone",
+         "Support/resistance not defined",
+         "No qualifying setup",
+     ):
+         price_action = ""
+     if not price_action and has_setup:
+         price_action = setup_type
+     if not price_action:
+         price_action = _struct_label(
+             str(getattr(a, "market_structure", "") or "Not established")
+         )
+     if len(price_action) > 180:
+         price_action = price_action[:177].rstrip() + "…"
+
+     waiting = _analysis_waiting_text(
+         a,
+         action=action,
+         category=category,
+         score=score,
+         mode_rules=mode_rules,
+         report=report,
+     )
+     trigger = _analysis_trigger_text(
+         a,
+         action=action,
+         direction=direction,
+         category=category,
+         score=score,
+         mode_rules=mode_rules,
+         report=report,
+     )
+     invalidation = _analysis_invalidation_text(a, direction, report)
+     status_icon = {"BUY": "🟢", "SELL": "🔴", "WAIT": "🟡"}[action]
+     status_text = "WAIT" if action == "WAIT" else action
+     header = (
+         f"<b>SYMBOL</b> XAU/USD → <b>MODE</b> {html.escape(mode_label)}"
+         + (f" · {html.escape(timeframe)}" if timeframe else "")
+         + html.escape(price_text)
+     )
+     lines = []
+     alert_heading = {
+         "SCALP": "⚡ Scalp alert",
+         "INTRA-HOUR": "📊 Intra-hour alert",
+     }.get(alert_label, "")
+     if alert_heading:
+         lines.append(f"<b>{alert_heading}</b>")
+     lines.extend(
+         [
+             header,
+             (
+                 f"<b>Market trend</b> {html.escape(_analysis_trend_label(a))}"
+                 f" · <b>Price action</b> {html.escape(price_action)}"
+             ),
+             f"<b>Setup</b> {html.escape(setup)}",
+             f"<b>Waiting for</b> {html.escape(waiting)}",
+             f"<b>Entry status</b> {status_icon} <b>{status_text}</b>",
+             f"<b>Entry trigger</b> {html.escape(trigger)}",
+             f"<b>Invalidation</b> {html.escape(invalidation)}",
+             "<i>Not financial advice.</i>",
+         ]
+     )
+     return safe_html("\n".join(lines))
 
 
 def _reference_style_analysis_card(
@@ -3356,6 +3638,8 @@ def early_entry_card(a: MarketAnalysis, alert_label: str = "") -> str:
 
 def no_entry_card(a: MarketAnalysis) -> str:
     """Shown when the complete analysis has not produced a valid setup."""
+    return _simple_analysis_card(a)
+
     lines = ["<pre>",
         "╔══════════════════════════════════╗",
         "║   XAU/USD  NO ENTRY  Pt.2        ║",

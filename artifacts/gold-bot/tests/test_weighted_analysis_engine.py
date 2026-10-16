@@ -640,8 +640,11 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.timeframe, "M5")
         self.assertEqual(result.analysis_mode, "scalp")
         self.assertEqual(result.win_probability, 0)
-        self.assertIn("M15 → M5 → M1", card)
-        self.assertIn("Not backtested", card)
+        self.assertIn("<b>SYMBOL</b> XAU/USD → <b>MODE</b> Scalping · M5", card)
+        self.assertIn("<b>Market trend</b>", card)
+        self.assertIn("<b>Waiting for</b>", card)
+        self.assertIn("<b>Entry trigger</b>", card)
+        self.assertNotIn("M15 → M5 → M1", card)
         self.assertEqual(
             {role: report["timeframe"] for role, report in result.analysis_timeframes.items()},
             {"context": "M15", "setup": "M5", "refinement": "M1"},

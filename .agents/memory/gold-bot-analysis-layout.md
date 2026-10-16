@@ -3,14 +3,14 @@ name: Gold Bot Analysis Layout
 description: Durable presentation rules for Telegram analysis and entry decision panels.
 ---
 
-The Telegram analysis experience uses self-contained strict and early evidence cards: each card repeats the relevant market snapshot, raw indicator values, gate checks, plan levels, and invalidation so neither path depends on a truncated continuation.
+The primary Telegram analysis card is compact and decision-first: symbol/mode/timeframe, market trend and price action, setup, the actual blocker, status, entry trigger, and invalidation. It omits raw indicators and repeated trade-plan detail.
 
-**Why:** A single combined card could exceed Telegram's message limit and hide the end of the strict gate or early invalidation. Independent cards preserve the distinction between a manual provisional setup and a confirmed active-trade plan.
+**Why:** On 2026-10-16 the user asked to understand direction, setup, missing confirmation, trigger, and invalidation at a glance without changing the strategy.
 
-**How to apply:** Keep strict confirmation labeled as confirmed or waiting, keep provisional levels labeled manual-only and non-active, and keep each card below Telegram's message limit. Show neutral or unavailable fields explicitly as `Not used` or `UNAVAILABLE`.
+**How to apply:** Reuse one compact renderer across analysis, recommendation, signal, and entry-alert messages. Derive waiting conditions and triggers from the selected engine's real rejection reasons and configured thresholds; never substitute generic confirmation text or modify entry/risk rules for presentation.
 
-The compact reference board order is: market structure → institutional score → early entry watch → indicators → key levels → detailed strict-entry evidence.
+Telegram clients wrap normal text automatically, so keep labels concise and fields in a stable left-to-right decision order rather than using fixed-width columns.
 
-**Why:** On a phone-sized Telegram screen, the early decision state must be visible before the longer evidence sections; placing it later makes the most important provisional guidance easy to miss or truncate.
+**Why:** Fixed-width columns and long preformatted sections are hard to scan on narrow Telegram screens.
 
-**How to apply:** Keep the early watch block short and explicit about its separation from strict confirmation. Put verbose raw-data, gate, plan, and invalidation details after the compact decision sections.
+**How to apply:** Use short inline labels and a distinct status marker for WAIT/BUY/SELL; state explicitly when no structural invalidation level exists instead of inventing one.

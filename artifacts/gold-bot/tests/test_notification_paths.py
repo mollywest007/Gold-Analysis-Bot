@@ -1364,8 +1364,10 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         scalp_card = early_entry_card(analysis, alert_label="SCALP")
         interval_card = early_entry_card(analysis, alert_label="INTRA-HOUR")
 
-        self.assertTrue(scalp_card.startswith("<pre>\n⚡ SCALP ENTRY"))
-        self.assertTrue(interval_card.startswith("<pre>\n📊 INTRA-HOUR ENTRY"))
+        self.assertTrue(scalp_card.startswith("<b>⚡ Scalp alert</b>"))
+        self.assertTrue(interval_card.startswith("<b>📊 Intra-hour alert</b>"))
+        self.assertIn("<b>Entry status</b>", scalp_card)
+        self.assertIn("<b>Entry status</b>", interval_card)
 
     async def test_entry_alert_can_identify_its_stream(self):
         bot = AsyncMock()

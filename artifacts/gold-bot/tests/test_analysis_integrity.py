@@ -375,11 +375,11 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertIsNone(summary["position_size"])
         self.assertFalse(summary["execution_costs_applied"])
         card = formatting._simple_analysis_card(analysis)
-        self.assertIn("Rule score 75/100", card)
-        self.assertIn("Win % : Not backtested", card)
-        self.assertIn("Position size: Unavailable", card)
-        self.assertIn("Reference spread screen: unavailable", card)
-        self.assertIn("spread ≤0.18 ATR", card)
+        self.assertIn("<b>Setup</b> Potential BUY", card)
+        self.assertIn("<b>Entry status</b> 🟢 <b>BUY</b>", card)
+        self.assertIn("selected-timeframe close below 102.90", card)
+        self.assertNotIn("Position size", card)
+        self.assertNotIn("Reference spread screen", card)
 
     def test_weighted_signal_card_shows_real_values_and_wait_actionability(self):
         analysis = SimpleNamespace(
@@ -474,20 +474,21 @@ class AnalysisIntegrityTests(unittest.TestCase):
 
         card = formatting.signal_card(analysis)
 
-        self.assertIn("Signal    : EARLY BUY", card)
-        self.assertIn("Regime    : BULLISH_TREND", card)
         self.assertIn(
-            "Reasoning : Price swept prior lows and reclaimed support.",
+            "<b>SYMBOL</b> XAU/USD → <b>MODE</b> Intraday · M15",
             card,
         )
-        self.assertIn("Actionable when: listed blockers clear", card)
-        self.assertIn("BUY 55/100 | SELL 29/100", card)
-        self.assertIn("Position size: Unavailable", card)
-        self.assertIn("no connected economic-calendar feed", card)
+        self.assertIn("<b>Market trend</b> Bullish", card)
+        self.assertIn("<b>Price action</b> Sweep and reclaim of support", card)
+        self.assertIn("<b>Setup</b> Potential BUY · Liquidity sweep", card)
         self.assertIn(
-            "EARLY warning: anticipatory setup with higher uncertainty",
+            "<b>Waiting for</b> MODERATE entry: score ≥58/100 (currently 55)",
             card,
         )
+        self.assertIn("<b>Entry status</b> 🟡 <b>WAIT</b>", card)
+        self.assertIn("<b>Entry trigger</b> BUY setup reaches score ≥58/100", card)
+        self.assertNotIn("RSI14", card)
+        self.assertNotIn("BUY 55/100", card)
 
         analysis.action = "BUY"
         analysis.signal_category = "MODERATE"
@@ -511,16 +512,13 @@ class AnalysisIntegrityTests(unittest.TestCase):
             "A completed M15 close below 2342.00 invalidates the plan."
         ]
         card = formatting.signal_card(analysis)
-        self.assertIn("Signal    : MODERATE BUY", card)
-        self.assertIn("Entry : 2,350.00", card)
-        self.assertIn("SL      : 2,340.00", card)
-        self.assertIn("TP1     : 2,365.00", card)
-        self.assertIn("TP2     : 2,370.00", card)
-        self.assertIn("TP3     : 2,385.00", card)
+        self.assertIn("<b>Entry status</b> 🟢 <b>BUY</b>", card)
+        self.assertIn("No blocker — entry conditions are met.", card)
         self.assertIn(
-            "TP1 1:1.50 | TP2 1:2.00 | TP3 1:3.50",
+            "A completed M15 close below 2342.00 invalidates the plan.",
             card,
         )
+        self.assertNotIn("TP1", card)
 
     def test_only_strong_rsi_disagreement_vetoes_the_entry(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
@@ -853,12 +851,10 @@ class AnalysisIntegrityTests(unittest.TestCase):
         ):
             card = formatting.analysis_card(analysis)
 
-        self.assertIn("WHAT TO DO", card)
-        self.assertIn("Direction : SELL", card)
-        self.assertIn("Action    : WAIT", card)
-        self.assertIn("Conflict  : None — all clear", card)
-        self.assertIn("ENTRY CONFIRMATION", card)
-        self.assertIn("Waiting for:", card)
+        self.assertIn("<b>Setup</b> Potential SELL", card)
+        self.assertIn("<b>Entry status</b> 🟡 <b>WAIT</b>", card)
+        self.assertIn("&lt;confirmation&gt; required", card)
+        self.assertIn("<b>Entry trigger</b>", card)
         self.assertNotIn("SKIPPED SETUP", card)
         self.assertNotIn("A minor swing break is still required.", card)
         self.assertNotIn("Awaiting confirmation", card)
@@ -880,6 +876,8 @@ class AnalysisIntegrityTests(unittest.TestCase):
             tp3=4420.0,
             rr_ratio=2.0,
             action="BUY",
+            setup_status="MODERATE ENTRY",
+            signal_category="MODERATE",
             wait_reason="",
             resistance1=4360.0,
             resistance2=4380.0,
@@ -908,10 +906,12 @@ class AnalysisIntegrityTests(unittest.TestCase):
         ):
             card = formatting.analysis_card(analysis)
 
-        self.assertIn("WHAT TO DO", card)
-        self.assertIn("ENTRY CONFIRMATION", card)
-        self.assertIn("Entry :", card)
-        self.assertIn("Alert :", card)
+        self.assertIn(
+            "<b>SYMBOL</b> XAU/USD → <b>MODE</b> Intraday · M15",
+            card,
+        )
+        self.assertIn("<b>Entry status</b> 🟢 <b>BUY</b>", card)
+        self.assertIn("<b>Invalidation</b>", card)
         self.assertNotIn("Timeframe", card)
         self.assertNotIn("Mode scope", card)
         self.assertNotIn("HTF Bias", card)

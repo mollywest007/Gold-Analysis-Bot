@@ -231,9 +231,6 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await _track_panel(context, chat_id, "recommend", grade_message)
                 return
 
-            entry_message = await update.message.reply_text(entry_card(a), parse_mode="HTML")
-            await _track_panel(context, chat_id, "recommend", entry_message)
-
             # Always attach the live chart for every BUY/SELL signal
             try:
                 import io
@@ -264,13 +261,6 @@ async def cmd_recommend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await chart_msg.delete()
             except Exception as chart_err:
                 logger.warning(f"recommend chart failed: {chart_err}")
-
-        else:
-            # Genuinely no direction — engine gated it (ranging, Asian session, HTF block, etc.)
-            no_entry_message = await update.message.reply_text(
-                no_entry_card(a), parse_mode="HTML"
-            )
-            await _track_panel(context, chat_id, "recommend", no_entry_message)
 
     except Exception as e:
         logger.error(f"recommend error: {e}")
