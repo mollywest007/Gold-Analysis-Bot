@@ -34,6 +34,9 @@ def _candle_signal(
     highs: Sequence[float],
     lows: Sequence[float],
     closes: Sequence[float],
+    *,
+    atr: float,
+    profile,
 ) -> tuple[bool, bool, float, float]:
     if not closes:
         return False, False, 0.0, 0.0
@@ -43,14 +46,21 @@ def _candle_signal(
     upper_wick = high - max(opening, close)
     lower_wick = min(opening, close) - low
     close_position = (close - low) / candle_range
+    rejection_close = float(profile.rejection_close_position)
     bullish_rejection = (
-        lower_wick >= max(body * 0.65, candle_range * 0.18)
-        and close_position >= 0.58
+        lower_wick >= max(
+            body * float(profile.rejection_wick_body_ratio),
+            atr * float(profile.rejection_wick_min_atr),
+        )
+        and close_position >= rejection_close
         and close >= opening
     )
     bearish_rejection = (
-        upper_wick >= max(body * 0.65, candle_range * 0.18)
-        and close_position <= 0.42
+        upper_wick >= max(
+            body * float(profile.rejection_wick_body_ratio),
+            atr * float(profile.rejection_wick_min_atr),
+        )
+        and close_position <= 1.0 - rejection_close
         and close <= opening
     )
     return bullish_rejection, bearish_rejection, close_position, body / candle_range
@@ -109,7 +119,7 @@ def detect_setups(
         else None
     )
     bullish_rejection, bearish_rejection, close_position, body_ratio = _candle_signal(
-        opens, highs, lows, closes
+        opens, highs, lows, closes, atr=atr, profile=profile
     )
     candidates: list[SetupCandidate] = []
 
@@ -154,6 +164,7 @@ def detect_setups(
         closes,
         atr=atr,
         lookback=sweep_lookback,
+        minimum_penetration_atr=float(profile.sweep_penetration_atr),
     ):
         direction = sweep["direction"]
         invalidation = low if direction == "BUY" else high
@@ -179,14 +190,18 @@ def detect_setups(
     candle_range = max(high - low, 0.01)
     bullish_break = (
         last_close > prior_high + breakout_buffer
-        and close_position >= 0.68
-        and body_ratio >= 0.35
+        and close_position >= float(profile.breakout_close_position)
+        and body_ratio >= float(profile.breakout_minimum_body_ratio)
+        and abs(last_close - opening)
+        <= atr * float(profile.maximum_breakout_body_atr)
         and candle_range <= atr * float(profile.maximum_breakout_range_atr)
     )
     bearish_break = (
         last_close < prior_low - breakout_buffer
-        and close_position <= 0.32
-        and body_ratio >= 0.35
+        and close_position <= 1.0 - float(profile.breakout_close_position)
+        and body_ratio >= float(profile.breakout_minimum_body_ratio)
+        and abs(last_close - opening)
+        <= atr * float(profile.maximum_breakout_body_atr)
         and candle_range <= atr * float(profile.maximum_breakout_range_atr)
     )
     if bullish_break:
@@ -275,13 +290,24 @@ def detect_setups(
             else min(abs(float(highs[index]) - reference) for index in range(max(0, last - 3), last + 1))
             <= tolerance
         )
-        recovery = (
-            bullish_rejection or (last_close > float(closes[last - 1]) and refinement_direction == "BUY")
-            or _momentum_direction(indicators, "BUY")
-            if direction == "BUY"
-            else bearish_rejection or (last_close < float(closes[last - 1]) and refinement_direction == "SELL")
-            or _momentum_direction(indicators, "SELL")
-        )
+        if direction == "BUY":
+            recovery = (
+                bullish_rejection
+                or (
+                    last_close > float(closes[last - 1])
+                    and refinement_direction == "BUY"
+                )
+                or _momentum_direction(indicators, "BUY")
+            )
+        else:
+            recovery = (
+                bearish_rejection
+                or (
+                    last_close < float(closes[last - 1])
+                    and refinement_direction == "SELL"
+                )
+                or _momentum_direction(indicators, "SELL")
+            )
         if near_level and recovery:
             invalidation = structure.latest_low if direction == "BUY" else structure.latest_high
             if invalidation is None:

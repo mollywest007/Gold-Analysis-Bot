@@ -8,7 +8,7 @@ from .config import ResolvedAnalysisConfig
 from .indicators import IndicatorSnapshot, calculate_indicators
 from .market import prepare_completed_candles
 from .regime import classify_regime
-from .scoring import SCORE_WEIGHTS, score_directions
+from .scoring import score_directions
 from .setups import SetupCandidate, detect_setups
 from .structure import StructureSnapshot, analyze_structure
 from .validation import validate_candidate
@@ -124,21 +124,19 @@ def analyze_weighted_market(
         prepared_by_tf[timeframe] = prepared
         statuses[timeframe] = prepared
 
-    role_data = {
-        role: (
-            prepared_by_tf[timeframe].data
-            if timeframe in prepared_by_tf
-            else None
-        )
-        for role, timeframe in role_timeframes.items()
-    }
+    role_data = {}
+    for role, timeframe in role_timeframes.items():
+        prepared = prepared_by_tf.get(timeframe)
+        data = prepared.data if prepared else None
+        # Unverified and simulated feeds remain visible in the quality report,
+        # but are excluded from every positive score, including optional refine.
+        role_data[role] = data if _data_is_spot_normalized(data) else None
     role_status = {
         role: statuses[timeframe]
         for role, timeframe in role_timeframes.items()
     }
     setup_data = role_data["setup"]
     context_data = role_data["context"]
-    refinement_data = role_data["refinement"]
     invalid_data_reasons = []
     for role in ("context", "setup"):
         status = role_status[role]
@@ -241,8 +239,8 @@ def analyze_weighted_market(
             ),
             regime=regime_snapshot.label,
             profile=config.profile,
-            breakout_lookback=max(5, int(config.profile.structure_lookback_candles // 2)),
-            sweep_lookback=int(config.profile.range_trap_lookback_candles),
+            breakout_lookback=config.breakout_lookback,
+            sweep_lookback=config.sweep_lookback,
         )
 
     scores = score_directions(
@@ -257,12 +255,19 @@ def analyze_weighted_market(
         config=config,
     )
 
-    best_direction = max(("BUY", "SELL"), key=lambda side: scores[side]["score"])
+    best_direction = max(
+        ("BUY", "SELL"),
+        key=lambda side: (
+            scores[side]["candidate"] is not None,
+            scores[side]["score"],
+        ),
+    )
     chosen = scores[best_direction]["candidate"]
     other_score = scores["SELL" if best_direction == "BUY" else "BUY"]["score"]
+    directional_rejections = []
     if chosen is not None and abs(scores[best_direction]["score"] - other_score) < 5:
         chosen = None
-        invalid_data_reasons.append(
+        directional_rejections.append(
             "BUY and SELL evidence are too close to establish a directional edge."
         )
     if (
@@ -286,6 +291,7 @@ def analyze_weighted_market(
             structure=setup_structure,
             profile=config.profile,
             spread=spread,
+            preferred_rr=config.preferred_rr,
         )
         if chosen is not None and setup_structure is not None
         else {"valid": False, "rejection_reasons": []}
@@ -331,8 +337,14 @@ def analyze_weighted_market(
     is_actionable = category in ("MODERATE", "STRONG")
     action = direction if is_actionable else "WAIT"
     data_is_simulated = bool(
-        (setup_data and setup_data.is_simulated)
-        or (context_data and context_data.is_simulated)
+        (
+            role_status["setup"].data
+            and role_status["setup"].data.is_simulated
+        )
+        or (
+            role_status["context"].data
+            and role_status["context"].data.is_simulated
+        )
     )
     setup_source_valid = bool(setup_data and _data_is_spot_normalized(setup_data))
     data_quality = (
@@ -408,7 +420,6 @@ def analyze_weighted_market(
         "context_timeframe": config.context_timeframe,
         "setup_timeframe": config.setup_timeframe,
         "refinement_timeframe": config.refinement_timeframe,
-        "price": round(price, 2) if price > 0 else 0.0,
         "market_bias": bias,
         "direction": direction,
         "action": action,
@@ -434,13 +445,17 @@ def analyze_weighted_market(
         "score_breakdown": {
             "BUY": scores["BUY"]["breakdown"],
             "SELL": scores["SELL"]["breakdown"],
-            "weights": dict(SCORE_WEIGHTS),
+            "weights": dict(config.score_weights),
             "penalties": {
                 "BUY": scores["BUY"]["penalties"],
                 "SELL": scores["SELL"]["penalties"],
             },
         },
-        "confidence_score": max(scores["BUY"]["score"], scores["SELL"]["score"]),
+        "confidence_score": (
+            scores[best_direction]["score"]
+            if chosen is not None
+            else max(scores["BUY"]["score"], scores["SELL"]["score"])
+        ),
         "thresholds": {
             "early": config.early_score,
             "moderate": config.moderate_score,
@@ -454,15 +469,24 @@ def analyze_weighted_market(
         "take_profit": plan.get("take_profit", 0.0),
         "rr": plan.get("rr", 0.0),
         "reference_spread_rr": plan.get("reference_spread_rr"),
-        "spread_status": plan.get("spread_status", "unavailable"),
-        "spread_atr": plan.get("spread_atr"),
+        "spread_status": validation.get("spread_status", "unavailable"),
+        "spread_atr": validation.get("spread_atr"),
         "spread": spread,
         "preferred_rr": config.preferred_rr,
         "minimum_rr": float(config.profile.minimum_target_rr),
+        "stop_buffer_atr": float(config.profile.stop_buffer_atr),
+        "minimum_stop_atr": float(config.profile.minimum_stop_distance_atr),
+        "maximum_stop_atr": float(config.profile.maximum_stop_distance_atr),
+        "maximum_ema_distance_atr": float(config.profile.maximum_ema_distance_atr),
+        "structure_lookback": int(config.profile.structure_lookback_candles),
+        "breakout_lookback": config.breakout_lookback,
+        "sweep_lookback": config.sweep_lookback,
+        "atr_expansion_limit": config.atr_expansion_limit,
+        "maximum_spread_atr": float(config.profile.maximum_spread_atr),
         "expected_holding_bars": int(config.profile.expected_holding_bars),
         "setup_candidate": chosen,
         "setup_evidence": evidence,
-        "rejection_reasons": list(dict.fromkeys(rejection_reasons)),
+        "rejection_reasons": list(dict.fromkeys(rejection_reasons + directional_rejections)),
         "invalidation_conditions": (
             [
                 f"{direction} thesis invalidates on a completed "

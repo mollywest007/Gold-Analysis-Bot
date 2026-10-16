@@ -12,6 +12,7 @@ def validate_candidate(
     structure,
     profile,
     spread: float | None,
+    preferred_rr: float | None = None,
 ) -> dict:
     direction = candidate.direction
     if not math.isfinite(price) or price <= 0:
@@ -56,7 +57,26 @@ def validate_candidate(
         }
     target_buffer = max(atr * float(profile.target_buffer_atr), 0.01)
     nearest_level = min(pivot_levels) if direction == "BUY" else max(pivot_levels)
-    target = nearest_level - target_buffer if direction == "BUY" else nearest_level + target_buffer
+    structural_target = (
+        nearest_level - target_buffer
+        if direction == "BUY"
+        else nearest_level + target_buffer
+    )
+    minimum_rr = float(profile.minimum_target_rr)
+    target_rr = max(
+        minimum_rr,
+        float(preferred_rr) if preferred_rr is not None else minimum_rr,
+    )
+    preferred_target = (
+        price + risk * target_rr
+        if direction == "BUY"
+        else price - risk * target_rr
+    )
+    target = (
+        min(structural_target, preferred_target)
+        if direction == "BUY"
+        else max(structural_target, preferred_target)
+    )
     reward = target - price if direction == "BUY" else price - target
     if reward <= 0:
         return {
@@ -64,7 +84,6 @@ def validate_candidate(
             "rejection_reasons": ["The nearest structural target is not ahead of entry."],
         }
     rr = reward / risk
-    minimum_rr = float(profile.minimum_target_rr)
     if rr < minimum_rr:
         return {
             "valid": False,
@@ -117,6 +136,7 @@ def validate_candidate(
         "risk": round(risk, 5),
         "reward": round(reward, 5),
         "rr": round(rr, 2),
+        "preferred_rr": round(target_rr, 2),
         "reference_spread_rr": round(spread_rr, 2) if spread_rr is not None else None,
         "spread_status": spread_status,
         "spread_atr": (

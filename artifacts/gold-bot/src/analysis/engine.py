@@ -31,6 +31,8 @@ from .institutional import (
     fetch_intermarket_snapshot,
 )
 from .modes import resolve_momentum_pullback_profile
+from .weighted.config import resolve_analysis_config
+from .weighted.engine import analyze_weighted_market
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +196,15 @@ class MarketAnalysis:
     # Selected-timeframe signal output. These fields are rule-based evidence,
     # not a win-rate estimate.
     signal_category: str = "WAIT"
+    signal_label: str = "WAIT"
     buy_score: int = 0
     sell_score: int = 0
     analysis_timeframes: dict = field(default_factory=dict)
+    score_breakdown: dict = field(default_factory=dict)
+    rejection_reasons: List[str] = field(default_factory=list)
+    execution_note: str = ""
+    data_quality: str = "UNKNOWN"
+    expected_holding_bars: int = 0
 
 
 
@@ -2785,30 +2793,303 @@ def _analyze_simple_data(
         candle_source=data.candle_source,
     )
 
+def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> MarketAnalysis:
+    """Adapt the new decision contract to the bot's established analysis model."""
+    timeframe = result["setup_timeframe"]
+    price = float(result.get("price", 0.0) or 0.0)
+    direction = result.get("direction", "WAIT")
+    action = result.get("action", "WAIT")
+    category = result.get("signal_category", "WAIT")
+    score = int(result.get("confidence_score", 0) or 0)
+    entry = float(result.get("entry", 0.0) or 0.0)
+    stop = float(result.get("stop_loss", 0.0) or 0.0)
+    target = float(result.get("take_profit", 0.0) or 0.0)
+    rr = float(result.get("rr", 0.0) or 0.0)
+    breakdown = result.get("score_breakdown", {})
+    role_reports = result.get("timeframe_reports", {})
+    setup_report = role_reports.get("setup", {})
+    supports = setup_report.get("supports", [])
+    resistances = setup_report.get("resistances", [])
+    support_levels = [
+        float(zone["center"]) for zone in supports
+        if isinstance(zone, dict) and float(zone.get("center", 0) or 0) <= price
+    ]
+    resistance_levels = [
+        float(zone["center"]) for zone in resistances
+        if isinstance(zone, dict) and float(zone.get("center", 0) or 0) >= price
+    ]
+    data = raw_data.get(timeframe)
+    data_quality = result.get("data_quality", "UNKNOWN")
+    context_dir = role_reports.get("context", {}).get("direction", "WAIT")
+    setup_dir = setup_report.get("direction", "WAIT")
+    refinement_dir = role_reports.get("refinement", {}).get("direction", "WAIT")
+    aligned = bool(
+        direction in ("BUY", "SELL")
+        and context_dir == direction
+        and setup_dir == direction
+    )
+    category_grade = {
+        "STRONG": "A+",
+        "MODERATE": "A",
+        "EARLY": "B",
+        "WAIT": "WAIT",
+    }.get(category, "WAIT")
+    wait_reason = (
+        f"{category} {direction}: {result.get('setup_reason', '')}".strip()
+        if category != "WAIT"
+        else "; ".join(result.get("rejection_reasons", []))
+        or "No qualifying setup."
+    )
+    indicator_rows = [
+        Indicator("EMA20", float(result.get("ema20") or 0.0), "CONTEXT", 0.0),
+        Indicator("EMA50", float(result.get("ema50") or 0.0), "CONTEXT", 0.0),
+        Indicator("RSI14", float(result.get("rsi14") or 0.0), "CONTEXT", 0.0),
+        Indicator(
+            "MACD histogram",
+            float(result.get("macd_histogram") or 0.0),
+            "CONTEXT",
+            0.0,
+        ),
+    ]
+    timeframe_directions = {
+        role: role_reports.get(role, {}).get("direction", "WAIT")
+        for role in ("context", "setup", "refinement")
+    }
+    institutional_report = {
+        "analysis_engine": "weighted_multi_timeframe",
+        "data_quality": data_quality,
+        "direction": direction,
+        "score_breakdown": breakdown,
+        "mode_rules": {
+            "context_timeframe": result.get("context_timeframe"),
+            "setup_timeframe": result.get("setup_timeframe"),
+            "refinement_timeframe": result.get("refinement_timeframe"),
+            "minimum_target_rr": result.get("minimum_rr"),
+            "preferred_rr": result.get("preferred_rr"),
+            "stop_buffer_atr": result.get("stop_buffer_atr"),
+            "minimum_stop_atr": result.get("minimum_stop_atr"),
+            "maximum_stop_atr": result.get("maximum_stop_atr"),
+            "maximum_ema_distance_atr": result.get("maximum_ema_distance_atr"),
+            "structure_lookback": result.get("structure_lookback"),
+            "breakout_lookback": result.get("breakout_lookback"),
+            "sweep_lookback": result.get("sweep_lookback"),
+            "atr_expansion_limit": result.get("atr_expansion_limit"),
+            "maximum_spread_atr": result.get("maximum_spread_atr"),
+            "expected_holding_bars": result.get("expected_holding_bars"),
+            "early_score": result.get("thresholds", {}).get("early"),
+            "moderate_score": result.get("thresholds", {}).get("moderate"),
+            "strong_score": result.get("thresholds", {}).get("strong"),
+        },
+        "multi_timeframe": {
+            "directions": timeframe_directions,
+            "aligned": aligned,
+            "consensus_score": score,
+        },
+        "decision_summary": {
+            "rejection_reasons": result.get("rejection_reasons", []),
+            "invalidation_conditions": result.get("invalidation_conditions", []),
+            "spread_filter_status": result.get("spread_status", "unavailable"),
+            "observed_market_spread": result.get("spread"),
+            "spread_atr": result.get("spread_atr"),
+            "maximum_spread_atr": result.get("maximum_spread_atr"),
+        },
+        "best_entry_zone": {
+            "low": result.get("entry_zone_low", 0.0),
+            "high": result.get("entry_zone_high", 0.0),
+        },
+        "rejection_reasons": result.get("rejection_reasons", []),
+        "execution_note": result.get("execution_note", ""),
+    }
+    entry_zone = {
+        "low": float(result.get("entry_zone_low", 0.0) or 0.0),
+        "high": float(result.get("entry_zone_high", 0.0) or 0.0),
+    }
+    is_early = category == "EARLY"
+    status = (
+        "DEVELOPING" if is_early
+        else "MODERATE ENTRY" if category in ("MODERATE", "STRONG")
+        else "WAIT"
+    )
+    signal_status = (
+        "DEVELOPING" if is_early
+        else "MODERATE ENTRY" if category in ("MODERATE", "STRONG")
+        else "WAIT"
+    )
+    bias = result.get("market_bias", "Unclear")
+    trend = {
+        "BULLISH_TREND": "Bullish trend",
+        "BEARISH_TREND": "Bearish trend",
+        "RANGE_BOUND": "Range-bound",
+        "HIGH_VOLATILITY": "High volatility",
+        "TRANSITIONING_OR_UNCLEAR": "Transitioning / unclear",
+    }.get(result.get("regime"), "Unclear")
+    direction_label = direction if direction in ("BUY", "SELL") else "NEUTRAL"
+    structure_label = setup_report.get("market_structure", "TRANSITION")
+    if structure_label == "RANGE":
+        structure_label = "RANGING"
+    rsi = float(result.get("rsi14") or 0.0)
+    momentum = (
+        "Bullish" if rsi >= 52
+        else "Bearish" if 0 < rsi <= 48
+        else "Neutral"
+    )
+    return MarketAnalysis(
+        price=price,
+        timeframe=timeframe,
+        bias=bias,
+        trend=trend,
+        strength=category.title() if category != "WAIT" else "Unclear",
+        momentum=momentum,
+        confidence=score,
+        entry=entry,
+        stop_loss=stop,
+        tp1=target,
+        tp2=0.0,
+        rr_ratio=rr,
+        action=action,
+        wait_reason=wait_reason,
+        resistance1=min(resistance_levels) if resistance_levels else 0.0,
+        resistance2=sorted(resistance_levels)[1] if len(resistance_levels) > 1 else 0.0,
+        support1=max(support_levels) if support_levels else 0.0,
+        support2=sorted(support_levels, reverse=True)[1] if len(support_levels) > 1 else 0.0,
+        breakout="BREAKOUT" in result.get("setup_type", ""),
+        reversal=result.get("setup_type") in (
+            "LIQUIDITY_SWEEP",
+            "SUPPORT_RESISTANCE_REACTION",
+        ),
+        liquidity_zone=result.get("setup_type", "Not detected"),
+        atr=float(result.get("atr14") or 0.0),
+        indicators=indicator_rows,
+        buy_votes=sum(
+            value > 0 for value in breakdown.get("BUY", {}).values()
+        ),
+        sell_votes=sum(
+            value > 0 for value in breakdown.get("SELL", {}).values()
+        ),
+        verdict_reason=wait_reason,
+        session=result.get("session", ""),
+        htf_bias=(
+            "Bullish" if context_dir == "BUY"
+            else "Bearish" if context_dir == "SELL"
+            else "Neutral"
+        ),
+        trade_type=mode_cfg.trade_type_label,
+        analysis_mode=mode_cfg.name,
+        is_simulated=bool(result.get("is_simulated", False)),
+        rsi_value=rsi,
+        macd_hist=float(result.get("macd_histogram") or 0.0),
+        market_structure=structure_label,
+        win_probability=0,
+        directional_indication=direction_label,
+        confluence_list=list(result.get("setup_evidence", [])),
+        institutional_report=institutional_report,
+        confidence_score=score,
+        legacy_direction="WAIT",
+        legacy_confirmation="NEUTRAL",
+        combined_direction=action,
+        risk_level="UNASSESSED",
+        reasons_supporting=list(result.get("setup_evidence", [])),
+        reasons_against=list(result.get("rejection_reasons", [])),
+        invalidating_conditions=list(result.get("invalidation_conditions", [])),
+        best_entry_zone=entry_zone,
+        recommended_rr=rr,
+        ema20=float(result.get("ema20") or 0.0),
+        ema50=float(result.get("ema50") or 0.0),
+        market_condition=(
+            "BULLISH" if result.get("regime") == "BULLISH_TREND"
+            else "BEARISH" if result.get("regime") == "BEARISH_TREND"
+            else "RANGING" if result.get("regime") == "RANGE_BOUND"
+            else "VOLATILE" if result.get("regime") == "HIGH_VOLATILITY"
+            else "TRANSITION"
+        ),
+        entry_zone_low=entry_zone["low"],
+        entry_zone_high=entry_zone["high"],
+        early_entry=entry if is_early else 0.0,
+        invalidation=float(result.get("invalidation", 0.0) or 0.0),
+        signal_status=signal_status,
+        early_direction=direction if is_early else "",
+        price_action_setup=result.get("setup_type", ""),
+        setup_status=status,
+        current_confirmation=wait_reason,
+        key_zone=result.get("setup_reason", ""),
+        latest_candle_timestamp=float(
+            result.get("latest_candle_timestamp", 0.0) or 0.0
+        ),
+        price_source=getattr(data, "price_source", "unknown") if data else "unknown",
+        candle_source=getattr(data, "candle_source", "unknown") if data else "unknown",
+        signal_category=category,
+        signal_label=result.get("signal_label", "WAIT"),
+        buy_score=int(result.get("buy_score", 0) or 0),
+        sell_score=int(result.get("sell_score", 0) or 0),
+        analysis_timeframes=role_reports,
+        score_breakdown=breakdown,
+        rejection_reasons=list(result.get("rejection_reasons", [])),
+        execution_note=result.get("execution_note", ""),
+        data_quality=data_quality,
+        expected_holding_bars=int(
+            result.get("expected_holding_bars", 0) or 0
+        ),
+        setup_quality=category_grade,
+        setup_grade=category_grade,
+        tp3=0.0,
+        bos=(
+            "BULLISH_BOS" if setup_report.get("structure_break") == "BUY"
+            else "BEARISH_BOS" if setup_report.get("structure_break") == "SELL"
+            else "NONE"
+        ),
+        ltf_trends={
+            "context": context_dir,
+            "setup": setup_dir,
+            "refinement": refinement_dir,
+        },
+        market_regime=result.get("regime", "TRANSITIONING_OR_UNCLEAR"),
+    )
+
+
 async def _analyze_single(
     timeframe: str = None,
     mode: str = None,
     use_higher_timeframe_context: bool = False,
 ) -> MarketAnalysis:
-    """Analyze only the selected chart with its existing mode profile."""
+    """Analyze the selected chart with weighted mode-specific MTF context."""
+    del use_higher_timeframe_context  # Context is now part of every strategy profile.
     from src.mode_manager import get_mode_config
 
     mode_cfg = get_mode_config(mode)
-    if mode_cfg.momentum_pullback is None:
-        raise ValueError(
-            f"Mode '{mode_cfg.name}' has no standalone momentum-pullback profile; "
-            "resolve a combined mode to its stream first."
-        )
-    timeframe = timeframe or mode_cfg.preferred_timeframe
-    profile = resolve_momentum_pullback_profile(mode_cfg, timeframe)
+    config = resolve_analysis_config(
+        mode_cfg,
+        timeframe or mode_cfg.preferred_timeframe,
+        # Explicit diagnostic callers may request a known but non-selectable TF.
+        allow_unlisted_timeframe=True,
+    )
+    requested_timeframes = tuple(dict.fromkeys(config.timeframes))
+    fetched = await asyncio.gather(
+        *(fetch_ohlcv(tf) for tf in requested_timeframes),
+        return_exceptions=True,
+    )
+    data_by_timeframe = {}
+    for tf, result in zip(requested_timeframes, fetched):
+        if isinstance(result, BaseException):
+            logger.warning("Weighted analysis data unavailable [%s]: %s", tf, result)
+            data_by_timeframe[tf] = None
+        else:
+            data_by_timeframe[tf] = result
 
-    data = await fetch_ohlcv(timeframe)
-    if data is None:
-        raise ValueError(
-            f"Market data is unavailable for {mode_cfg.name}/{timeframe}; "
-            "analysis cannot continue."
+    setup_data = data_by_timeframe.get(config.setup_timeframe)
+    spread = None
+    if setup_data is not None:
+        quote = get_cached_gold_quote(
+            float(getattr(setup_data, "price", 0.0) or 0.0)
         )
-    return _analyze_simple_data(data, timeframe, mode_cfg, profile=profile)
+        if quote.get("spread_available"):
+            spread = float(quote["ask"]) - float(quote["bid"])
+
+    result = analyze_weighted_market(
+        config=config,
+        raw_data=data_by_timeframe,
+        spread=spread,
+    )
+    return _weighted_result_to_analysis(result, mode_cfg, data_by_timeframe)
 
     # The institutional layer is independent from the legacy vote engine.  It
     # gets the same candle set, plus a cached cross-asset snapshot, and is

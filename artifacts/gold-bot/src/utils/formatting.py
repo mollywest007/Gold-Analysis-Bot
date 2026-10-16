@@ -61,7 +61,8 @@ def _win_bar(pct: int) -> str:
 def _uses_rule_based_strategy(a: MarketAnalysis) -> bool:
     report = getattr(a, "institutional_report", {}) or {}
     return (
-        report.get("framework")
+        report.get("analysis_engine") == "weighted_multi_timeframe"
+        or report.get("framework")
         == "shared selected-timeframe momentum breakout/pullback strategy"
     )
 
@@ -1402,7 +1403,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         else "SELL" if condition == "BEARISH"
         else "RANGE"
     )
-    direction = signal_direction if signal_direction != "WAIT" else trend_bias
+    direction = signal_direction
     status = str(getattr(a, "signal_status", "") or "").upper()
     if not status or (status == "NO TRADE" and action in ("BUY", "SELL")):
         status = "CONFIRMED ENTRY" if action in ("BUY", "SELL") else "NO TRADE"
@@ -1428,9 +1429,15 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         "SIMULATED"
         if getattr(a, "is_simulated", False)
         else (getattr(a, "institutional_report", {}) or {}).get(
-            "data_quality", "REAL_OHLCV"
+            "data_quality", getattr(a, "data_quality", "UNKNOWN")
         )
     )
+    weighted_mtf = (
+        isinstance(getattr(a, "analysis_timeframes", None), dict)
+        and bool(getattr(a, "analysis_timeframes", {}).get("context"))
+        and bool(getattr(a, "analysis_timeframes", {}).get("setup"))
+    )
+    role_reports = getattr(a, "analysis_timeframes", {}) or {}
     latest_candle_timestamp = float(
         getattr(a, "latest_candle_timestamp", 0.0) or 0.0
     )
@@ -1446,6 +1453,11 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     ema50 = float(getattr(a, "ema50", 0.0) or 0.0)
     rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
     atr = float(getattr(a, "atr", 0.0) or 0.0)
+    price_display = fmt_price(price) if price > 0 else "unavailable"
+    ema20_display = fmt_price(ema20) if ema20 > 0 else "—"
+    ema50_display = fmt_price(ema50) if ema50 > 0 else "—"
+    atr_display = fmt_price(atr) if atr > 0 else "—"
+    rsi_display = f"{rsi:.1f}" if 0 < rsi < 100 else "—"
     report = getattr(a, "institutional_report", {}) or {}
     mode_rules = report.get("mode_rules", {}) or {}
     quality_checks = report.get("quality_checks", []) or []
@@ -1486,6 +1498,29 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         if mode_rules.get("confirmation_break_atr") is not None
         else ""
     )
+    if weighted_mtf:
+        mode_rules_line = (
+            f"early ≥{int(mode_rules.get('early_score', 0))} · "
+            f"moderate ≥{int(mode_rules.get('moderate_score', 0))} · "
+            f"strong ≥{int(mode_rules.get('strong_score', 0))} · "
+            f"minimum R:R 1:{float(mode_rules.get('minimum_target_rr', 0) or 0):g} · "
+            f"preferred 1:{float(mode_rules.get('preferred_rr', 0) or 0):g} · "
+            f"hold ≤{int(mode_rules.get('expected_holding_bars', 0) or 0)} bars"
+        )
+        confirmation_rules_line = (
+            f"Context {mode_rules.get('context_timeframe', '—')} · "
+            f"setup {mode_rules.get('setup_timeframe', timeframe)} · "
+            f"refinement {mode_rules.get('refinement_timeframe', '—')}"
+        )
+        if mode_rules.get("maximum_stop_atr") is not None:
+            mode_rules_line += (
+                f" · SL cap {float(mode_rules['maximum_stop_atr']):g} ATR"
+            )
+        if mode_rules.get("maximum_ema_distance_atr") is not None:
+            mode_rules_line += (
+                f" · extension cap "
+                f"{float(mode_rules['maximum_ema_distance_atr']):g} ATR"
+            )
     maximum_stop_atr = float(mode_rules.get("maximum_stop_atr", 2.5))
     entry = float(getattr(a, "entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
@@ -1554,6 +1589,26 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         supertrend = "Bullish" if supertrend == "BUY" else "Bearish"
     regime = str(getattr(a, "market_regime", "") or condition.title())
     mode_display = mode_label or "SELECTED MODE"
+    timeframe_line = (
+        f"{mode_rules.get('context_timeframe', '—')} → {timeframe} → "
+        f"{mode_rules.get('refinement_timeframe', '—')}"
+        if weighted_mtf
+        else f"{timeframe} only"
+    )
+    role_summary = " | ".join(
+        f"{role.title()} {role_reports.get(role, {}).get('timeframe', '—')}: "
+        f"{role_reports.get(role, {}).get('direction', 'WAIT')}"
+        for role in ("context", "setup", "refinement")
+        if weighted_mtf
+    )
+    score_breakdown = getattr(a, "score_breakdown", {}) or {}
+    buy_parts = score_breakdown.get("BUY", {})
+    sell_parts = score_breakdown.get("SELL", {})
+    setup_evidence = list(getattr(a, "reasons_supporting", []) or [])
+    rejection_reasons = list(getattr(a, "rejection_reasons", []) or [])
+    invalidation_conditions = list(
+        getattr(a, "invalidating_conditions", []) or []
+    )
     stream_heading = {
         "SCALP": "⚡ SCALP ENTRY",
         "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
@@ -1567,30 +1622,45 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         f"Mode      : {mode_display}",
         f"Mode rules: {mode_rules_line}",
         *([f"Confirm   : {confirmation_rules_line}"] if confirmation_rules_line else []),
-        f"TF        : {timeframe} only",
-        f"Price     : {fmt_price(price)}  |  {data_quality}",
+        f"TF        : {timeframe_line}",
+        f"Price     : {price_display}  |  {data_quality}",
         f"Candle    : latest OHLCV {candle_as_of}",
         "──────────────────────────────────",
         "WHAT TO DO",
         f"Direction : {direction}",
         f"Action    : {action}",
+        f"Signal    : {getattr(a, 'signal_label', status)}",
         f"Conflict  : {conflict}",
         f"Market Bias: {getattr(a, 'bias', 'Neutral')}  |  {condition}",
         f"Setup Status: {getattr(a, 'setup_status', status)}",
         f"Session   : {session}",
         "──────────────────────────────────",
         "HOW IT IS ANALYZING",
-        f"Data      : {data_quality} candles ({timeframe} only)",
-        f"Trend     : Local swings → {trend_bias} | {trend}",
-        f"Momentum  : RSI14 {rsi:.1f} → {rsi_support} | ADX {adx:.1f}",
-        f"Structure : {structure} | EMA20 {fmt_price(ema20)} is pullback context",
+        f"Data      : {data_quality} completed candles",
+        *([f"MTF       : {role_summary}"] if role_summary else []),
+        f"Trend     : {trend_bias} | {trend}",
+        f"Momentum  : RSI14 {rsi_display} · EMA20/50 are supporting context",
+        f"Structure : {structure} | EMA20 {ema20_display} | EMA50 {ema50_display}",
         f"Price act.: {setup}",
+        *([f"Regime    : {regime}"] if weighted_mtf else []),
         f"Key zone  : {getattr(a, 'key_zone', '') or 'Support/resistance not defined'}",
-        f"Risk      : ATR14 {fmt_price(atr)} sanity | structural swing SL, {maximum_stop_atr:g} ATR max",
-        f"Evidence  : Rule score {score}/100 | BUY {buy_votes} | SELL {sell_votes}",
+        f"Risk      : ATR14 {atr_display} | structural invalidation + mode buffer",
+        f"Evidence  : BUY {getattr(a, 'buy_score', 0)}/100 | SELL {getattr(a, 'sell_score', 0)}/100",
+        *(
+            [
+                "BUY parts : " + " · ".join(
+                    f"{key} {value:g}" for key, value in buy_parts.items()
+                ),
+                "SELL parts: " + " · ".join(
+                    f"{key} {value:g}" for key, value in sell_parts.items()
+                ),
+            ]
+            if weighted_mtf
+            else [f"Rule score {score}/100 | BUY {buy_votes} | SELL {sell_votes}"]
+        ),
         f"Win % : Not backtested",
         f"Grade     : {getattr(a, 'setup_quality', 'WAIT') or 'WAIT'}",
-        f"Setup checks: {len(quality_checks)} confirmed",
+        f"Setup checks: {len(quality_checks)} rule-based",
         "──────────────────────────────────",
         "TRADE PLAN",
         f"Key zone  : {getattr(a, 'key_zone', '') or '—'}",
@@ -1606,7 +1676,8 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             [
                 "Position size: Unavailable — broker specifications and account equity not connected.",
                 spread_line,
-                "Costs: broker commissions and slippage are unavailable; not included.",
+                str(getattr(a, "execution_note", "") or
+                    "Broker commissions and slippage are unavailable; not included."),
             ]
         ),
         *(
@@ -1614,7 +1685,10 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
                 "Rejection: "
                 + "; ".join(
                     str(reason)
-                    for reason in decision_summary.get("rejection_reasons", [])
+                    for reason in (
+                        decision_summary.get("rejection_reasons", [])
+                        or rejection_reasons
+                    )
                 )[:180]
             ]
             if decision_summary.get("rejection_reasons")
@@ -1625,8 +1699,9 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
                 "Invalidation: "
                 + "; ".join(
                     str(condition)
-                    for condition in decision_summary.get(
-                        "invalidation_conditions", []
+                    for condition in (
+                        decision_summary.get("invalidation_conditions", [])
+                        or invalidation_conditions
                     )
                 )[:180]
             ]

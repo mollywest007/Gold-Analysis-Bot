@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from .indicators import IndicatorSnapshot
 from .structure import StructureSnapshot
@@ -47,8 +48,8 @@ def classify_regime(
     # Approximate UTC session labels only; they are context, not a trade trigger.
     session = "UNAVAILABLE"
     if candle_timestamp:
-        hour = __import__("datetime").datetime.fromtimestamp(
-            float(candle_timestamp), tz=__import__("datetime").timezone.utc
+        hour = datetime.fromtimestamp(
+            float(candle_timestamp), tz=timezone.utc
         ).hour
         if 12 <= hour < 16:
             session = "LONDON_NY_OVERLAP"

@@ -7,6 +7,7 @@ from src import alerts
 from src.analysis import engine
 from src.analysis.engine import _momentum_pullback_decision, _structure_targets
 from src.analysis.modes import MODES, resolve_momentum_pullback_profile
+from src.analysis.weighted.config import resolve_analysis_config
 from src.chart_analysis import _mode_prompt_instructions, _resolve_chart_scope
 from src.handlers import callbacks, commands
 
@@ -269,7 +270,7 @@ class ModeScopedBroadcastTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_analysis_uses_one_requested_timeframe_and_its_mode_profile(self):
+    async def test_analysis_uses_selected_setup_timeframe_and_mode_specific_roles(self):
         class CandleData:
             def __len__(self):
                 return 40
@@ -277,16 +278,31 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
         data = CandleData()
         seen = []
 
-        def analyze_with_profile(candles, timeframe, mode_cfg, profile):
-            seen.append((timeframe, mode_cfg.name, profile))
-            return mode_cfg
+        def analyze_weighted(*, config, raw_data, spread):
+            seen.append((config, set(raw_data), spread))
+            return {
+                "setup_timeframe": config.setup_timeframe,
+                "direction": "WAIT",
+                "action": "WAIT",
+                "signal_category": "WAIT",
+                "signal_label": "WAIT",
+                "confidence_score": 0,
+                "price": 0.0,
+                "data_quality": "PARTIAL_OR_UNVERIFIED",
+                "timeframe_reports": {},
+            }
 
         with (
             patch.object(
                 engine, "fetch_ohlcv", new=AsyncMock(return_value=data)
             ) as fetch,
             patch.object(
-                engine, "_analyze_simple_data", side_effect=analyze_with_profile
+                engine, "analyze_weighted_market", side_effect=analyze_weighted
+            ),
+            patch.object(
+                engine,
+                "get_cached_gold_quote",
+                return_value={"spread_available": False},
             ),
         ):
             for mode, timeframe in (
@@ -296,31 +312,32 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
                 ("position", "D1"),
             ):
                 result = await engine._analyze_single(timeframe, mode=mode)
-                self.assertEqual(result.name, mode)
+                self.assertEqual(result.analysis_mode, mode)
 
         self.assertEqual(
-            seen,
+            [(config.mode, config.timeframes, timeframes) for config, timeframes, _ in seen],
             [
-                (
-                    timeframe,
-                    mode,
-                    resolve_momentum_pullback_profile(MODES[mode], timeframe),
-                )
-                for mode, timeframe in (
-                    ("scalp", "M5"),
-                    ("intraday", "M15"),
-                    ("swing", "H4"),
-                    ("position", "D1"),
-                )
+                ("scalp", ("M15", "M5", "M1"), {"M15", "M5", "M1"}),
+                ("intraday", ("H1", "M15", "M5"), {"H1", "M15", "M5"}),
+                ("swing", ("D1", "H4", "H1"), {"D1", "H4", "H1"}),
+                ("position", ("W1", "D1", "H4"), {"W1", "D1", "H4"}),
             ],
         )
         self.assertEqual(
             fetch.await_args_list,
             [
-                unittest.mock.call("M5"),
                 unittest.mock.call("M15"),
-                unittest.mock.call("H4"),
+                unittest.mock.call("M5"),
+                unittest.mock.call("M1"),
+                unittest.mock.call("H1"),
+                unittest.mock.call("M15"),
+                unittest.mock.call("M5"),
                 unittest.mock.call("D1"),
+                unittest.mock.call("H4"),
+                unittest.mock.call("H1"),
+                unittest.mock.call("W1"),
+                unittest.mock.call("D1"),
+                unittest.mock.call("H4"),
             ],
         )
 
@@ -334,22 +351,28 @@ class ModeSelectionTests(unittest.IsolatedAsyncioTestCase):
                 await engine._analyze_single("M15", mode="scalp_interval")
             fetch.assert_not_awaited()
 
-            with self.assertRaisesRegex(ValueError, "Unsupported momentum"):
+            with self.assertRaisesRegex(ValueError, "Unsupported analysis timeframe"):
                 await engine._analyze_single("Y1", mode="intraday")
             fetch.assert_not_awaited()
 
-    async def test_missing_selected_timeframe_data_fails_without_analysis(self):
+    async def test_missing_timeframe_data_returns_wait_without_analysis(self):
         with (
             patch.object(
                 engine, "fetch_ohlcv", new=AsyncMock(return_value=None)
             ) as fetch,
-            patch.object(engine, "_analyze_simple_data") as analyze,
         ):
-            with self.assertRaisesRegex(ValueError, "Market data is unavailable"):
-                await engine._analyze_single("M15", mode="intraday")
+            result = await engine._analyze_single("M15", mode="intraday")
 
-        fetch.assert_awaited_once_with("M15")
-        analyze.assert_not_called()
+        self.assertEqual(result.action, "WAIT")
+        self.assertTrue(any("data missing" in reason.lower() for reason in result.rejection_reasons))
+        self.assertEqual(
+            fetch.await_args_list,
+            [
+                unittest.mock.call("H1"),
+                unittest.mock.call("M15"),
+                unittest.mock.call("M5"),
+            ],
+        )
 
 
 if __name__ == "__main__":

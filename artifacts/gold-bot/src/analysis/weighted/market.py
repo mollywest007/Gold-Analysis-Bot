@@ -39,9 +39,20 @@ def prepare_completed_candles(
     current_time = float(now if now is not None else time.time())
     valid_indices = []
     try:
+        previous_timestamp = None
         for index, (opening, high, low, close, volume, timestamp) in enumerate(
             zip(*columns, data.timestamps)
         ):
+            timestamp = float(timestamp)
+            if not math.isfinite(timestamp):
+                return PreparedCandles(
+                    None, "invalid", "Candle timestamps contain non-finite values.", None
+                )
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                return PreparedCandles(
+                    None, "invalid", "Candle timestamps are not strictly increasing.", None
+                )
+            previous_timestamp = timestamp
             values = (opening, high, low, close, volume, timestamp)
             if not all(math.isfinite(float(value)) for value in values):
                 continue
@@ -53,7 +64,7 @@ def prepare_completed_candles(
                 or high < low
             ):
                 continue
-            candle_end = _candle_end_timestamp(float(timestamp), timeframe)
+            candle_end = _candle_end_timestamp(timestamp, timeframe)
             if candle_end <= current_time:
                 valid_indices.append(index)
     except (TypeError, ValueError, OverflowError):

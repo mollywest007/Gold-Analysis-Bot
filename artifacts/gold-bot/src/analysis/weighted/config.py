@@ -28,6 +28,9 @@ class ResolvedAnalysisConfig:
     atr_expansion_limit: float
     max_candle_age_bars: float
     preferred_rr: float
+    score_weights: dict[str, float]
+    breakout_lookback: int
+    sweep_lookback: int
     profile: Any
 
     @property
@@ -115,6 +118,28 @@ def resolve_analysis_config(
             f"Mode '{mode_cfg.name}' timeframe weights must be non-negative and sum to 1."
         )
 
+    score_weights = {
+        str(key): float(value)
+        for key, value in mode_cfg.analysis_score_weights.items()
+    }
+    expected_score_keys = {
+        "market_structure",
+        "entry_location",
+        "price_action",
+        "momentum_trend",
+        "liquidity_breakout_retest",
+        "volatility_execution",
+    }
+    if (
+        set(score_weights) != expected_score_keys
+        or any(value < 0 for value in score_weights.values())
+        or abs(sum(score_weights.values()) - 100.0) > 1e-6
+    ):
+        raise ValueError(
+            f"Mode '{mode_cfg.name}' score weights must cover all six categories "
+            "and sum to 100."
+        )
+
     profile = resolve_momentum_pullback_profile(mode_cfg, selected_setup)
     return ResolvedAnalysisConfig(
         mode=mode_cfg.name,
@@ -130,6 +155,9 @@ def resolve_analysis_config(
         atr_expansion_limit=float(mode_cfg.analysis_atr_expansion_limit),
         max_candle_age_bars=float(mode_cfg.analysis_max_candle_age_bars),
         preferred_rr=float(mode_cfg.preferred_rr_ratio),
+        score_weights=score_weights,
+        breakout_lookback=max(5, int(mode_cfg.breakout_lookback)),
+        sweep_lookback=max(2, int(mode_cfg.liquidity_lookback)),
         profile=profile,
     )
 

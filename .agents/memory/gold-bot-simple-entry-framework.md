@@ -1,13 +1,13 @@
 ---
-name: Gold Bot Single-Timeframe Entry Strategy
-description: The retained selected-timeframe XAU/USD entry path and backtest evidence boundary.
+name: Gold Bot Weighted Multi-Timeframe Entry Strategy
+description: The active mode-configured XAU/USD analysis engine and its backtest evidence boundary.
 ---
 
-Live analysis uses the selected chart timeframe and its mode-scaled MomentumPullbackProfile. The adaptive weighted multi-timeframe engine was explicitly removed; do not reintroduce it. Preserve the Scalp, Intraday, Swing, and Position modes, combined Scalp/Intraday monitoring, alerts, and trade tracking.
+The current XAU/USD engine uses mode-configured context, selected setup, and optional refinement timeframes with weighted evidence. A previous instruction removed adaptive analysis, but the user explicitly superseded it by asking to rebuild weighted multi-timeframe analysis. Preserve the four real modes, the combined Scalp/Intraday coordinator, alerts, and trade tracking.
 
-**Why:** The user chose to remove the adaptive strategy while retaining other bot features and the separate existing analysis path.
+**Why:** The user later explicitly requested the weighted multi-timeframe engine, so the earlier single-timeframe-only decision is no longer current.
 
-**How to apply:** Analyze the selected timeframe with the profile resolved for the active mode and timeframe. Keep mode switching, combined streams, and non-analysis bot features intact. Do not label the retained path as adaptive or use the removed multi-timeframe engine.
+**How to apply:** Keep the selected setup timeframe authoritative, derive context/refinement roles from the active mode, and ensure mode selection applies the matching score thresholds, weights, lookbacks, volatility limits, and R:R settings. Do not treat the combined coordinator as a standalone strategy.
 
 ## Backtest evidence boundary
 

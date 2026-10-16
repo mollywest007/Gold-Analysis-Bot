@@ -55,6 +55,10 @@ class MomentumPullbackProfile:
     # Maximum validated reference-market spread relative to ATR14. These are
     # conservative policy caps, not values optimized from historical results.
     maximum_spread_atr: float = 0.20
+    rejection_close_position: float = 0.58
+    breakout_close_position: float = 0.68
+    breakout_minimum_body_ratio: float = 0.35
+    sweep_penetration_atr: float = 0.04
 
 
 @dataclass
@@ -115,6 +119,14 @@ class ModeConfig:
     analysis_atr_expansion_limit: float = 2.25
     analysis_max_candle_age_bars: float = 3.0
     preferred_rr_ratio: float = 2.0
+    analysis_score_weights: Dict[str, float] = field(default_factory=lambda: {
+        "market_structure": 25.0,
+        "entry_location": 20.0,
+        "price_action": 15.0,
+        "momentum_trend": 15.0,
+        "liquidity_breakout_retest": 15.0,
+        "volatility_execution": 10.0,
+    })
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
     # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default

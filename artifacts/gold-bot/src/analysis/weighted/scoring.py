@@ -102,25 +102,26 @@ def score_directions(
                 and frame in ("context", "setup")
             ):
                 structure_points += 1.0 if frame == "setup" else 0.5
+        weights = config.score_weights
         breakdown["market_structure"] = min(
-            SCORE_WEIGHTS["market_structure"], structure_points
+            weights["market_structure"], structure_points
         )
 
         candidate = candidate_by_direction[direction]
         breakdown["entry_location"] = (
-            SCORE_WEIGHTS["entry_location"] * candidate.location_strength
+            weights["entry_location"] * candidate.location_strength
             if candidate else 0.0
         )
         breakdown["price_action"] = (
-            SCORE_WEIGHTS["price_action"] * candidate.price_action_strength
+            weights["price_action"] * candidate.price_action_strength
             if candidate else 0.0
         )
         breakdown["momentum_trend"] = (
-            SCORE_WEIGHTS["momentum_trend"]
+            weights["momentum_trend"]
             * _momentum_support(direction, indicators.get("setup"), price)
         )
         breakdown["liquidity_breakout_retest"] = (
-            SCORE_WEIGHTS["liquidity_breakout_retest"]
+            weights["liquidity_breakout_retest"]
             * _pattern_strength(candidate)
         )
 
@@ -137,7 +138,9 @@ def score_directions(
         if spread is not None and atr is not None and atr > 0:
             if spread <= atr * float(profile.maximum_spread_atr):
                 volatility_points += 5.0
-        breakdown["volatility_execution"] = min(10.0, volatility_points)
+        breakdown["volatility_execution"] = min(
+            weights["volatility_execution"], volatility_points
+        )
 
         penalties = []
         context = structures.get("context")
