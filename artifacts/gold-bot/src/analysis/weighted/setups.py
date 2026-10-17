@@ -222,6 +222,79 @@ def detect_setups(
         )
 
     retest_window = min(4, size - 2)
+    # Failed breakout: an earlier completed candle closed beyond a meaningful
+    # range boundary, then the latest completed candle returned inside the
+    # range with rejection, momentum recovery, or a structure shift. A wick
+    # through a boundary alone remains a sweep, not a failed-breakout signal.
+    # In a clear trend, only allow a failed break in the trend direction so
+    # this pattern does not blindly fade a strong directional move.
+    for direction in ("BUY", "SELL"):
+        if (
+            regime == "BULLISH_TREND" and direction == "SELL"
+        ) or (
+            regime == "BEARISH_TREND" and direction == "BUY"
+        ):
+            continue
+        for breakout_index in range(
+            last - 1,
+            max(0, last - retest_window) - 1,
+            -1,
+        ):
+            before_start = max(0, breakout_index - range_lookback)
+            prior_highs = highs[before_start:breakout_index]
+            prior_lows = lows[before_start:breakout_index]
+            if not prior_highs or not prior_lows:
+                continue
+            range_high = max(float(value) for value in prior_highs)
+            range_low = min(float(value) for value in prior_lows)
+            if direction == "BUY":
+                boundary = range_low
+                broke_out = float(closes[breakout_index]) < boundary - breakout_buffer
+                returned_inside = boundary < last_close < range_high
+                invalidation = min(
+                    float(value) for value in lows[breakout_index:last + 1]
+                )
+                rejection = bullish_rejection
+            else:
+                boundary = range_high
+                broke_out = float(closes[breakout_index]) > boundary + breakout_buffer
+                returned_inside = range_low < last_close < boundary
+                invalidation = max(
+                    float(value) for value in highs[breakout_index:last + 1]
+                )
+                rejection = bearish_rejection
+            structure_shift = structure.break_direction == direction
+            trigger = (
+                rejection
+                or structure_shift
+                or _momentum_direction(indicators, direction)
+            )
+            if not (broke_out and returned_inside and trigger):
+                continue
+            add(
+                direction,
+                "FAILED_BREAKOUT",
+                boundary,
+                invalidation,
+                0.90 if rejection or structure_shift else 0.78,
+                0.90,
+                0.90 if rejection else 0.72 if structure_shift else 0.0,
+                [
+                    (
+                        f"A completed candle closed beyond the "
+                        f"{'support' if direction == 'BUY' else 'resistance'} "
+                        f"boundary at {boundary:.2f}; a later completed candle "
+                        "re-entered the prior range."
+                    ),
+                    (
+                        "Rejection, a structure shift, or momentum recovery "
+                        "supports the reversal."
+                    ),
+                ],
+                extension=abs(price - boundary) / atr,
+            )
+            break
+
     for direction in ("BUY", "SELL"):
         for breakout_index in range(last - retest_window, last):
             before_start = max(0, breakout_index - range_lookback)

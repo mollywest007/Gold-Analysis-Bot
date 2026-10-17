@@ -56,6 +56,7 @@ def _pattern_strength(candidate: SetupCandidate | None) -> float:
     base = {
         "LIQUIDITY_SWEEP": 1.0,
         "BREAKOUT_RETEST": 0.92,
+        "FAILED_BREAKOUT": 0.92,
         "BREAKOUT": 0.82,
         "TREND_PULLBACK": 0.75,
         "SUPPORT_RESISTANCE_REACTION": 0.68,

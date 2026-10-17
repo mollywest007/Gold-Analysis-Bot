@@ -457,6 +457,133 @@ class IndicatorAndSetupTests(unittest.TestCase):
             "TREND_PULLBACK", {item.setup_type for item in pullback_result}
         )
 
+    def test_failed_breakout_requires_close_outside_then_range_reentry(self):
+        profile = MODES["scalp"].momentum_pullback
+        indicators = IndicatorSnapshot(
+            100.0, 99.8, 52.0, 50.0, 0.2, 0.1, 1.0, 1.0, 1.0
+        )
+        structure = _structure(direction="WAIT", label="RANGE")
+        count = 50
+        base = (
+            [100.0] * count,
+            [100.5] * count,
+            [99.5] * count,
+            [100.0] * count,
+        )
+
+        failed_down = tuple(values[:] for values in base)
+        failed_down[0][-2] = 99.3
+        failed_down[1][-2] = 99.4
+        failed_down[2][-2] = 98.3
+        failed_down[3][-2] = 98.9
+        failed_down[0][-1] = 99.55
+        failed_down[1][-1] = 100.1
+        failed_down[2][-1] = 98.9
+        failed_down[3][-1] = 99.95
+        buy_candidates = detect_setups(
+            *failed_down,
+            price=99.95,
+            atr=1.0,
+            indicators=indicators,
+            structure=structure,
+            context_direction="WAIT",
+            refinement_direction="WAIT",
+            regime="RANGE_BOUND",
+            profile=profile,
+            breakout_lookback=20,
+            sweep_lookback=15,
+        )
+        buy_candidate = next(
+            item for item in buy_candidates if item.setup_type == "FAILED_BREAKOUT"
+        )
+        self.assertEqual(buy_candidate.direction, "BUY")
+        self.assertLess(buy_candidate.invalidation_level, buy_candidate.level)
+        self.assertIn("re-entered the prior range", " ".join(buy_candidate.evidence))
+
+        failed_up = tuple(values[:] for values in base)
+        failed_up[0][-2] = 100.9
+        failed_up[1][-2] = 101.6
+        failed_up[2][-2] = 100.8
+        failed_up[3][-2] = 101.2
+        failed_up[0][-1] = 100.45
+        failed_up[1][-1] = 101.2
+        failed_up[2][-1] = 99.9
+        failed_up[3][-1] = 100.1
+        sell_candidates = detect_setups(
+            *failed_up,
+            price=100.1,
+            atr=1.0,
+            indicators=indicators,
+            structure=structure,
+            context_direction="WAIT",
+            refinement_direction="WAIT",
+            regime="RANGE_BOUND",
+            profile=profile,
+            breakout_lookback=20,
+            sweep_lookback=15,
+        )
+        sell_candidate = next(
+            item for item in sell_candidates if item.setup_type == "FAILED_BREAKOUT"
+        )
+        self.assertEqual(sell_candidate.direction, "SELL")
+        self.assertGreater(sell_candidate.invalidation_level, sell_candidate.level)
+
+        config = resolve_analysis_config(MODES["scalp"])
+        scored = score_directions(
+            structures={"context": None, "setup": None, "refinement": None},
+            indicators={"context": None, "setup": None, "refinement": None},
+            candidates=[buy_candidate],
+            regime="RANGE_BOUND",
+            price=99.95,
+            atr=1.0,
+            spread=None,
+            profile=config.profile,
+            config=config,
+        )
+        self.assertGreater(
+            scored["BUY"]["breakdown"]["liquidity_breakout_retest"], 0
+        )
+
+        # A wick through support without a completed close outside it remains
+        # a separate sweep pattern, not a failed-close breakout.
+        wick_only = tuple(values[:] for values in base)
+        wick_only[2][-1] = 98.8
+        wick_only[3][-1] = 100.1
+        wick_candidates = detect_setups(
+            *wick_only,
+            price=100.1,
+            atr=1.0,
+            indicators=indicators,
+            structure=structure,
+            context_direction="WAIT",
+            refinement_direction="BUY",
+            regime="RANGE_BOUND",
+            profile=profile,
+            breakout_lookback=20,
+            sweep_lookback=15,
+        )
+        self.assertNotIn(
+            "FAILED_BREAKOUT", {item.setup_type for item in wick_candidates}
+        )
+
+        # Clear trends should not use this pattern to fade the prevailing move.
+        countertrend = detect_setups(
+            *failed_up,
+            price=100.1,
+            atr=1.0,
+            indicators=indicators,
+            structure=structure,
+            context_direction="BUY",
+            refinement_direction="BUY",
+            regime="BULLISH_TREND",
+            profile=profile,
+            breakout_lookback=20,
+            sweep_lookback=15,
+        )
+        self.assertNotIn(
+            "FAILED_BREAKOUT", {item.setup_type for item in countertrend}
+        )
+
 
 class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
     def test_early_moderate_strong_and_conflict_categories_obey_thresholds(self):
