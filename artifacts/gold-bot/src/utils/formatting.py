@@ -1953,128 +1953,319 @@ def _analysis_invalidation_text(
 
 
 def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
-     """Render the shared compact analysis card used across Telegram paths."""
-     report = getattr(a, "institutional_report", {}) or {}
-     mode_rules = report.get("mode_rules", {}) or {}
-     action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
-     if action not in ("BUY", "SELL"):
-         action = "WAIT"
-     direction = str(
-         getattr(a, "directional_indication", "")
-         or getattr(a, "early_direction", "")
-         or ""
-     ).upper()
-     if action in ("BUY", "SELL"):
-         direction = action
-     elif direction not in ("BUY", "SELL"):
-         direction = "WAIT"
+    """Render the familiar sectioned Telegram card with clearer spacing."""
+    report = getattr(a, "institutional_report", {}) or {}
+    decision = report.get("decision_summary", {}) or {}
+    mode_rules = report.get("mode_rules", {}) or {}
 
-     setup_status = str(getattr(a, "setup_status", "") or "").upper()
-     if action in ("BUY", "SELL") and setup_status in (
-         "WAIT", "DEVELOPING", "MISSED", "INVALID"
-     ):
-         action = "WAIT"
+    action = str(getattr(a, "action", "WAIT") or "WAIT").upper()
+    if action not in ("BUY", "SELL"):
+        action = "WAIT"
+    setup_status = str(getattr(a, "setup_status", "") or "").upper()
+    if action in ("BUY", "SELL") and setup_status in (
+        "WAIT", "DEVELOPING", "MISSED", "INVALID"
+    ):
+        action = "WAIT"
 
-     category = str(
-         getattr(a, "signal_category", "")
-         or getattr(a, "signal_status", "")
-         or ""
-     ).upper()
-     score = int(getattr(a, "confidence_score", 0) or 0)
-     mode = str(getattr(a, "analysis_mode", "") or "").lower()
-     mode_label = {
-         "scalp": "Scalping",
-         "intraday": "Intraday",
-         "swing": "Swing",
-         "position": "Position",
-     }.get(
-         mode,
-         {
-             "scalp": "Scalping",
-         }.get(
-             str(getattr(a, "trade_type", "") or "").lower(),
-             str(getattr(a, "trade_type", "") or "Selected mode"),
-         ),
-     )
-     timeframe = str(getattr(a, "timeframe", "") or "")
-     price = float(getattr(a, "price", 0.0) or 0.0)
-     price_text = f" · {fmt_price(price)}" if price > 0 else ""
-     setup_type = _analysis_setup_label(
-         getattr(a, "price_action_setup", "")
-     )
-     has_setup = bool(setup_type)
-     setup = (
-         f"Potential {direction} · {setup_type}"
-         if direction in ("BUY", "SELL") and has_setup
-         else f"Potential {direction}"
-         if direction in ("BUY", "SELL")
-         else "No directional setup formed"
-     )
+    direction = str(
+        getattr(a, "directional_indication", "")
+        or getattr(a, "early_direction", "")
+        or ""
+    ).upper()
+    if action in ("BUY", "SELL"):
+        direction = action
+    elif direction not in ("BUY", "SELL"):
+        direction = "WAIT"
 
-     price_action = str(getattr(a, "key_zone", "") or "").strip()
-     if price_action in (
-         "No defined support/resistance zone",
-         "Support/resistance not defined",
-         "No qualifying setup",
-     ):
-         price_action = ""
-     if not price_action and has_setup:
-         price_action = setup_type
-     if not price_action:
-         price_action = _struct_label(
-             str(getattr(a, "market_structure", "") or "Not established")
-         )
-     if len(price_action) > 180:
-         price_action = price_action[:177].rstrip() + "…"
+    category = str(
+        getattr(a, "signal_category", "")
+        or getattr(a, "signal_status", "")
+        or setup_status
+        or "WAIT"
+    ).upper()
+    score = int(getattr(a, "confidence_score", 0) or 0)
+    mode = str(getattr(a, "analysis_mode", "") or "").lower()
+    mode_label = {
+        "scalp": "Scalping",
+        "intraday": "Intraday",
+        "swing": "Swing",
+        "position": "Position",
+    }.get(
+        mode,
+        str(getattr(a, "trade_type", "") or "Selected mode"),
+    )
+    if mode_label.lower() == "scalp":
+        mode_label = "Scalping"
 
-     waiting = _analysis_waiting_text(
-         a,
-         action=action,
-         category=category,
-         score=score,
-         mode_rules=mode_rules,
-         report=report,
-     )
-     trigger = _analysis_trigger_text(
-         a,
-         action=action,
-         direction=direction,
-         category=category,
-         score=score,
-         mode_rules=mode_rules,
-         report=report,
-     )
-     invalidation = _analysis_invalidation_text(a, direction, report)
-     status_icon = {"BUY": "🟢", "SELL": "🔴", "WAIT": "🟡"}[action]
-     status_text = "WAIT" if action == "WAIT" else action
-     header = (
-         f"<b>SYMBOL</b> XAU/USD → <b>MODE</b> {html.escape(mode_label)}"
-         + (f" · {html.escape(timeframe)}" if timeframe else "")
-         + html.escape(price_text)
-     )
-     lines = []
-     alert_heading = {
-         "SCALP": "⚡ Scalp alert",
-         "INTRA-HOUR": "📊 Intra-hour alert",
-     }.get(alert_label, "")
-     if alert_heading:
-         lines.append(f"<b>{alert_heading}</b>")
-     lines.extend(
-         [
-             header,
-             (
-                 f"<b>Market trend</b> {html.escape(_analysis_trend_label(a))}"
-                 f" · <b>Price action</b> {html.escape(price_action)}"
-             ),
-             f"<b>Setup</b> {html.escape(setup)}",
-             f"<b>Waiting for</b> {html.escape(waiting)}",
-             f"<b>Entry status</b> {status_icon} <b>{status_text}</b>",
-             f"<b>Entry trigger</b> {html.escape(trigger)}",
-             f"<b>Invalidation</b> {html.escape(invalidation)}",
-             "<i>Not financial advice.</i>",
-         ]
-     )
-     return safe_html("\n".join(lines))
+    timeframe = str(getattr(a, "timeframe", "") or "Not available")
+    data_quality = (
+        "SIMULATED"
+        if getattr(a, "is_simulated", False)
+        else str(
+            report.get("data_quality")
+            or getattr(a, "data_quality", "")
+            or "UNKNOWN"
+        )
+    )
+    setup_type = _analysis_setup_label(
+        getattr(a, "price_action_setup", "")
+        or report.get("setup_type", "")
+    )
+    setup_label = (
+        f"{'Potential ' if action == 'WAIT' else ''}{direction}"
+        + (f" · {setup_type}" if setup_type else "")
+        if direction in ("BUY", "SELL")
+        else "No directional setup formed"
+    )
+    entry_status = {
+        "BUY": "🟢 BUY",
+        "SELL": "🔴 SELL",
+        "WAIT": "🟡 WAIT",
+    }[action]
+    if action == "WAIT" and direction in ("BUY", "SELL"):
+        entry_status += f" · potential {direction}"
+
+    mode_timeframes = getattr(a, "analysis_timeframes", {}) or {}
+    timeframe_roles = [
+        f"{role.title()} {details.get('timeframe', '—')} "
+        f"{details.get('direction', '')}".strip()
+        for role in ("context", "setup", "refinement")
+        if isinstance(mode_timeframes.get(role), dict)
+        for details in (mode_timeframes[role],)
+    ]
+    price = float(getattr(a, "price", 0.0) or 0.0)
+    latest_candle_timestamp = float(
+        getattr(a, "latest_candle_timestamp", 0.0) or 0.0
+    )
+    candle_as_of = "Not available"
+    if latest_candle_timestamp > 0:
+        try:
+            candle_as_of = datetime.fromtimestamp(
+                latest_candle_timestamp, tz=timezone.utc
+            ).strftime("%H:%M:%S UTC")
+        except (OverflowError, OSError, ValueError):
+            pass
+
+    reasons_supporting = list(getattr(a, "reasons_supporting", []) or [])
+    price_action = str(
+        (reasons_supporting[0] if reasons_supporting else "")
+        or getattr(a, "structure_detail", "")
+        or report.get("price_action", "")
+        or getattr(a, "key_zone", "")
+        or getattr(a, "market_structure", "")
+        or "Not established"
+    ).strip()
+    if price_action in (
+        "No defined support/resistance zone",
+        "Support/resistance not defined",
+        "No qualifying setup",
+    ):
+        price_action = str(
+            getattr(a, "structure_detail", "")
+            or getattr(a, "market_structure", "")
+            or "Not established"
+        )
+    structure = _struct_label(
+        str(
+            getattr(a, "structure_detail", "")
+            or getattr(a, "market_structure", "")
+            or "Not established"
+        )
+    )
+
+    rsi = float(getattr(a, "rsi_value", 0.0) or 0.0)
+    adx = float(getattr(a, "adx", 0.0) or 0.0)
+    momentum = str(getattr(a, "momentum", "") or "").strip()
+    momentum_parts = [momentum] if momentum else []
+    if 0 < rsi < 100:
+        momentum_parts.append(f"RSI14 {rsi:.1f}")
+    if adx > 0:
+        momentum_parts.append(f"ADX {adx:.1f}")
+    if not momentum_parts:
+        momentum_parts.append("Not established")
+
+    key_zone = str(getattr(a, "key_zone", "") or "").strip()
+    if not key_zone:
+        support = float(getattr(a, "support1", 0.0) or 0.0)
+        resistance = float(getattr(a, "resistance1", 0.0) or 0.0)
+        if support > 0 and resistance > 0:
+            key_zone = (
+                f"Support {fmt_price(support)} / "
+                f"resistance {fmt_price(resistance)}"
+            )
+        else:
+            key_zone = "Not defined"
+
+    waiting = _analysis_waiting_text(
+        a,
+        action=action,
+        category=category,
+        score=score,
+        mode_rules=mode_rules,
+        report=report,
+    )
+    trigger = _analysis_trigger_text(
+        a,
+        action=action,
+        direction=direction,
+        category=category,
+        score=score,
+        mode_rules=mode_rules,
+        report=report,
+    )
+    invalidation = _analysis_invalidation_text(a, direction, report)
+
+    separator = "──────────────────────────────────"
+    lines = ["<pre>"]
+    stream_heading = {
+        "SCALP": "⚡ SCALP ENTRY",
+        "INTRA-HOUR": "📊 INTRA-HOUR ENTRY",
+    }.get(alert_label, "")
+    if stream_heading:
+        lines.extend([stream_heading, ""])
+    lines.extend(
+        [
+            "╔══════════════════════════════════╗",
+            "║       XAU/USD ANALYSIS CARD      ║",
+            "╚══════════════════════════════════╝",
+        ]
+    )
+
+    def add_row(label: str, value: object) -> None:
+        prefix = f"  {label:<14}: "
+        text = " ".join(str(value or "—").split())
+        wrapped = textwrap.wrap(
+            text,
+            width=max(20, 44 - len(prefix)),
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or ["—"]
+        lines.append(prefix + wrapped[0])
+        lines.extend(
+            " " * len(prefix) + continuation
+            for continuation in wrapped[1:]
+        )
+
+    def start_section(title: str) -> None:
+        lines.extend(["", separator, title])
+
+    start_section("MARKET SNAPSHOT")
+    add_row("Symbol", "XAU/USD")
+    add_row("Mode", mode_label)
+    add_row("Timeframe", timeframe)
+    add_row("Price", fmt_price(price) if price > 0 else "Not available")
+    add_row("Candle", candle_as_of)
+
+    start_section("WHAT TO DO")
+    add_row("Market trend", _analysis_trend_label(a))
+    add_row("Direction", direction)
+    add_row("Entry status", entry_status)
+    add_row("Setup", setup_label)
+    add_row("Setup status", setup_status or category)
+    session = str(getattr(a, "session", "") or "").strip()
+    if session:
+        add_row("Session", session)
+
+    start_section("HOW IT IS ANALYZING")
+    data_label = {
+        "REAL_OHLCV": "Real market candles",
+        "SIMULATED": "Simulated candles",
+    }.get(data_quality.upper(), data_quality.replace("_", " ").title())
+    add_row("Data", data_label)
+    if timeframe_roles:
+        add_row("Timeframes", " · ".join(timeframe_roles))
+    add_row("Price action", price_action)
+    add_row("Structure", structure)
+    add_row("Momentum", " · ".join(momentum_parts))
+    if key_zone.lower() != price_action.lower():
+        add_row("Key zone", key_zone)
+    quality_checks = (
+        report.get("quality_checks")
+        or decision.get("quality_checks")
+        or []
+    )
+    evidence = f"Score {score}/100" if score > 0 else "Score not available"
+    if quality_checks:
+        evidence += f" · {len(quality_checks)} setup checks confirmed"
+    add_row("Evidence", evidence)
+
+    start_section("TRADE PLAN")
+    entry = float(getattr(a, "entry", 0.0) or 0.0)
+    stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
+    targets = [
+        (f"TP{index}", float(getattr(a, f"tp{index}", 0.0) or 0.0))
+        for index in (1, 2, 3)
+    ]
+    if action in ("BUY", "SELL"):
+        add_row("Entry", fmt_price(entry) if entry > 0 else "Not available")
+        add_row("Stop loss", fmt_price(stop) if stop > 0 else "Not available")
+        for label, target in targets:
+            if target > 0:
+                add_row(label, fmt_price(target))
+        rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
+        if rr > 0:
+            add_row("Risk / reward", f"1:{rr:.2f}")
+    else:
+        zone_low = float(
+            getattr(a, "moderate_entry_low", 0.0)
+            or getattr(a, "entry_zone_low", 0.0)
+            or 0.0
+        )
+        zone_high = float(
+            getattr(a, "moderate_entry_high", 0.0)
+            or getattr(a, "entry_zone_high", 0.0)
+            or 0.0
+        )
+        if zone_low > 0 and zone_high > 0:
+            add_row(
+                "Candidate zone",
+                f"{fmt_price(zone_low)} – {fmt_price(zone_high)}",
+            )
+        add_row("Plan", "Not active — waiting for entry confirmation")
+
+    start_section("CURRENT CONFIRMATION")
+    add_row("Waiting for", waiting)
+    add_row("Entry trigger", trigger)
+    add_row("Invalidation", invalidation)
+
+    skipped_setup = report.get("skipped_setup")
+    if not isinstance(skipped_setup, dict):
+        skipped_setup = decision.get("skipped_setup")
+    if isinstance(skipped_setup, dict):
+        skipped_direction = str(
+            skipped_setup.get("direction", "")
+        ).upper()
+        skipped_type = str(
+            skipped_setup.get("setup_type", "")
+        ).strip()
+        skipped_reason = str(
+            skipped_setup.get("detail")
+            or skipped_setup.get("skip_reason")
+            or ""
+        ).strip()
+        if (
+            skipped_direction in ("BUY", "SELL")
+            and skipped_type
+            and skipped_type.lower() != "unclassified"
+            and skipped_reason
+        ):
+            start_section("SKIPPED SETUP")
+            add_row(
+                "Candidate",
+                f"{skipped_setup.get('mode', mode_label)} / "
+                f"{skipped_setup.get('timeframe', timeframe)} / "
+                f"{skipped_direction}",
+            )
+            add_row("Setup type", skipped_type)
+            add_row("Reason", skipped_reason)
+
+    lines.extend(["", "  Not financial advice.", "</pre>"])
+    escaped_lines = [
+        lines[0],
+        *(html.escape(str(line), quote=False) for line in lines[1:-1]),
+        lines[-1],
+    ]
+    return safe_html("\n".join(escaped_lines))
 
 
 def _reference_style_analysis_card(

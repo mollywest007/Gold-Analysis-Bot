@@ -3,14 +3,14 @@ name: Gold Bot Analysis Layout
 description: Durable presentation rules for Telegram analysis and entry decision panels.
 ---
 
-The primary Telegram analysis card is compact and decision-first: symbol/mode/timeframe, market trend and price action, setup, the actual blocker, status, entry trigger, and invalidation. It omits raw indicators and repeated trade-plan detail.
+Keep the existing Telegram card's monospaced, sectioned visual style: market snapshot, WHAT TO DO, HOW IT IS ANALYZING, TRADE PLAN, CURRENT CONFIRMATION, and SKIPPED SETUP when a rejected candidate exists. Improve spacing and clarity rather than replacing it with a radically different summary layout.
 
-**Why:** On 2026-10-16 the user asked to understand direction, setup, missing confirmation, trigger, and invalidation at a glance without changing the strategy.
+**Why:** On 2026-10-17 the user clarified that the previous redesign changed the familiar card too much; they want the same structured analysis, easier to read and less crowded.
 
-**How to apply:** Reuse one compact renderer across analysis, recommendation, signal, and entry-alert messages. Derive waiting conditions and triggers from the selected engine's real rejection reasons and configured thresholds; never substitute generic confirmation text or modify entry/risk rules for presentation.
+**How to apply:** Keep aligned label/value rows with readable wrapping and section dividers. Show current market behavior, setup, real blockers, trigger, and invalidation from the existing engine; remove duplicate/noisy details without changing strategy or risk rules.
 
-Telegram clients wrap normal text automatically, so keep labels concise and fields in a stable left-to-right decision order rather than using fixed-width columns.
+Telegram clients display monospaced rows on narrow screens, so wrap long values onto indented continuation lines and keep labels concise.
 
-**Why:** Fixed-width columns and long preformatted sections are hard to scan on narrow Telegram screens.
+**Why:** The user wants the original sectioned card to remain recognizable while being easier to scan on a phone.
 
-**How to apply:** Use short inline labels and a distinct status marker for WAIT/BUY/SELL; state explicitly when no structural invalidation level exists instead of inventing one.
+**How to apply:** Use clear WAIT/BUY/SELL status markers and state explicitly when no structural invalidation level exists instead of inventing one.

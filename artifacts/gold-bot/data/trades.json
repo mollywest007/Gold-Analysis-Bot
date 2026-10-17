@@ -16,7 +16,8 @@
       "status": "expired",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "lifecycle_status": "EXPIRED"
     },
     {
       "id": "1788180209286",
@@ -34,7 +35,8 @@
       "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "1788186083039",
@@ -52,7 +54,8 @@
       "status": "sl_hit",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "1788243168263",
@@ -74,7 +77,8 @@
       "closed_at": 1788247493.8521535,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788247493.907277
+      "result_notification_sent_at": 1788247493.907277,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "1788247058939",
@@ -97,7 +101,8 @@
       "closed_at": 1788247493.8521657,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788247493.9491022
+      "result_notification_sent_at": 1788247493.9491022,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "1788247625188",
@@ -120,7 +125,8 @@
       "closed_at": 1788251343.391594,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788251343.489311
+      "result_notification_sent_at": 1788251343.489311,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "5e9ceaecf45442538370058162aad61e",
@@ -148,7 +154,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788268070.224724,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788266270.4194932
+      "cooldown_notification_sent_at": 1788266270.4194932,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "ae609671f72d4e03ab8495c9db47320a",
@@ -176,7 +183,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788273471.214284,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788266271.4262192
+      "cooldown_notification_sent_at": 1788266271.4262192,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "a5f5ba8ab954488c8873f3bc4bc4a733",
@@ -204,7 +212,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788271474.452811,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788269674.702333
+      "cooldown_notification_sent_at": 1788269674.702333,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "144a8f9e28664b65961acef1b937ad75",
@@ -228,7 +237,8 @@
       "closed_at": 1788339425.8825839,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788339425.9380143
+      "result_notification_sent_at": 1788339425.9380143,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "f25b52f5231245aa9187afc562d8f884",
@@ -252,7 +262,8 @@
       "closed_at": 1788339425.8825934,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788339425.985794
+      "result_notification_sent_at": 1788339425.985794,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "4ce4f85d40054541b857cd0efad89096",
@@ -276,7 +287,8 @@
       "closed_at": 1788342277.0364873,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788342277.1151497
+      "result_notification_sent_at": 1788342277.1151497,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "a108f0a6adbd49a58ac5e29f3c35dffe",
@@ -300,7 +312,8 @@
       "closed_at": 1788342311.8749692,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788342311.940647
+      "result_notification_sent_at": 1788342311.940647,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "242389b77ba44862a4c4f0f2d8dd1dd1",
@@ -324,7 +337,8 @@
       "closed_at": 1788342327.9379628,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788342328.0046349
+      "result_notification_sent_at": 1788342328.0046349,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "090294cebbea4f0fb02c2d045691d53d",
@@ -348,7 +362,8 @@
       "closed_at": 1788342555.891535,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788342555.9554412
+      "result_notification_sent_at": 1788342555.9554412,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "ca15cfcb0c87460a973913eff2b98cb5",
@@ -376,7 +391,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788361709.9144363,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788354510.1199799
+      "cooldown_notification_sent_at": 1788354510.1199799,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "72baba585dfb4c479e043021d6429a3d",
@@ -404,7 +420,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788350848.4725313,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788349048.6977694
+      "cooldown_notification_sent_at": 1788349048.6977694,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "c5177f4d6f7d400db6093e2bf64f8b0f",
@@ -428,7 +445,8 @@
       "closed_at": 1788356577.7004702,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788356578.3984694
+      "result_notification_sent_at": 1788356578.3984694,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "55a7424fedb745c1aa2aa05b36962160",
@@ -456,7 +474,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788425283.9121733,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788418083.9149418
+      "cooldown_notification_sent_at": 1788418083.9149418,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "834f70d5f11a475aabc1b98513c5666a",
@@ -484,7 +503,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788419966.7881129,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788418166.7913933
+      "cooldown_notification_sent_at": 1788418166.7913933,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "c507f24fb861487db9ea0a4d00f2ba94",
@@ -512,7 +532,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788425366.8413346,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788418166.8430154
+      "cooldown_notification_sent_at": 1788418166.8430154,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "3c28901dff824ce0babb6ce1c7cf8b79",
@@ -540,7 +561,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788420189.5534832,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788418389.571024
+      "cooldown_notification_sent_at": 1788418389.571024,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "64293fd42a5c4de292938604f493b55b",
@@ -568,7 +590,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788425711.623456,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788423911.6268861
+      "cooldown_notification_sent_at": 1788423911.6268861,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "2d75fba00b244a5380d4db86494c02d8",
@@ -596,7 +619,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788446934.8988976,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788439734.903369
+      "cooldown_notification_sent_at": 1788439734.903369,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "fd60423bb2b04ad29680c8ab0066f1db",
@@ -620,7 +644,8 @@
       "closed_at": 1788439259.5213773,
       "close_reason": "take_profit",
       "result_notification_pending": false,
-      "result_notification_sent_at": 1788439260.274659
+      "result_notification_sent_at": 1788439260.274659,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "56a51c9c1f02471ab0b5409f52926b2f",
@@ -648,7 +673,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788445066.0184405,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788443266.2611353
+      "cooldown_notification_sent_at": 1788443266.2611353,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "fe8d4ba11f2e42dc9d3d9d9dab3adf02",
@@ -684,7 +710,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788481980.8279982,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1788480180.830939
+      "cooldown_notification_sent_at": 1788480180.830939,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "520c93dd74fd4899a7d10fd8a1fc2943",
@@ -720,7 +747,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788537057.8855147,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788529858.1062348
+      "cooldown_notification_sent_at": 1788529858.1062348,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "129b2877e2de4e9bb0e763fb19b100c7",
@@ -756,7 +784,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1788963736.0745275,
       "cooldown_duration_seconds": 7200.0,
-      "cooldown_notification_sent_at": 1788956536.4147723
+      "cooldown_notification_sent_at": 1788956536.4147723,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "a1d0f876c4e8499e805ad160ba4579d1",
@@ -792,7 +821,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789523795.7741528,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789521996.0124424
+      "cooldown_notification_sent_at": 1789521996.0124424,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "6c788be5652840a0ae0b452f33920cc0",
@@ -827,7 +857,8 @@
       "all_tp_hit": true,
       "completion_label": "ALL TP HIT",
       "tp_reanalysis_until": 1789554031.969166,
-      "result_notification_sent_at": 1789553433.608942
+      "result_notification_sent_at": 1789553433.608942,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "5f87978ce3b748d997a60a15d93a1630",
@@ -863,7 +894,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789563222.3707232,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789561422.615364
+      "cooldown_notification_sent_at": 1789561422.615364,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "214d8b13856f46008b42ccba744ebd57",
@@ -899,7 +931,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789568735.8379803,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789566936.0584497
+      "cooldown_notification_sent_at": 1789566936.0584497,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "f37bdda858e14686ab8c7dd1e1e7fece",
@@ -935,7 +968,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789593520.3383565,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789591720.5702791
+      "cooldown_notification_sent_at": 1789591720.5702791,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "48855bf74e8a49a9b731ab7e6dcf25a5",
@@ -971,7 +1005,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789605745.5988846,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789603945.8295248
+      "cooldown_notification_sent_at": 1789603945.8295248,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "512d14756b4f4bcd91f521a57efe1cca",
@@ -1007,7 +1042,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789636687.7029073,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789634887.9971771
+      "cooldown_notification_sent_at": 1789634887.9971771,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "774c4b6ddb374e1db0b828a3c25789e5",
@@ -1042,7 +1078,8 @@
       "all_tp_hit": true,
       "completion_label": "ALL TP HIT",
       "tp_reanalysis_until": 1789646917.7947319,
-      "result_notification_sent_at": 1789646318.8419974
+      "result_notification_sent_at": 1789646318.8419974,
+      "lifecycle_status": "TP3 REACHED"
     },
     {
       "id": "756572854f85412483661858ea160909",
@@ -1078,7 +1115,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789668559.134904,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789666759.644741
+      "cooldown_notification_sent_at": 1789666759.644741,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "e3e53077a3e74843980166f49114301f",
@@ -1114,7 +1152,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789671693.9611824,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789669894.259437
+      "cooldown_notification_sent_at": 1789669894.259437,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "26432d0b5dce43b89ef176cc7a834007",
@@ -1150,7 +1189,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1789732833.146013,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1789731033.437752
+      "cooldown_notification_sent_at": 1789731033.437752,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "fc3b88df22c548d4b7c26c734936651b",
@@ -1186,7 +1226,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790344356.4619281,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790342556.6787786
+      "cooldown_notification_sent_at": 1790342556.6787786,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "eaf5803d7156456ab8adf0f5f6944383",
@@ -1222,7 +1263,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790346936.0988386,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790345136.3122437
+      "cooldown_notification_sent_at": 1790345136.3122437,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "4a8c4b4b42744567b701861bdabbc0d2",
@@ -1258,7 +1300,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790353776.10817,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790351976.3909326
+      "cooldown_notification_sent_at": 1790351976.3909326,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "466530954e724bf6836f9be129fc010a",
@@ -1278,7 +1321,8 @@
       "status": "expired",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "lifecycle_status": "EXPIRED"
     },
     {
       "id": "30cdf56c35b042e699c19d0c2a19fbf7",
@@ -1314,7 +1358,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790751076.9790034,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790749277.1855416
+      "cooldown_notification_sent_at": 1790749277.1855416,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "72f5a6f27b2c4ef2a0eb8258731fb2ec",
@@ -1350,7 +1395,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790774231.3206964,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790772431.5467358
+      "cooldown_notification_sent_at": 1790772431.5467358,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "d34abb1998e5435e8134472d89fb4054",
@@ -1386,7 +1432,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790780187.3043923,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790778387.5426924
+      "cooldown_notification_sent_at": 1790778387.5426924,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "555cfe8db71d4c9cae5f624962e60c07",
@@ -1422,7 +1469,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790845116.1930373,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790843316.4956467
+      "cooldown_notification_sent_at": 1790843316.4956467,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "efe852bcbe9240259b4d8a39f05ec581",
@@ -1458,7 +1506,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790862036.468308,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790860236.7311115
+      "cooldown_notification_sent_at": 1790860236.7311115,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "377b34430508435b91e0dc5b70e6ed76",
@@ -1494,7 +1543,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790863881.8168905,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790862082.0825083
+      "cooldown_notification_sent_at": 1790862082.0825083,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "55d8189dafbf49e99a9ad9d748465557",
@@ -1530,7 +1580,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790872644.8230422,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790870845.0973763
+      "cooldown_notification_sent_at": 1790870845.0973763,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "a51e9c755c9c4722888979451f63c729",
@@ -1566,7 +1617,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790928983.1873162,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790927183.466384
+      "cooldown_notification_sent_at": 1790927183.466384,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "b8b63091b38742bfa85546ff748af45c",
@@ -1602,7 +1654,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790938288.5166078,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790936488.7648046
+      "cooldown_notification_sent_at": 1790936488.7648046,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "d9ec884123074d5386af0121d0623ee5",
@@ -1642,7 +1695,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1790948827.7333212,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1790947027.9721448
+      "cooldown_notification_sent_at": 1790947027.9721448,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "95f03fe5d7594262890932ec0fc9df28",
@@ -1687,7 +1741,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1791960432.5975177,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1791958632.8070402
+      "cooldown_notification_sent_at": 1791958632.8070402,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "8a922a50abbd4bcda796e5f77d48aa2d",
@@ -1732,7 +1787,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1791964029.1155288,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1791962229.3729742
+      "cooldown_notification_sent_at": 1791962229.3729742,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "4e3b8d5eeff74b52888ac4c33dcb4ea9",
@@ -1777,7 +1833,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1791965844.240786,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1791964044.4580715
+      "cooldown_notification_sent_at": 1791964044.4580715,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "0d2bfef0f6644e4a8fa0ad001edbef72",
@@ -1822,7 +1879,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1792012423.5548925,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1792010623.7499897
+      "cooldown_notification_sent_at": 1792010623.7499897,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "89b2605cf0ee4173b1bb9c0769ac8596",
@@ -1867,7 +1925,8 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1792018263.2269895,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1792016463.4055598
+      "cooldown_notification_sent_at": 1792016463.4055598,
+      "lifecycle_status": "STOP LOSS HIT"
     },
     {
       "id": "2ef1aa52b8ce4efeb13472060e342b31",
@@ -1912,7 +1971,37 @@
       "cooldown_notification_pending": false,
       "cooldown_until": 1792032878.16595,
       "cooldown_duration_seconds": 1800.0,
-      "cooldown_notification_sent_at": 1792031078.3874953
+      "cooldown_notification_sent_at": 1792031078.3874953,
+      "lifecycle_status": "STOP LOSS HIT"
+    },
+    {
+      "id": "11d4f756978b4ebb87fb73c0eb1faffb",
+      "account_id": "8039158711",
+      "symbol": "XAU/USD",
+      "direction": "BUY",
+      "entry": 4160.7,
+      "limit_entry": null,
+      "sl": 4146.64,
+      "tp1": 4179.24,
+      "tp2": 4179.54,
+      "tp3": 4180.61,
+      "timeframe": "M15",
+      "mode": "scalp",
+      "expected_holding_bars": 40,
+      "maximum_age_seconds": 36000,
+      "confidence": 64,
+      "rr_ratio": 1.3186344238976269,
+      "opened_at": 1792169819.225539,
+      "status": "expired",
+      "invalidation_level": 4147.5,
+      "minimum_rr": 1.3,
+      "risk_fraction": 0.005,
+      "lifecycle_status": "EXPIRED",
+      "tp1_hit": false,
+      "tp2_hit": false,
+      "tp3_hit": false,
+      "lifecycle_notification_event": "EXPIRED",
+      "lifecycle_notification_pending": true
     }
   ]
 }

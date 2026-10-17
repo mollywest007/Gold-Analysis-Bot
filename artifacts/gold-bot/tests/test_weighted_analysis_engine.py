@@ -629,6 +629,7 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         from src.utils.formatting import transparent_analysis_cards
 
         card = "\n".join(transparent_analysis_cards(result))
+        card_text = " ".join(card.split())
         self.assertEqual(
             fetch.await_args_list,
             [
@@ -640,11 +641,13 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.timeframe, "M5")
         self.assertEqual(result.analysis_mode, "scalp")
         self.assertEqual(result.win_probability, 0)
-        self.assertIn("<b>SYMBOL</b> XAU/USD → <b>MODE</b> Scalping · M5", card)
-        self.assertIn("<b>Market trend</b>", card)
-        self.assertIn("<b>Waiting for</b>", card)
-        self.assertIn("<b>Entry trigger</b>", card)
-        self.assertNotIn("M15 → M5 → M1", card)
+        self.assertIn("XAU/USD ANALYSIS CARD", card)
+        self.assertIn("Mode          : Scalping", card)
+        self.assertIn("Timeframes : Context M15 WAIT", card_text)
+        self.assertIn("WHAT TO DO", card)
+        self.assertIn("HOW IT IS ANALYZING", card)
+        self.assertIn("CURRENT CONFIRMATION", card)
+        self.assertNotIn("Not backtested", card)
         self.assertEqual(
             {role: report["timeframe"] for role, report in result.analysis_timeframes.items()},
             {"context": "M15", "setup": "M5", "refinement": "M1"},

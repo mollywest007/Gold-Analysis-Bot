@@ -4,24 +4,27 @@
       "history": [
         6977
       ],
-      "active": [
-        7004
-      ],
       "recommend": [
         7052,
         7053
       ],
-      "mode": [
-        7169
-      ],
-      "settings": [
-        7214
-      ],
       "start": [
         7216
       ],
+      "mode": [
+        7222
+      ],
+      "settings": [
+        7222
+      ],
+      "alerts": [
+        7224
+      ],
       "analyze": [
-        7218
+        7228
+      ],
+      "active": [
+        7233
       ]
     }
   }
