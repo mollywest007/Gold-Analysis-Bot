@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -251,6 +252,48 @@ class IndicatorAndSetupTests(unittest.TestCase):
             "nearby_opposing_structure",
             {item["reason"] for item in near_score["penalties"]},
         )
+
+    def test_configured_structure_and_execution_weights_control_their_score_caps(self):
+        configured_weights = {
+            "market_structure": 40.0,
+            "entry_location": 10.0,
+            "price_action": 10.0,
+            "momentum_trend": 10.0,
+            "liquidity_breakout_retest": 10.0,
+            "volatility_execution": 20.0,
+        }
+        mode = replace(
+            MODES["scalp"],
+            analysis_score_weights=configured_weights,
+        )
+        config = resolve_analysis_config(mode)
+        structure = _structure(direction="BUY")
+        indicators = IndicatorSnapshot(
+            None, None, None, None, None, None, 1.0, 1.0, 1.0
+        )
+
+        scored = score_directions(
+            structures={
+                "context": structure,
+                "setup": structure,
+                "refinement": structure,
+            },
+            indicators={
+                "context": None,
+                "setup": indicators,
+                "refinement": None,
+            },
+            candidates=[],
+            regime="BULLISH_TREND",
+            price=100.0,
+            atr=1.0,
+            spread=0.1,
+            profile=config.profile,
+            config=config,
+        )
+
+        self.assertEqual(scored["BUY"]["breakdown"]["market_structure"], 40.0)
+        self.assertEqual(scored["BUY"]["breakdown"]["volatility_execution"], 20.0)
 
     def test_regime_requires_directional_ema_stack_for_trend_label(self):
         structure = _structure(direction="BUY")

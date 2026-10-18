@@ -93,17 +93,19 @@ def score_directions(
     for direction in ("BUY", "SELL"):
         breakdown = {}
         structure_points = 0.0
+        weights = config.score_weights
         for frame, weight in frame_weights.items():
             snapshot = structures.get(frame)
             if snapshot is not None and snapshot.direction == direction:
-                structure_points += SCORE_WEIGHTS["market_structure"] * weight
+                structure_points += weights["market_structure"] * weight
             if (
                 snapshot is not None
                 and snapshot.break_direction == direction
                 and frame in ("context", "setup")
             ):
-                structure_points += 1.0 if frame == "setup" else 0.5
-        weights = config.score_weights
+                structure_points += weights["market_structure"] * (
+                    0.04 if frame == "setup" else 0.02
+                )
         breakdown["market_structure"] = min(
             weights["market_structure"], structure_points
         )
@@ -135,10 +137,10 @@ def score_directions(
             and setup_indicators.atr_expansion is not None
             and setup_indicators.atr_expansion < config.atr_expansion_limit
         ):
-            volatility_points += 5.0
+            volatility_points += weights["volatility_execution"] * 0.5
         if spread is not None and atr is not None and atr > 0:
             if spread <= atr * float(profile.maximum_spread_atr):
-                volatility_points += 5.0
+                volatility_points += weights["volatility_execution"] * 0.5
         breakdown["volatility_execution"] = min(
             weights["volatility_execution"], volatility_points
         )
