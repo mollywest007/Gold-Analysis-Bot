@@ -744,6 +744,70 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertLess(accepted["stop_loss"], candidate.invalidation_level)
 
+    def test_nearby_structural_levels_are_not_published_as_separate_targets(self):
+        profile = MODES["scalp"].momentum_pullback
+        structure = _structure(
+            direction="BUY",
+            swing_highs=(
+                (10, 101.9),
+                (20, 102.1),
+                (30, 103.0),
+                (40, 104.0),
+            ),
+            swing_lows=((12, 98.0),),
+        )
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, 99.0, 0.8, 0.9, 0.8, 0.2,
+            ("pullback to support with rejection",),
+        )
+
+        plan = validate_candidate(
+            candidate,
+            price=100.0,
+            atr=1.0,
+            structure=structure,
+            profile=profile,
+            spread=None,
+        )
+
+        self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+        self.assertIsNotNone(plan["tp2"])
+        self.assertIsNotNone(plan["tp3"])
+        self.assertGreaterEqual(
+            plan["tp2"] - plan["tp1"],
+            profile.minimum_target_room_atr,
+        )
+        self.assertGreaterEqual(
+            plan["tp3"] - plan["tp2"],
+            profile.minimum_target_room_atr,
+        )
+        self.assertAlmostEqual(plan["tp2"], 102.92)
+
+    def test_target_milestones_are_omitted_when_only_nearby_levels_exist(self):
+        profile = MODES["scalp"].momentum_pullback
+        structure = _structure(
+            direction="BUY",
+            swing_highs=((10, 101.9), (20, 102.1)),
+            swing_lows=((12, 98.0),),
+        )
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, 99.0, 0.8, 0.9, 0.8, 0.2,
+            ("pullback to support with rejection",),
+        )
+
+        plan = validate_candidate(
+            candidate,
+            price=100.0,
+            atr=1.0,
+            structure=structure,
+            profile=profile,
+            spread=None,
+        )
+
+        self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+        self.assertIsNone(plan["tp2"])
+        self.assertIsNone(plan["tp3"])
+
     def test_non_finite_candidate_invalidation_fails_closed(self):
         candidate = SetupCandidate(
             "BUY", "TREND_PULLBACK", 100.0, float("nan"),

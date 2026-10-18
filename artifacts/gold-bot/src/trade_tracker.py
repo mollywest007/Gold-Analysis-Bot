@@ -167,6 +167,10 @@ def open_trade(
     invalidation_level: float | None = None,
     minimum_rr: float | None = None,
     risk_fraction: float | None = None,
+    minimum_target_gap: float | None = None,
+    reference_spread: float | None = None,
+    reference_spread_status: str = "unavailable",
+    reference_spread_rr: float | None = None,
 ) -> bool:
     trades = _load()
 
@@ -205,12 +209,38 @@ def open_trade(
             if risk_fraction is not None
             else RISK_POLICY.risk_per_trade_fraction
         )
+        minimum_target_gap = (
+            float(minimum_target_gap)
+            if minimum_target_gap is not None
+            else None
+        )
+        reference_spread = (
+            float(reference_spread)
+            if reference_spread is not None
+            else None
+        )
+        reference_spread_rr = (
+            float(reference_spread_rr)
+            if reference_spread_rr is not None
+            else None
+        )
+        reference_spread_status = str(
+            reference_spread_status or "unavailable"
+        ).lower()
     except (TypeError, ValueError):
         logger.error(f"[{timeframe}] Trade open rejected — non-numeric plan.")
         return False
 
     plan_levels = [entry, sl, tp1, rr_ratio, atr]
     plan_levels.extend(value for value in (tp2, tp3, limit_entry) if value is not None)
+    plan_levels.extend(
+        value for value in (
+            minimum_target_gap,
+            reference_spread,
+            reference_spread_rr,
+        )
+        if value is not None
+    )
     positive_levels = [entry, sl, tp1]
     positive_levels.extend(
         value for value in (tp2, tp3, limit_entry) if value is not None
@@ -221,6 +251,21 @@ def open_trade(
         or atr < 0
         or not math.isfinite(risk_fraction)
         or (minimum_rr is not None and not math.isfinite(minimum_rr))
+        or (
+            minimum_target_gap is not None
+            and minimum_target_gap <= 0
+        )
+        or (reference_spread is not None and reference_spread < 0)
+        or (
+            reference_spread_rr is not None
+            and reference_spread_rr <= 0
+        )
+        or reference_spread_status not in {"passed", "rejected", "unavailable"}
+        or reference_spread_status == "rejected"
+        or (
+            reference_spread_status == "passed"
+            and (reference_spread is None or reference_spread_rr is None)
+        )
     ):
         logger.error(f"[{timeframe}] Trade open rejected — plan contains invalid levels.")
         return False
@@ -268,6 +313,21 @@ def open_trade(
             f"[{timeframe}] Trade open rejected — invalid symbol or {direction} levels: "
             f"entry={entry:.2f} sl={sl:.2f} tp1={tp1:.2f} "
             f"tp2={tp2 if tp2 is not None else 'none'} tp3={tp3}"
+        )
+        return False
+    if minimum_target_gap is not None and (
+        (tp2 is not None and abs(tp2 - tp1) + 1e-9 < minimum_target_gap)
+        or (
+            tp3 is not None
+            and tp2 is not None
+            and abs(tp3 - tp2) + 1e-9 < minimum_target_gap
+        )
+    ):
+        logger.error(
+            "[%s] Trade open rejected — TP2/TP3 are inside the minimum "
+            "structural spacing of %.5f.",
+            timeframe,
+            minimum_target_gap,
         )
         return False
     actual_rr = abs(tp1 - entry) / abs(entry - sl)
@@ -395,6 +455,10 @@ def open_trade(
         "invalidation_level": invalidation_level,
         "minimum_rr": minimum_rr,
         "risk_fraction": risk_fraction,
+        "minimum_target_gap": minimum_target_gap,
+        "reference_spread": reference_spread,
+        "reference_spread_status": reference_spread_status,
+        "reference_spread_rr": reference_spread_rr,
         "lifecycle_status": (
             "WAITING FOR ENTRY" if waiting_for_entry else "ACTIVE"
         ),

@@ -249,14 +249,29 @@ def validate_candidate(
                 "spread_rr": round(spread_rr, 2),
             }
 
-    # Further targets must be additional confirmed opposing levels. No ATR or
-    # R-multiple projection is used to manufacture a distant TP2/TP3.
-    later_targets = [
-        value for value in structural_targets
-        if value > target + 0.01 if direction == "BUY"
-    ] if direction == "BUY" else [
-        value for value in structural_targets if value < target - 0.01
-    ]
+    # Further targets must be distinct, confirmed opposing levels. Pivot
+    # prices and resistance/support-zone centers often describe the same area;
+    # do not present those near-duplicates as separate profit milestones.
+    minimum_target_spacing = max(
+        atr * float(profile.minimum_target_room_atr),
+        target_buffer * 2.0,
+        spread_value or 0.0,
+        0.01,
+    )
+    later_targets = []
+    last_target = target
+    for level in structural_targets:
+        spacing = (
+            level - last_target
+            if direction == "BUY"
+            else last_target - level
+        )
+        if spacing + 1e-9 < minimum_target_spacing:
+            continue
+        later_targets.append(level)
+        last_target = level
+        if len(later_targets) == 2:
+            break
     tp2 = later_targets[0] if later_targets else None
     tp3 = later_targets[1] if len(later_targets) > 1 else None
 
@@ -360,6 +375,7 @@ def validate_candidate(
         "preferred_rr": round(target_rr, 2),
         "reference_spread_rr": published_spread_rr,
         "spread_status": spread_status,
+        "minimum_target_spacing": round(minimum_target_spacing, 5),
         "spread_atr": (
             round(spread_value / atr, 4)
             if spread_value is not None and atr > 0

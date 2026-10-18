@@ -1361,6 +1361,7 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
             daily_bias="",
             near_round="",
             wait_reason="",
+            rr_ratio=0.0,
         )
 
         scalp_card = early_entry_card(analysis, alert_label="SCALP")
@@ -1370,6 +1371,14 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(interval_card.startswith("<pre>\n📊 INTRA-HOUR ENTRY"))
         self.assertIn("Entry status", scalp_card)
         self.assertIn("Entry status", interval_card)
+        self.assertIn(
+            "Risk / reward : TP1 1:1.00 | TP2 1:2.00 | TP3 1:3.00",
+            scalp_card,
+        )
+        self.assertIn(
+            "Spread-adjusted R:R: Unavailable — no fresh validated two-sided quote",
+            scalp_card,
+        )
 
     async def test_entry_alert_can_identify_its_stream(self):
         bot = AsyncMock()

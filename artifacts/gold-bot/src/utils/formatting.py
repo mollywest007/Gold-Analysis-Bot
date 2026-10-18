@@ -224,7 +224,7 @@ def _path_plan_lines(
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     risk = abs(entry - stop) if entry and stop else 0.0
     def _rr(target: float) -> str:
-        return f"1:{abs(target - entry) / risk:.1f}" if risk and target > 0 else "Not formed"
+        return f"1:{abs(target - entry) / risk:.2f}" if risk and target > 0 else "Not formed"
 
     rr1 = _rr(float(getattr(a, "tp1", 0.0) or 0.0))
     rr2 = _rr(float(getattr(a, "tp2", 0.0) or 0.0))
@@ -1544,6 +1544,26 @@ def _verbose_legacy_analysis_card(a: MarketAnalysis, alert_label: str = "") -> s
         )
         for index, target_value in enumerate((target, target2, target3), 1)
     ]
+    reference_target_rrs = (
+        report.get("reference_spread_target_rrs", {}) or {}
+    )
+    reference_rr_parts = []
+    for label in ("TP1", "TP2", "TP3"):
+        value = reference_target_rrs.get(label)
+        if value is None:
+            continue
+        try:
+            reference_rr = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if reference_rr >= 0 and reference_rr < float("inf"):
+            reference_rr_parts.append(f"{label} 1:{reference_rr:.2f}")
+    reference_rr_line = (
+        "Reference spread-adjusted R:R: "
+        + " | ".join(reference_rr_parts)
+        if reference_rr_parts
+        else "Reference spread-adjusted R:R: unavailable — no fresh validated two-sided quote."
+    )
     invalidation = float(getattr(a, "invalidation", 0.0) or 0.0)
     rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
     spread_status = str(decision_summary.get("spread_filter_status") or "unavailable")
@@ -1693,6 +1713,7 @@ def _verbose_legacy_analysis_card(a: MarketAnalysis, alert_label: str = "") -> s
         f"TP2     : {fmt_price(target2) if target2 else 'N/A — no later confirmed level'}",
         f"TP3     : {fmt_price(target3) if target3 else 'N/A — no later confirmed level'}",
         "R:R     : " + " | ".join(actual_target_rrs),
+        reference_rr_line,
         (
             "Suggested risk: "
             f"{100 * float(risk_policy.get('risk_per_trade_fraction', 0.005)):.2f}% "
@@ -2202,9 +2223,53 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         for label, target in targets:
             if target > 0:
                 add_row(label, fmt_price(target))
-        rr = float(getattr(a, "rr_ratio", 0.0) or 0.0)
-        if rr > 0:
-            add_row("Risk / reward", f"1:{rr:.2f}")
+        risk_distance = abs(entry - stop) if entry > 0 and stop > 0 else 0.0
+        actual_rr_parts = [
+            f"{label} 1:{abs(target - entry) / risk_distance:.2f}"
+            for label, target in targets
+            if target > 0 and risk_distance > 0
+        ]
+        if actual_rr_parts:
+            add_row("Risk / reward", " | ".join(actual_rr_parts))
+
+        reference_target_rrs = (
+            report.get("reference_spread_target_rrs", {}) or {}
+        )
+        spread_rr_parts = []
+        for label in ("TP1", "TP2", "TP3"):
+            value = reference_target_rrs.get(label)
+            try:
+                spread_rr = float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(spread_rr) and spread_rr >= 0:
+                spread_rr_parts.append(f"{label} 1:{spread_rr:.2f}")
+        if spread_rr_parts:
+            add_row("Spread-adjusted R:R", " | ".join(spread_rr_parts))
+        else:
+            add_row(
+                "Spread-adjusted R:R",
+                "Unavailable — no fresh validated two-sided quote",
+            )
+
+        spread_status = str(
+            decision.get("spread_filter_status", "unavailable") or "unavailable"
+        ).lower()
+        observed_spread = decision.get("observed_market_spread")
+        try:
+            observed_spread = float(observed_spread)
+        except (TypeError, ValueError, OverflowError):
+            observed_spread = None
+        if spread_status in ("passed", "rejected") and observed_spread is not None:
+            add_row(
+                "Reference spread",
+                f"{spread_status.upper()} · {observed_spread:.2f} price units",
+            )
+        else:
+            add_row(
+                "Reference spread",
+                "Unavailable — spread costs were not screened",
+            )
     else:
         zone_low = float(
             getattr(a, "moderate_entry_low", 0.0)

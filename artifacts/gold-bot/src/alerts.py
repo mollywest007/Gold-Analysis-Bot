@@ -17,7 +17,7 @@ from src.analysis.market_data import (
     get_gold_price,
     invalidate_cache,
 )
-from src.analysis.modes import MODES
+from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 from src.mode_manager import get_mode_config
 from src.user_preferences import (
     COMBINED_MODE,
@@ -1398,7 +1398,7 @@ async def _send_setup_forming_alert(
         f"   Early Entry: {provisional_entry:,.2f}\n"
         f"   Stop-Loss : {stop_loss:,.2f}\n"
         f"   Take-Profit: {tp1:,.2f}\n"
-        f"   Risk-to-Reward: 1:{_safe_float(getattr(a, 'rr_ratio', 0.0), 0.0):.1f}\n"
+        f"   Risk-to-Reward: 1:{_safe_float(getattr(a, 'rr_ratio', 0.0), 0.0):.2f}\n"
         f"   Invalidation: {invalidation:,.2f}\n"
         f"   Price action: {getattr(a, 'price_action_setup', '') or 'Developing'}\n"
         f"   Signal Status: {signal_status}\n"
@@ -2062,10 +2062,10 @@ async def _fire_signal(
         )
         if img_bytes:
             sl_dist = abs(market_entry - a.stop_loss)
-            rr1 = round(abs(a.tp1 - market_entry) / sl_dist, 1) if sl_dist > 0 and a.tp1 else 0
+            rr1 = abs(a.tp1 - market_entry) / sl_dist if sl_dist > 0 and a.tp1 else 0.0
             tp3_val = getattr(a, "tp3", None)
-            rr3 = round(abs(tp3_val - market_entry) / sl_dist, 1) if sl_dist > 0 and tp3_val else 0
-            tp3_str = f"   TP3: {tp3_val:,.2f} (1:{rr3})" if tp3_val else ""
+            rr3 = abs(tp3_val - market_entry) / sl_dist if sl_dist > 0 and tp3_val else 0.0
+            tp3_str = f"   TP3: {tp3_val:,.2f} (1:{rr3:.2f})" if tp3_val else ""
             limit_str = (
                 f"Limit: {limit_entry:,.2f}   "
                 if limit_entry and limit_entry != market_entry
@@ -2079,7 +2079,7 @@ async def _fire_signal(
                 f"{entry_heading + '  |  ' if entry_heading else ''}"
                 f"XAU/USD {tf}  |  {a.action}  |  Grade {a.setup_quality}\n"
                 f"{limit_str}Market: {market_entry:,.2f}   SL: {a.stop_loss:,.2f}\n"
-                f"TP1: {a.tp1:,.2f} (1:{rr1}){tp3_str}"
+                f"TP1: {a.tp1:,.2f} (1:{rr1:.2f}){tp3_str}"
             )
             dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
             if dead2:
@@ -2139,12 +2139,12 @@ async def _fire_confluence(
         )
         if img_bytes:
             sl_dist = abs(ref_a.entry - ref_a.stop_loss)
-            rr1 = round(abs(ref_a.tp1 - ref_a.entry) / sl_dist, 1) if sl_dist else 0
+            rr1 = abs(ref_a.tp1 - ref_a.entry) / sl_dist if sl_dist else 0.0
             tfs_str = " + ".join(tf for tf, _ in signal_list)
             caption = (
                 f"CONFLUENCE {direction}  |  XAU/USD  |  {len(signal_list)} TFs\n"
                 f"{tfs_str}\n"
-                f"Ref {ref_tf}  Entry: {ref_a.entry:,.2f}   SL: {ref_a.stop_loss:,.2f}   TP1: {ref_a.tp1:,.2f} (1:{rr1})"
+                f"Ref {ref_tf}  Entry: {ref_a.entry:,.2f}   SL: {ref_a.stop_loss:,.2f}   TP1: {ref_a.tp1:,.2f} (1:{rr1:.2f})"
             )
             dead2 = await _broadcast_photo(bot, subs, img_bytes, caption)
             if dead2:
@@ -2929,6 +2929,25 @@ async def _check_and_alert_once(
         )
         for stream_label, state_key, tf, analysis_mode, a in sig_list:
             try:
+                mode_profile = resolve_momentum_pullback_profile(
+                    MODES[analysis_mode], tf
+                )
+                analysis_atr = _safe_float(
+                    getattr(a, "atr", 0.0), 0.0
+                )
+                if analysis_atr <= 0:
+                    raise ValueError(
+                        "ATR is unavailable for the structural target-spacing guard."
+                    )
+                analysis_report = (
+                    getattr(a, "institutional_report", {}) or {}
+                )
+                decision_summary = (
+                    analysis_report.get("decision_summary", {}) or {}
+                )
+                reference_target_rrs = (
+                    analysis_report.get("reference_spread_target_rrs", {}) or {}
+                )
                 opened = trade_tracker.open_trade(
                     direction=a.action, entry=a.entry, sl=a.stop_loss,
                     tp1=a.tp1, tp2=a.tp2, timeframe=tf,
@@ -2945,10 +2964,21 @@ async def _check_and_alert_once(
                     ),
                     invalidation_level=getattr(a, "invalidation", None),
                     minimum_rr=(
-                        (getattr(a, "institutional_report", {}) or {})
+                        analysis_report
                         .get("mode_rules", {})
                         .get("minimum_target_rr")
                     ),
+                    minimum_target_gap=(
+                        analysis_atr
+                        * float(mode_profile.minimum_target_room_atr)
+                    ),
+                    reference_spread=decision_summary.get(
+                        "observed_market_spread"
+                    ),
+                    reference_spread_status=decision_summary.get(
+                        "spread_filter_status", "unavailable"
+                    ),
+                    reference_spread_rr=reference_target_rrs.get("TP1"),
                     account_id=account_id,
                     allow_same_timeframe_mode=combined_scan,
                 )
@@ -3374,8 +3404,8 @@ async def _send_trade_reminder_once(
         reminder_sent_this_run = False
 
         sl_dist = abs(entry - sl)
-        rr1 = round(abs(tp1 - entry) / sl_dist, 1) if sl_dist > 0 and tp1 else 0
-        rr3 = round(abs(tp3 - entry) / sl_dist, 1) if sl_dist > 0 and tp3 else 0
+        rr1 = abs(tp1 - entry) / sl_dist if sl_dist > 0 and tp1 else 0.0
+        rr3 = abs(tp3 - entry) / sl_dist if sl_dist > 0 and tp3 else 0.0
 
         dir_emoji = "🟢" if direction == "BUY" else "🔴"
 
@@ -3439,7 +3469,7 @@ async def _send_trade_reminder_once(
             # A retrace to entry does not close the remaining position: its
             # original SL and remaining targets stay active after TP1.
             tp2_line = f"TP2  : <b>{tp2:,.2f}</b>\n" if tp2 else ""
-            tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3})\n" if tp3 else ""
+            tp3_line = f"TP3  : <b>{tp3:,.2f}</b>  (1:{rr3:.2f})\n" if tp3 else ""
 
             if label == "entry":
                 header = f"⚠️ <b>MISSED ALERT — ENTRY STILL OPEN</b>"
@@ -3461,7 +3491,7 @@ async def _send_trade_reminder_once(
                 f"Entry : <b>{entry:,.2f}</b>  (now {current_price:,.2f})\n"
                 f"{pnl_note}"
                 f"SL   : <b>{sl:,.2f}</b>\n"
-                f"TP1  : <b>{tp1:,.2f}</b>  {'✅ hit' if tp1_was_hit else f'(1:{rr1})'}\n"
+                f"TP1  : <b>{tp1:,.2f}</b>  {'✅ hit' if tp1_was_hit else f'(1:{rr1:.2f})'}\n"
                 f"{tp2_line}"
                 f"{tp3_line}"
                 f"{tp1_retrace_warning}"

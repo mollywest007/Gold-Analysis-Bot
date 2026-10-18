@@ -500,6 +500,7 @@ def analyze_weighted_market(
             "reference_spread_target_rrs", {}
         ),
         "reference_spread_rr": plan.get("reference_spread_rr"),
+        "minimum_target_spacing": plan.get("minimum_target_spacing"),
         "spread_status": validation.get("spread_status", "unavailable"),
         "spread_atr": validation.get("spread_atr"),
         "spread": spread,

@@ -323,6 +323,31 @@ class TradeLifecycleTests(unittest.TestCase):
         )
         self.assertFalse(opened)
 
+    def test_persistence_rejects_clustered_targets_and_records_spread_screen(self):
+        rejected = trade_tracker.open_trade(
+            "BUY", 100, 90, 120, 120.25, "M15", 75, 2,
+            tp3=130,
+            account_id=8833,
+            minimum_target_gap=0.6,
+        )
+        self.assertFalse(rejected)
+
+        opened = trade_tracker.open_trade(
+            "BUY", 100, 90, 120, 130, "M15", 75, 2,
+            tp3=140,
+            account_id=8834,
+            minimum_target_gap=0.6,
+            reference_spread=0.05,
+            reference_spread_status="passed",
+            reference_spread_rr=1.98,
+        )
+        self.assertTrue(opened)
+        persisted = trade_tracker.get_all_trades(8834)[0]
+        self.assertEqual(persisted["reference_spread"], 0.05)
+        self.assertEqual(persisted["reference_spread_status"], "passed")
+        self.assertEqual(persisted["reference_spread_rr"], 1.98)
+        self.assertEqual(persisted["minimum_target_gap"], 0.6)
+
 
 if __name__ == "__main__":
     unittest.main()
