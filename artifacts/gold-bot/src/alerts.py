@@ -1585,20 +1585,20 @@ async def _send_result_image(
         result  = "LOSS"
         caption = (f"{alert_prefix}🔴 STOP LOSS HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  Exit: {exit_price:,.2f}\n"
-                   f"Loss: {abs(entry - exit_price):,.2f} pts")
+                   f"Price reached the stop {abs(entry - exit_price):,.2f} pts from entry")
     elif event == "TP3":
         result  = "WIN_TP2"
         tp3_val = trade.get("tp3", exit_price)
         caption = (f"{alert_prefix}🔄 ALL TP HIT — MAXIMUM TARGET  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP3: {tp3_val:,.2f}\n"
-                   f"Full run profit: +{abs(entry - exit_price):,.2f} pts")
+                   f"Price reached TP3: +{abs(entry - exit_price):,.2f} pts from entry")
     elif event == "TP1_FINAL":
         result = "WIN_TP1"
         caption = (
             f"{alert_prefix}✅ FINAL STRUCTURAL TARGET HIT  |  "
             f"XAU/USD  |  {timeframe}\n"
             f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
-            f"Profit: +{abs(entry - exit_price):,.2f} pts"
+            f"Price reached TP1: +{abs(entry - exit_price):,.2f} pts from entry"
         )
     elif event == "TP2":
         result  = "WIN_TP2"
@@ -1606,7 +1606,7 @@ async def _send_result_image(
         watching = f"  |  Watching for TP3 @ {tp3_val:,.2f}" if tp3_val else ""
         caption = (f"{alert_prefix}✅ TP2 HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP2: {tp2:,.2f}\n"
-                   f"Profit: +{abs(entry - exit_price):,.2f} pts{watching}")
+                   f"Price reached TP2: +{abs(entry - exit_price):,.2f} pts from entry{watching}")
     elif event == "TP1_SL":
         result = "LOSS"
         if trade.get("close_reason") == "stop_loss":
@@ -1631,7 +1631,12 @@ async def _send_result_image(
         watching = f"  |  Watching for TP2 → TP3 @ {tp3_val:,.2f}" if tp3_val else "  |  Watching for TP2"
         caption = (f"{alert_prefix}✅ TP1 HIT  |  XAU/USD  |  {timeframe}\n"
                    f"{direction}  Entry: {entry:,.2f}  TP1: {tp1:,.2f}\n"
-                   f"Partial profit: +{abs(entry - exit_price):,.2f} pts{watching}")
+                   f"Price reached TP1: +{abs(entry - exit_price):,.2f} pts from entry{watching}")
+
+    caption += (
+        "\nMarket price-level event only; no broker order or fill is "
+        "connected or confirmed. This is not realized P&L."
+    )
 
     try:
         img_bytes = generate_result_image(

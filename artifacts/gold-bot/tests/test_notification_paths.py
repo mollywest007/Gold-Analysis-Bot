@@ -590,6 +590,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         caption = bot.send_photo.await_args.kwargs["caption"]
         self.assertIn("ORIGINAL STOP LOSS HIT AFTER TP1", caption)
         self.assertNotIn("BREAK-EVEN EXIT", caption)
+        self.assertIn("no broker order or fill is connected or confirmed", caption)
+        self.assertIn("not realized P&L", caption)
 
     async def test_status_only_sl_record_is_not_notified(self):
         bot = AsyncMock()
