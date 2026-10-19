@@ -128,11 +128,24 @@ def validate_candidate(
     risk = abs(price - stop)
     min_risk = atr * float(profile.minimum_stop_distance_atr)
     max_risk = atr * float(profile.maximum_stop_distance_atr)
+    stop_widened_to_atr_floor = False
     if risk < min_risk:
-        return {
-            "valid": False,
-            "rejection_reasons": ["Structural stop is inside the configured volatility floor."],
-        }
+        # Keep the real invalidation level, but do not publish a stop inside
+        # this mode's minimum volatility distance. Widening stays beyond the
+        # invalidation; if it exceeds the mode cap, reject the plan below.
+        stop = price - min_risk if direction == "BUY" else price + min_risk
+        risk = abs(price - stop)
+        stop_widened_to_atr_floor = True
+        if (
+            (direction == "BUY" and stop >= invalidation_level)
+            or (direction == "SELL" and stop <= invalidation_level)
+        ):
+            return {
+                "valid": False,
+                "rejection_reasons": [
+                    "Volatility-floor stop does not remain beyond structural invalidation."
+                ],
+            }
     if risk > max_risk:
         return {
             "valid": False,
@@ -369,6 +382,8 @@ def validate_candidate(
         "tp3": published_targets["TP3"],
         "risk": round(published_risk, 5),
         "reward": round(abs(published_targets["TP1"] - published_entry), 5),
+        "stop_widened_to_atr_floor": stop_widened_to_atr_floor,
+        "stop_distance_atr": round(published_risk / atr, 4),
         "rr": published_rr,
         "target_rrs": target_rrs,
         "reference_spread_target_rrs": spread_target_rrs,

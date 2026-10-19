@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +18,18 @@ from src.utils import formatting
 
 
 class AnalysisIntegrityTests(unittest.TestCase):
+    @staticmethod
+    def _legacy_entry_test_mode():
+        """Keep entry-pattern tests independent from the active wider risk floor."""
+        mode = MODES["intraday"]
+        return replace(
+            mode,
+            momentum_pullback=replace(
+                mode.momentum_pullback,
+                minimum_stop_distance_atr=0.25,
+            ),
+        )
+
     def test_ema_and_rsi_alignment_without_swings_cannot_create_a_trade(self):
         closes = [100.0 + index * 0.1 for index in range(24)]
         opens = [close - 0.02 for close in closes]
@@ -74,14 +87,22 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 atr=2.5,
                 rsi=55.0,
                 previous_rsi=54.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
             )
 
         self.assertEqual(result["status"], "MODERATE ENTRY")
         self.assertEqual(result["direction"], "BUY")
-        profile = resolve_momentum_pullback_profile(MODES["intraday"], "M15")
-        expected_stop = round(min(lows[36:39]) - 2.5 * profile.stop_buffer_atr, 2)
+        profile = resolve_momentum_pullback_profile(
+            self._legacy_entry_test_mode(), "M15"
+        )
+        expected_stop = round(
+            min(
+                min(lows[36:39]) - 2.5 * profile.stop_buffer_atr,
+                110.35 - 2.5 * profile.minimum_stop_distance_atr,
+            ),
+            2,
+        )
         self.assertEqual(result["stop_loss"], expected_stop)
         self.assertGreater(result["tp1"], 110.4)
         self.assertEqual(result["tp2"], 0.0)
@@ -104,7 +125,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 atr=2.5,
                 rsi=55.0,
                 previous_rsi=54.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
                 market_spread=0.46,
             )
@@ -116,7 +137,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertGreater(
             result["spread_atr"],
             resolve_momentum_pullback_profile(
-                MODES["intraday"], "M15"
+                self._legacy_entry_test_mode(), "M15"
             ).maximum_spread_atr,
         )
 
@@ -136,7 +157,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
                 atr=2.5,
                 rsi=55.0,
                 previous_rsi=54.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
                 market_spread=0.05,
             )
@@ -146,7 +167,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
         self.assertGreaterEqual(
             result["reference_spread_rr"],
             resolve_momentum_pullback_profile(
-                MODES["intraday"], "M15"
+                self._legacy_entry_test_mode(), "M15"
             ).minimum_target_rr,
         )
 
@@ -162,7 +183,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.25, 110.0, 111.5,
                 2.5, 55.0, 54.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
             )
 
@@ -186,7 +207,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.25, 110.0, 111.5,
                 2.5, 55.0, 54.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
             )
 
@@ -565,7 +586,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.35, 110.0, 111.5,
                 2.5, 44.0, 43.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
             )
 
@@ -595,7 +616,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             result = engine._momentum_pullback_decision(
                 opens, highs, lows, closes, 110.35, 110.0, 111.5,
                 2.5, 47.0, 46.0,
-                mode_cfg=MODES["intraday"],
+                mode_cfg=self._legacy_entry_test_mode(),
                 timeframe="M15",
             )
 

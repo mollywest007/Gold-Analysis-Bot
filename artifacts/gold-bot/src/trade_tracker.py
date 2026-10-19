@@ -171,6 +171,7 @@ def open_trade(
     reference_spread: float | None = None,
     reference_spread_status: str = "unavailable",
     reference_spread_rr: float | None = None,
+    stop_widened_to_atr_floor: bool = False,
 ) -> bool:
     trades = _load()
 
@@ -183,6 +184,8 @@ def open_trade(
         tp1 = float(tp1)
         rr_ratio = float(rr_ratio)
         atr = float(atr or 0.0)
+        if not math.isfinite(atr) or atr < 0:
+            raise ValueError("ATR must be a finite non-negative value.")
         tp2 = (
             float(tp2)
             if tp2 is not None and float(tp2) > 0
@@ -450,6 +453,13 @@ def open_trade(
         "maximum_age_seconds": maximum_age_seconds,
         "confidence":  confidence,
         "rr_ratio":    rr_ratio,
+        "atr":         atr if atr > 0 else None,
+        "risk_distance": round(abs(entry - sl), 5),
+        "tp1_distance": round(abs(tp1 - entry), 5),
+        "stop_distance_atr": (
+            round(abs(entry - sl) / atr, 4) if atr > 0 else None
+        ),
+        "stop_widened_to_atr_floor": bool(stop_widened_to_atr_floor),
         "opened_at":   time.time(),
         "status":      "waiting_for_entry" if waiting_for_entry else "open",
         "invalidation_level": invalidation_level,

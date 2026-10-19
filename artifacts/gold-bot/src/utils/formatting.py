@@ -2231,6 +2231,29 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
         ]
         if actual_rr_parts:
             add_row("Risk / reward", " | ".join(actual_rr_parts))
+        analysis_atr = float(getattr(a, "atr", 0.0) or 0.0)
+        if risk_distance > 0 and math.isfinite(analysis_atr) and analysis_atr > 0:
+            distance_parts = [
+                f"SL {risk_distance:.2f} ({risk_distance / analysis_atr:.2f} ATR)"
+            ]
+            distance_parts.extend(
+                f"{label} {abs(target - entry):.2f} "
+                f"({abs(target - entry) / analysis_atr:.2f} ATR)"
+                for label, target in targets
+                if target > 0
+            )
+            add_row("Price distance", " · ".join(distance_parts))
+
+        if decision.get("stop_widened_to_atr_floor"):
+            try:
+                minimum_stop_atr = float(mode_rules.get("minimum_stop_atr"))
+            except (TypeError, ValueError, OverflowError):
+                minimum_stop_atr = 0.0
+            if math.isfinite(minimum_stop_atr) and minimum_stop_atr > 0:
+                add_row(
+                    "Stop placement",
+                    f"Widened to {minimum_stop_atr:.2f} ATR mode floor beyond invalidation",
+                )
 
         reference_target_rrs = (
             report.get("reference_spread_target_rrs", {}) or {}

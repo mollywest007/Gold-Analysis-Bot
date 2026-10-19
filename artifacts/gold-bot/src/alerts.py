@@ -2979,6 +2979,9 @@ async def _check_and_alert_once(
                         "spread_filter_status", "unavailable"
                     ),
                     reference_spread_rr=reference_target_rrs.get("TP1"),
+                    stop_widened_to_atr_floor=bool(
+                        decision_summary.get("stop_widened_to_atr_floor", False)
+                    ),
                     account_id=account_id,
                     allow_same_timeframe_mode=combined_scan,
                 )

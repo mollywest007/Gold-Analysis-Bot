@@ -186,6 +186,89 @@ class StructuralTargetTests(unittest.TestCase):
             ),
         )
 
+    def test_buy_and_sell_stops_expand_to_the_mode_atr_floor(self):
+        profile = resolve_momentum_pullback_profile(MODES["intraday"], "M15")
+        cases = (
+            (
+                "BUY",
+                99.90,
+                SimpleNamespace(
+                    swing_highs=[(10, 102.0), (20, 105.0), (30, 110.0)],
+                    swing_lows=[(12, 99.90)],
+                    resistances=[],
+                    supports=[],
+                ),
+            ),
+            (
+                "SELL",
+                100.10,
+                SimpleNamespace(
+                    swing_highs=[(10, 100.10)],
+                    swing_lows=[(12, 98.0), (20, 95.0), (30, 90.0)],
+                    resistances=[],
+                    supports=[],
+                ),
+            ),
+        )
+
+        for direction, invalidation, structure in cases:
+            with self.subTest(direction=direction):
+                plan = validate_candidate(
+                    SimpleNamespace(
+                        direction=direction,
+                        invalidation_level=invalidation,
+                        level=100.0,
+                    ),
+                    price=100.0,
+                    atr=1.0,
+                    structure=structure,
+                    profile=profile,
+                    spread=None,
+                    preferred_rr=1.8,
+                )
+                self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+                self.assertTrue(plan["stop_widened_to_atr_floor"])
+                self.assertGreaterEqual(
+                    abs(plan["entry"] - plan["stop_loss"]),
+                    profile.minimum_stop_distance_atr - 0.01,
+                )
+                self.assertGreaterEqual(
+                    plan["rr"],
+                    profile.minimum_target_rr,
+                )
+                if direction == "BUY":
+                    self.assertLess(plan["stop_loss"], plan["invalidation_level"])
+                    self.assertLess(plan["tp1"], 102.0)
+                else:
+                    self.assertGreater(plan["stop_loss"], plan["invalidation_level"])
+                    self.assertGreater(plan["tp1"], 98.0)
+
+    def test_wider_stop_returns_wait_when_structure_cannot_support_target(self):
+        profile = resolve_momentum_pullback_profile(MODES["intraday"], "M15")
+        plan = validate_candidate(
+            SimpleNamespace(
+                direction="BUY",
+                invalidation_level=99.90,
+                level=100.0,
+            ),
+            price=100.0,
+            atr=1.0,
+            structure=SimpleNamespace(
+                swing_highs=[(10, 100.50)],
+                swing_lows=[(12, 99.90)],
+                resistances=[],
+                supports=[],
+            ),
+            profile=profile,
+            spread=None,
+            preferred_rr=1.8,
+        )
+        self.assertFalse(plan["valid"])
+        self.assertTrue(
+            any("R:R" in reason for reason in plan["rejection_reasons"]),
+            plan["rejection_reasons"],
+        )
+
 
 class TradeLifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -335,11 +418,13 @@ class TradeLifecycleTests(unittest.TestCase):
         opened = trade_tracker.open_trade(
             "BUY", 100, 90, 120, 130, "M15", 75, 2,
             tp3=140,
+            atr=10,
             account_id=8834,
             minimum_target_gap=0.6,
             reference_spread=0.05,
             reference_spread_status="passed",
             reference_spread_rr=1.98,
+            stop_widened_to_atr_floor=True,
         )
         self.assertTrue(opened)
         persisted = trade_tracker.get_all_trades(8834)[0]
@@ -347,6 +432,11 @@ class TradeLifecycleTests(unittest.TestCase):
         self.assertEqual(persisted["reference_spread_status"], "passed")
         self.assertEqual(persisted["reference_spread_rr"], 1.98)
         self.assertEqual(persisted["minimum_target_gap"], 0.6)
+        self.assertEqual(persisted["atr"], 10)
+        self.assertEqual(persisted["risk_distance"], 10)
+        self.assertEqual(persisted["tp1_distance"], 20)
+        self.assertEqual(persisted["stop_distance_atr"], 1.0)
+        self.assertTrue(persisted["stop_widened_to_atr_floor"])
 
 
 if __name__ == "__main__":

@@ -2221,19 +2221,15 @@ def _momentum_pullback_decision(
     else:
         stop = swing_extreme + stop_buffer
     risk = abs(entry - stop)
+    stop_widened_to_atr_floor = False
     if risk < minimum_noise_distance:
-        return {
-            **empty,
-            "direction": direction,
-            "setup": "Structural stop is too tight for current volatility",
-            "confirmation": (
-            "The structural stop is inside the volatility sanity floor; "
-                "skip rather than widening it away from structure."
-            ),
-            "quality_checks": checks,
-            "skip_reason": "Invalid SL structure",
-            "skip_detail": "The structural stop is unrealistically tight for current ATR14.",
-        }
+        stop = (
+            entry - minimum_noise_distance
+            if bullish
+            else entry + minimum_noise_distance
+        )
+        risk = abs(entry - stop)
+        stop_widened_to_atr_floor = True
     if risk > volatility * profile.maximum_stop_distance_atr:
         return {
             **empty,
@@ -2277,7 +2273,11 @@ def _momentum_pullback_decision(
         }
 
     checks.extend([
-        "Stop is beyond structural invalidation with an ATR noise buffer",
+        (
+            "Stop is beyond structural invalidation with the mode ATR volatility floor"
+            if stop_widened_to_atr_floor
+            else "Stop is beyond structural invalidation with an ATR noise buffer"
+        ),
         (
             "Nearest structural target offers at least "
             f"{profile.minimum_target_rr:g}R of clear room"
@@ -2380,6 +2380,8 @@ def _momentum_pullback_decision(
         "entry_high": round(entry + half_zone, 2),
         "invalidation": round(stop, 2),
         "stop_loss": round(stop, 2),
+        "stop_widened_to_atr_floor": stop_widened_to_atr_floor,
+        "stop_distance_atr": round(risk / volatility, 4),
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
@@ -2917,6 +2919,10 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         "decision_summary": {
             "rejection_reasons": result.get("rejection_reasons", []),
             "invalidation_conditions": result.get("invalidation_conditions", []),
+            "stop_widened_to_atr_floor": result.get(
+                "stop_widened_to_atr_floor", False
+            ),
+            "stop_distance_atr": result.get("stop_distance_atr"),
             "spread_filter_status": result.get("spread_status", "unavailable"),
             "observed_market_spread": result.get("spread"),
             "spread_atr": result.get("spread_atr"),

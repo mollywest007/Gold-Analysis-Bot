@@ -38,3 +38,19 @@ Each mode's hard R:R minimum is separate from its preferred target R:R. Aim for 
 **Why:** The user requires mode-specific R:R floors and explicitly forbids inventing distant targets to reach a preferred ratio.
 
 **How to apply:** Preserve Scalp 1:1.3, Intraday 1:1.5, Swing 1:2, Position 1:2 as hard floors; derive each displayed ratio from the exact rounded entry, stop, and target.
+
+## Spacing between structural target milestones
+
+Require each later target to be at least the selected mode/timeframe's `minimum_target_room_atr × ATR` beyond the previous target. If confirmed structure does not provide that room, omit TP2/TP3 rather than presenting nearby pivots and zone centers as separate milestones.
+
+**Why:** Swing pivots and support/resistance-zone centers can describe the same price cluster, creating misleadingly close target levels.
+
+**How to apply:** Keep TP1's structural and R:R validation authoritative; apply the spacing rule to optional later targets and the final trade-persistence guard. Never rewrite an existing plan retroactively.
+
+## Mode-specific TP/SL scale
+
+Keep Scalp stops and targets shortest, then scale up progressively for Intraday, Swing, and Position using each mode's ATR-based stop floor, structural invalidation, and preferred R:R. Do not use a shared fixed-dollar distance; if real structure cannot support the wider stop and minimum target R:R, return WAIT.
+
+**Why:** The user explicitly asked for mode-distinct levels because the existing TP and SL distances were too small, especially for longer-horizon modes.
+
+**How to apply:** Maintain increasing mode-specific ATR floors and buffers, preserve hard risk caps, and cap targets at confirmed market structure rather than inventing farther levels.

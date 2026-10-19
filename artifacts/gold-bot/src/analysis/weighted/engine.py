@@ -491,6 +491,10 @@ def analyze_weighted_market(
         "entry_zone_high": plan.get("entry_zone_high", 0.0),
         "stop_loss": plan.get("stop_loss", 0.0),
         "invalidation": plan.get("invalidation_level", 0.0),
+        "stop_widened_to_atr_floor": plan.get(
+            "stop_widened_to_atr_floor", False
+        ),
+        "stop_distance_atr": plan.get("stop_distance_atr"),
         "take_profit": plan.get("take_profit", 0.0),
         "tp2": plan.get("tp2"),
         "tp3": plan.get("tp3"),

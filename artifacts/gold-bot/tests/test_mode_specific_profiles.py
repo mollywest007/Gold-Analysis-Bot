@@ -62,6 +62,37 @@ class ModeSpecificProfileTests(unittest.TestCase):
             },
         )
 
+    def test_stop_and_preferred_target_distances_scale_by_mode(self):
+        modes = ("scalp", "intraday", "swing", "position")
+        stop_floors = [
+            MODES[mode].momentum_pullback.minimum_stop_distance_atr
+            for mode in modes
+        ]
+        stop_buffers = [
+            MODES[mode].momentum_pullback.stop_buffer_atr
+            for mode in modes
+        ]
+        preferred_target_distances = [
+            (
+                MODES[mode].momentum_pullback.minimum_stop_distance_atr
+                * MODES[mode].momentum_pullback.preferred_target_rr
+            )
+            for mode in modes
+        ]
+
+        self.assertEqual(stop_floors, [0.45, 0.70, 1.00, 1.25])
+        self.assertEqual(stop_buffers, [0.10, 0.15, 0.20, 0.25])
+        self.assertEqual(
+            preferred_target_distances,
+            [0.675, 1.26, 2.0, 3.75],
+        )
+        self.assertEqual(stop_floors, sorted(stop_floors))
+        self.assertEqual(stop_buffers, sorted(stop_buffers))
+        self.assertEqual(
+            preferred_target_distances,
+            sorted(preferred_target_distances),
+        )
+
     def test_mode_rules_scale_with_the_selected_timeframe(self):
         scalp_m1 = resolve_momentum_pullback_profile(MODES["scalp"], "M1")
         scalp_m15 = resolve_momentum_pullback_profile(MODES["scalp"], "M15")
