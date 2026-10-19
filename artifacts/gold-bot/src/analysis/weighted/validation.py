@@ -2,6 +2,22 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+
+
+_PRICE_QUANTUM = Decimal("0.01")
+
+
+def _round_toward_invalidation(value: float, direction: str) -> float:
+    """Round stops/invalidation away from entry and target caps toward entry."""
+    rounding = ROUND_FLOOR if direction == "BUY" else ROUND_CEILING
+    return float(Decimal(str(value)).quantize(_PRICE_QUANTUM, rounding=rounding))
+
+
+def _round_away_from_entry(value: float, direction: str) -> float:
+    """Round a required reward outward so published levels retain their R:R."""
+    rounding = ROUND_CEILING if direction == "BUY" else ROUND_FLOOR
+    return float(Decimal(str(value)).quantize(_PRICE_QUANTUM, rounding=rounding))
 
 
 def _zone_value(zone, key: str):
@@ -189,50 +205,7 @@ def validate_candidate(
         if preferred_rr is not None
         else float(getattr(profile, "preferred_target_rr", minimum_rr)),
     )
-    preferred_target = (
-        price + risk * target_rr
-        if direction == "BUY"
-        else price - risk * target_rr
-    )
-    # TP1 is capped at the mode's preferred R:R, but never placed beyond the
-    # nearest opposing level. If spread costs require slightly more room, that
-    # room must still exist before the same real structural level.
-    if spread_value is not None:
-        minimum_spread_reward = minimum_rr * (risk + spread_value / 2.0) + spread_value
-        minimum_spread_target = (
-            price + minimum_spread_reward
-            if direction == "BUY"
-            else price - minimum_spread_reward
-        )
-        target = (
-            min(structural_target, max(preferred_target, minimum_spread_target))
-            if direction == "BUY"
-            else max(structural_target, min(preferred_target, minimum_spread_target))
-        )
-    else:
-        target = (
-            min(structural_target, preferred_target)
-            if direction == "BUY"
-            else max(structural_target, preferred_target)
-        )
-    reward = target - price if direction == "BUY" else price - target
-    if reward <= 0:
-        return {
-            "valid": False,
-            "rejection_reasons": ["The nearest structural target is not ahead of entry."],
-        }
-    rr = reward / risk
-    if rr < minimum_rr:
-        return {
-            "valid": False,
-            "rejection_reasons": [
-                f"Nearest opposing structure leaves only 1:{rr:.2f} R:R; "
-                f"mode minimum is 1:{minimum_rr:.2f}."
-            ],
-            "nearest_opposing_level": nearest_level,
-            "rr": round(rr, 2),
-        }
-
+    spread_atr = None
     spread_rr = None
     spread_status = "unavailable"
     if spread_value is not None:
@@ -249,12 +222,120 @@ def validate_candidate(
                 "spread_status": spread_status,
                 "spread_atr": round(spread_atr, 4),
             }
-        spread_rr = (reward - spread_value) / (risk + spread_value / 2.0)
+
+    # All prices are published to cents. Stops and invalidation round away from
+    # entry; targets round toward entry so they cannot cross their structural
+    # cap. Rebuild TP1 from the published entry/stop so the published risk and
+    # spread-adjusted R:R, not intermediate floating-point values, govern it.
+    published_entry = round(price, 2)
+    published_stop = _round_toward_invalidation(stop, direction)
+    published_invalidation = _round_toward_invalidation(
+        invalidation_level, direction
+    )
+    published_risk_decimal = abs(
+        Decimal(str(published_entry)) - Decimal(str(published_stop))
+    )
+    published_risk = float(published_risk_decimal)
+    if published_risk <= 0:
+        return {
+            "valid": False,
+            "rejection_reasons": ["Rounded entry and stop do not define positive risk."],
+        }
+    minimum_published_risk = atr * float(profile.minimum_stop_distance_atr)
+    maximum_published_risk = atr * float(profile.maximum_stop_distance_atr)
+    if published_risk + 1e-9 < minimum_published_risk:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "Rounded stop falls inside the mode's minimum ATR risk distance."
+            ],
+        }
+    if published_risk > maximum_published_risk + 1e-9:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "Rounded structural stop exceeds the mode's configured ATR risk cap."
+            ],
+        }
+    entry_decimal = Decimal(str(published_entry))
+    risk_decimal = published_risk_decimal
+    target_rr_decimal = Decimal(str(target_rr))
+    preferred_reward = risk_decimal * target_rr_decimal
+    preferred_target_decimal = (
+        entry_decimal + preferred_reward
+        if direction == "BUY"
+        else entry_decimal - preferred_reward
+    )
+    if spread_value is not None:
+        spread_decimal = Decimal(str(spread_value))
+        minimum_spread_reward = (
+            Decimal(str(minimum_rr))
+            * (risk_decimal + spread_decimal / Decimal("2"))
+            + spread_decimal
+        )
+        minimum_spread_target_decimal = (
+            entry_decimal + minimum_spread_reward
+            if direction == "BUY"
+            else entry_decimal - minimum_spread_reward
+        )
+    else:
+        minimum_spread_target_decimal = preferred_target_decimal
+    desired_target_decimal = (
+        max(preferred_target_decimal, minimum_spread_target_decimal)
+        if direction == "BUY"
+        else min(preferred_target_decimal, minimum_spread_target_decimal)
+    )
+    structural_target_decimal = Decimal(str(structural_target))
+    target_decimal = (
+        min(structural_target_decimal, desired_target_decimal)
+        if direction == "BUY"
+        else max(structural_target_decimal, desired_target_decimal)
+    )
+    structural_target_cap = _round_toward_invalidation(
+        structural_target, direction
+    )
+    rounded_required_target = _round_away_from_entry(
+        target_decimal, direction
+    )
+    published_tp1 = (
+        min(rounded_required_target, structural_target_cap)
+        if direction == "BUY"
+        else max(rounded_required_target, structural_target_cap)
+    )
+    reward_decimal = (
+        Decimal(str(published_tp1)) - Decimal(str(published_entry))
+        if direction == "BUY"
+        else Decimal(str(published_entry)) - Decimal(str(published_tp1))
+    )
+    reward = float(reward_decimal)
+    if reward <= 0:
+        return {
+            "valid": False,
+            "rejection_reasons": ["The nearest structural target is not ahead of entry."],
+        }
+    rr = float(reward_decimal / published_risk_decimal)
+    if rr + 1e-9 < minimum_rr:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                f"Rounded nearest opposing structure leaves only 1:{rr:.2f} R:R; "
+                f"mode minimum is 1:{minimum_rr:.2f}."
+            ],
+            "nearest_opposing_level": nearest_level,
+            "rr": round(rr, 2),
+        }
+
+    if spread_value is not None:
+        spread_decimal = Decimal(str(spread_value))
+        spread_rr = float(
+            (reward_decimal - spread_decimal)
+            / (published_risk_decimal + spread_decimal / Decimal("2"))
+        )
         if spread_rr + 1e-9 < minimum_rr:
             return {
                 "valid": False,
                 "rejection_reasons": [
-                    f"Reference-spread-adjusted R:R is 1:{spread_rr:.2f}, "
+                    f"Rounded reference-spread-adjusted R:R is 1:{spread_rr:.2f}, "
                     f"below the 1:{minimum_rr:.2f} minimum."
                 ],
                 "spread_status": "rejected",
@@ -263,8 +344,7 @@ def validate_candidate(
             }
 
     # Further targets must be distinct, confirmed opposing levels. Pivot
-    # prices and resistance/support-zone centers often describe the same area;
-    # do not present those near-duplicates as separate profit milestones.
+    # prices and resistance/support-zone centers often describe the same area.
     minimum_target_spacing = max(
         atr * float(profile.minimum_target_room_atr),
         target_buffer * 2.0,
@@ -272,39 +352,24 @@ def validate_candidate(
         0.01,
     )
     later_targets = []
-    last_target = target
+    last_target = published_tp1
     for level in structural_targets:
+        published_level = _round_toward_invalidation(level, direction)
         spacing = (
-            level - last_target
+            published_level - last_target
             if direction == "BUY"
-            else last_target - level
+            else last_target - published_level
         )
         if spacing + 1e-9 < minimum_target_spacing:
             continue
-        later_targets.append(level)
-        last_target = level
+        later_targets.append(published_level)
+        last_target = published_level
         if len(later_targets) == 2:
             break
     tp2 = later_targets[0] if later_targets else None
     tp3 = later_targets[1] if len(later_targets) > 1 else None
+    published_targets = {"TP1": published_tp1, "TP2": tp2, "TP3": tp3}
 
-    # All plan prices are published and persisted to cents. Recompute risk and
-    # reward from those exact prices so the displayed ratios describe the plan
-    # the tracker actually receives, not higher-precision intermediate values.
-    published_entry = round(price, 2)
-    published_stop = round(stop, 2)
-    published_invalidation = round(invalidation_level, 2)
-    published_targets = {
-        "TP1": round(target, 2),
-        "TP2": round(tp2, 2) if tp2 is not None else None,
-        "TP3": round(tp3, 2) if tp3 is not None else None,
-    }
-    published_risk = abs(published_entry - published_stop)
-    if published_risk <= 0:
-        return {
-            "valid": False,
-            "rejection_reasons": ["Rounded entry and stop do not define positive risk."],
-        }
     if (
         (
             direction == "BUY"
@@ -329,16 +394,24 @@ def validate_candidate(
     for label, target_value in published_targets.items():
         if target_value is None:
             continue
-        reward_value = (
-            target_value - published_entry
+        reward_decimal = (
+            Decimal(str(target_value)) - Decimal(str(published_entry))
             if direction == "BUY"
-            else published_entry - target_value
+            else Decimal(str(published_entry)) - Decimal(str(target_value))
         )
-        target_rrs[label] = round(reward_value / published_risk, 2)
+        target_rrs[label] = round(
+            float(reward_decimal / published_risk_decimal), 2
+        )
         if spread_value is not None:
+            spread_decimal = Decimal(str(spread_value))
             spread_target_rrs[label] = round(
-                (reward_value - spread_value)
-                / (published_risk + spread_value / 2.0),
+                float(
+                    (reward_decimal - spread_decimal)
+                    / (
+                        published_risk_decimal
+                        + spread_decimal / Decimal("2")
+                    )
+                ),
                 2,
             )
     published_rr = target_rrs["TP1"]
