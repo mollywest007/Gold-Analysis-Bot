@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import math
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
@@ -96,18 +97,49 @@ class AnalysisIntegrityTests(unittest.TestCase):
         profile = resolve_momentum_pullback_profile(
             self._legacy_entry_test_mode(), "M15"
         )
-        expected_stop = round(
-            min(
-                min(lows[36:39]) - 2.5 * profile.stop_buffer_atr,
-                110.35 - 2.5 * profile.minimum_stop_distance_atr,
-            ),
-            2,
+        raw_expected_stop = min(
+            min(lows[36:39]) - 2.5 * profile.stop_buffer_atr,
+            110.35 - 2.5 * profile.minimum_stop_distance_atr,
         )
+        expected_stop = math.floor(
+            raw_expected_stop * 100 + 1e-9
+        ) / 100
         self.assertEqual(result["stop_loss"], expected_stop)
         self.assertGreater(result["tp1"], 110.4)
         self.assertEqual(result["tp2"], 0.0)
         self.assertEqual(result["tp3"], 0.0)
         self.assertGreaterEqual(result["rr"], 1.0)
+
+    def test_legacy_structural_targets_round_inside_buffered_pivots(self):
+        buy_tp1, _, _, buy_issue = engine._structure_targets(
+            "BUY",
+            100.0,
+            99.0,
+            1.0,
+            [(10, 102.005)],
+            [(12, 98.0)],
+            target_buffer_atr=0.10,
+            minimum_rr=1.0,
+            minimum_room_atr=0.75,
+        )
+        sell_tp1, _, _, sell_issue = engine._structure_targets(
+            "SELL",
+            100.0,
+            101.0,
+            1.0,
+            [(10, 102.0)],
+            [(12, 97.895)],
+            target_buffer_atr=0.10,
+            minimum_rr=1.0,
+            minimum_room_atr=0.75,
+        )
+
+        self.assertEqual(buy_issue, "")
+        self.assertEqual(sell_issue, "")
+        self.assertEqual(buy_tp1, 101.90)
+        self.assertLessEqual(buy_tp1, 102.005 - 0.10)
+        self.assertEqual(sell_tp1, 98.00)
+        self.assertGreaterEqual(sell_tp1, 97.895 + 0.10)
 
     def test_reference_spread_filter_rejects_spread_above_mode_atr_cap(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()

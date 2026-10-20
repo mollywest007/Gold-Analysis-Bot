@@ -9,6 +9,14 @@ The current XAU/USD engine uses mode-configured context, selected setup, and opt
 
 **How to apply:** Keep the selected setup timeframe authoritative, derive context/refinement roles from the active mode, and ensure mode selection applies the matching score thresholds, weights, lookbacks, volatility limits, and R:R settings. Do not treat the combined coordinator as a standalone strategy.
 
+## Preserve the existing engine
+
+Inspect and improve the existing trading engine rather than rebuilding it. Preserve working behavior, and explain evidence and findings before making significant strategy changes.
+
+**Why:** The user explicitly asked to retain the existing implementation and avoid unsupported strategy changes.
+
+**How to apply:** Trace the live and backtest paths first; make narrow corrections for confirmed defects, and do not change mode thresholds or strategy rules without reporting the evidence and expected effect.
+
 ## Backtest evidence boundary
 
 Existing trade summaries without historical OHLCV cannot replay the active strategy.

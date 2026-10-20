@@ -19,6 +19,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import List, Tuple, Optional
 
 from .market_data import (
@@ -35,6 +36,13 @@ from .weighted.config import resolve_analysis_config
 from .weighted.engine import analyze_weighted_market
 
 logger = logging.getLogger(__name__)
+_PRICE_QUANTUM = Decimal("0.01")
+
+
+def _round_price_to_cent(value: float, rounding: str) -> float:
+    return float(
+        Decimal(str(value)).quantize(_PRICE_QUANTUM, rounding=rounding)
+    )
 
 
 # ─── Data types ───────────────────────────────────────────────────────────────
@@ -1599,13 +1607,19 @@ def _structure_targets(
         levels = sorted(
             {level for _, level in swing_highs if level > entry + buffer}
         )
-        targets = [round(level - buffer, 2) for level in levels]
+        targets = [
+            _round_price_to_cent(level - buffer, ROUND_FLOOR)
+            for level in levels
+        ]
     else:
         levels = sorted(
             {level for _, level in swing_lows if level < entry - buffer},
             reverse=True,
         )
-        targets = [round(level + buffer, 2) for level in levels]
+        targets = [
+            _round_price_to_cent(level + buffer, ROUND_CEILING)
+            for level in levels
+        ]
 
     targets = [
         target for target in targets
@@ -2288,15 +2302,63 @@ def _momentum_pullback_decision(
     # plan; intermediate unrounded levels can otherwise pass a floor that the
     # user-visible trade does not meet.
     published_entry = round(entry, 2)
-    published_stop = round(stop, 2)
-    published_tp1 = round(tp1, 2)
+    published_stop = _round_price_to_cent(
+        stop, ROUND_FLOOR if bullish else ROUND_CEILING
+    )
+    published_tp1 = tp1
     published_risk = abs(published_entry - published_stop)
     published_reward = abs(published_tp1 - published_entry)
-    rr = (
-        round(published_reward / published_risk, 2)
-        if published_risk > 0
-        else 0.0
-    )
+    exact_rr = published_reward / published_risk if published_risk > 0 else 0.0
+    rr = round(exact_rr, 2)
+    if (
+        published_risk + 1e-9 < minimum_noise_distance
+        or published_risk
+        > volatility * profile.maximum_stop_distance_atr + 1e-9
+    ):
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Published stop does not fit the mode's risk limits",
+            "confirmation": (
+                "After cent rounding, the displayed structural stop is inside "
+                "the volatility floor or beyond the mode's risk cap."
+            ),
+            "quality_checks": checks,
+            "skip_reason": "Invalid SL structure",
+            "skip_detail": "Published stop distance violates the mode's ATR risk limits.",
+        }
+    if (
+        (bullish and (published_stop >= published_entry or published_tp1 <= published_entry))
+        or (
+            not bullish
+            and (published_stop <= published_entry or published_tp1 >= published_entry)
+        )
+    ):
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Rounded trade levels have invalid direction",
+            "confirmation": (
+                "The published stop and target must remain on opposite sides "
+                "of the entry after cent rounding."
+            ),
+            "quality_checks": checks,
+            "skip_reason": "Invalid published TP/SL geometry",
+            "skip_detail": "Rounded prices no longer form a valid directional trade plan.",
+        }
+    if exact_rr + 1e-9 < profile.minimum_target_rr:
+        return {
+            **empty,
+            "direction": direction,
+            "setup": "Published target falls below the mode's minimum R:R",
+            "confirmation": (
+                f"After cent rounding, structural TP1 provides only 1:{exact_rr:.4f}; "
+                f"the mode minimum is 1:{profile.minimum_target_rr:.2f}."
+            ),
+            "quality_checks": checks,
+            "skip_reason": "Insufficient TP room",
+            "skip_detail": "Published prices do not meet the mode's minimum reward-to-risk ratio.",
+        }
     spread_atr = (
         float(market_spread) / volatility
         if market_spread is not None and math.isfinite(float(market_spread))
@@ -2397,7 +2459,7 @@ def _momentum_pullback_decision(
         "invalidation": round(stop, 2),
         "stop_loss": published_stop,
         "stop_widened_to_atr_floor": stop_widened_to_atr_floor,
-        "stop_distance_atr": round(risk / volatility, 4),
+        "stop_distance_atr": round(published_risk / volatility, 4),
         "tp1": published_tp1,
         "tp2": tp2,
         "tp3": tp3,
