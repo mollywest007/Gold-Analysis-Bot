@@ -370,6 +370,83 @@ class TPslFormulaAuditTests(unittest.TestCase):
             " ".join(cost_limited["rejection_reasons"]).lower(),
         )
 
+    def test_persisted_scalp_example_is_checked_against_exact_spread_cost(self):
+        # Observed 2026-10-19 M15 Scalp record; keep this calculation explicit
+        # so its rounded 1.30 display cannot hide a below-floor exact result.
+        entry = Decimal("4170.40")
+        stop = Decimal("4167.39")
+        target = Decimal("4175.45")
+        spread = Decimal("0.69")
+        minimum_rr = Decimal("1.3")
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        exact_spread_rr = (reward - spread) / (risk + spread / Decimal("2"))
+        required_reward = (
+            minimum_rr * (risk + spread / Decimal("2")) + spread
+        )
+
+        self.assertEqual(round(float(risk / Decimal("6.4717")), 4), 0.4651)
+        self.assertLess(exact_spread_rr, minimum_rr)
+        self.assertEqual(round(float(exact_spread_rr), 2), 1.30)
+        self.assertEqual(required_reward - reward, Decimal("0.0015"))
+        self.assertEqual(
+            _cent(entry + required_reward, ROUND_CEILING), 4175.46
+        )
+
+    def test_real_signal_metrics_move_out_one_cent_or_reject_at_structure_cap(self):
+        # ATR/entry/spread come from the persisted Scalp trade. Structural
+        # levels are synthetic because that trade did not persist its pivots.
+        entry, atr, spread = 4170.40, 6.4717, 0.69
+        profile = resolve_analysis_config(
+            MODES["scalp"], "M15"
+        ).profile
+        distant_structure = SimpleNamespace(
+            swing_highs=[(10, entry + 20 * atr)],
+            swing_lows=[(20, entry - atr)],
+            supports=[],
+            resistances=[],
+        )
+        accepted = validate_candidate(
+            _candidate("BUY", entry, atr),
+            price=entry,
+            atr=atr,
+            structure=distant_structure,
+            profile=profile,
+            spread=spread,
+        )
+        self.assertTrue(accepted["valid"], accepted.get("rejection_reasons"))
+        self.assertEqual(accepted["stop_loss"], 4167.39)
+        self.assertEqual(accepted["tp1"], 4175.46)
+        exact_spread_rr = (
+            (accepted["tp1"] - accepted["entry"] - spread)
+            / (
+                abs(accepted["entry"] - accepted["stop_loss"])
+                + spread / 2
+            )
+        )
+        self.assertGreaterEqual(exact_spread_rr, profile.minimum_target_rr)
+
+        capped_structure = SimpleNamespace(
+            swing_highs=[(10, 4176.00)],
+            swing_lows=[(20, entry - atr)],
+            supports=[],
+            resistances=[],
+        )
+        capped = validate_candidate(
+            _candidate("BUY", entry, atr),
+            price=entry,
+            atr=atr,
+            structure=capped_structure,
+            profile=profile,
+            spread=spread,
+        )
+        self.assertFalse(capped["valid"])
+        self.assertTrue(
+            any("spread-adjusted R:R" in reason
+                for reason in capped["rejection_reasons"]),
+            capped["rejection_reasons"],
+        )
+
     def test_no_candidate_or_insufficient_market_history_produces_no_plan(self):
         missing = validate_candidate(
             _candidate("BUY", 100.0, 1.0),

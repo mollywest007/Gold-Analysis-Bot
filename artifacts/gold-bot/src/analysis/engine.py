@@ -2283,7 +2283,20 @@ def _momentum_pullback_decision(
             f"{profile.minimum_target_rr:g}R of clear room"
         ),
     ])
-    rr = round(abs(tp1 - entry) / risk, 2)
+    # The trade card and tracker publish two-decimal prices. Recompute risk,
+    # reward, and both R:R values from those exact prices before accepting a
+    # plan; intermediate unrounded levels can otherwise pass a floor that the
+    # user-visible trade does not meet.
+    published_entry = round(entry, 2)
+    published_stop = round(stop, 2)
+    published_tp1 = round(tp1, 2)
+    published_risk = abs(published_entry - published_stop)
+    published_reward = abs(published_tp1 - published_entry)
+    rr = (
+        round(published_reward / published_risk, 2)
+        if published_risk > 0
+        else 0.0
+    )
     spread_atr = (
         float(market_spread) / volatility
         if market_spread is not None and math.isfinite(float(market_spread))
@@ -2313,19 +2326,22 @@ def _momentum_pullback_decision(
         # Conservative estimate from midpoint-based levels: budget the observed
         # spread against reward and half-spread against stop risk. Commissions
         # and slippage remain unavailable and are not implied here.
-        reference_spread_rr = round(
-            (abs(tp1 - entry) - float(market_spread))
-            / (risk + float(market_spread) / 2.0),
-            2,
+        exact_reference_spread_rr = (
+            (published_reward - float(market_spread))
+            / (published_risk + float(market_spread) / 2.0)
+            if published_risk > 0
+            else 0.0
         )
-        if reference_spread_rr < profile.minimum_target_rr:
+        reference_spread_rr = round(exact_reference_spread_rr, 2)
+        if exact_reference_spread_rr + 1e-9 < profile.minimum_target_rr:
             return {
                 **empty,
                 "direction": direction,
                 "setup": "Reference spread reduces the plan below its R:R floor",
                 "confirmation": (
                     f"Estimated R:R after reference spread is "
-                    f"1:{reference_spread_rr:g}, below the configured "
+                    f"1:{reference_spread_rr:.2f} "
+                    f"(exact 1:{exact_reference_spread_rr:.4f}), below the configured "
                     f"1:{profile.minimum_target_rr:g} minimum."
                 ),
                 "quality_checks": checks,
@@ -2379,10 +2395,10 @@ def _momentum_pullback_decision(
         "entry_low": round(entry - half_zone, 2),
         "entry_high": round(entry + half_zone, 2),
         "invalidation": round(stop, 2),
-        "stop_loss": round(stop, 2),
+        "stop_loss": published_stop,
         "stop_widened_to_atr_floor": stop_widened_to_atr_floor,
         "stop_distance_atr": round(risk / volatility, 4),
-        "tp1": tp1,
+        "tp1": published_tp1,
         "tp2": tp2,
         "tp3": tp3,
         "rr": rr,

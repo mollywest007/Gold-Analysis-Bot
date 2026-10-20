@@ -171,6 +171,55 @@ class AnalysisIntegrityTests(unittest.TestCase):
             ).minimum_target_rr,
         )
 
+    def test_reference_spread_floor_is_checked_before_rounding_for_display(self):
+        opens, highs, lows, closes = self._bullish_pullback_candles()
+        swings = (
+            [(20, 109.0), (32, 112.55)],
+            [(22, 105.0), (35, 109.7)],
+        )
+        mode = self._legacy_entry_test_mode()
+        entry = 110.35
+        profile = resolve_momentum_pullback_profile(mode, "M15")
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            baseline = engine._momentum_pullback_decision(
+                opens, highs, lows, closes,
+                price=entry,
+                ema20=110.0,
+                ema50=111.5,
+                atr=2.5,
+                rsi=55.0,
+                previous_rsi=54.0,
+                mode_cfg=mode,
+                timeframe="M15",
+            )
+
+        risk = abs(entry - baseline["stop_loss"])
+        reward = abs(baseline["tp1"] - entry)
+        exact_ratio = profile.minimum_target_rr - 0.001
+        spread = (reward - exact_ratio * risk) / (1 + exact_ratio / 2)
+        self.assertLess(spread / 2.5, profile.maximum_spread_atr)
+
+        with patch.object(engine, "_local_swings", return_value=swings):
+            result = engine._momentum_pullback_decision(
+                opens, highs, lows, closes,
+                price=entry,
+                ema20=110.0,
+                ema50=111.5,
+                atr=2.5,
+                rsi=55.0,
+                previous_rsi=54.0,
+                mode_cfg=mode,
+                timeframe="M15",
+                market_spread=spread,
+            )
+
+        self.assertEqual(result["status"], "WAIT")
+        self.assertEqual(
+            result["skip_reason"], "Spread-adjusted R:R below minimum"
+        )
+        self.assertIn(f"exact 1:{exact_ratio:.4f}", result["confirmation"])
+
     def test_direction_and_location_allow_early_pullback_without_minor_break(self):
         opens, highs, lows, closes = self._bullish_pullback_candles()
         closes[-1] = 110.25
