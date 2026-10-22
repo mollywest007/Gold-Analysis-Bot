@@ -4,15 +4,11 @@
       "mode": "scalp",
       "timeframe": "M15",
       "active_signal": {},
-      "closed_signal": {
-        "M15": "BUY"
-      },
-      "last_fired": {
-        "M15": 1792403882.8147283
-      },
+      "closed_signal": {},
+      "last_fired": {},
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1792405682.8147316
+        "M15": 1792568376.2250862
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
@@ -20,11 +16,11 @@
       "momentum_shift_warned": {},
       "forming_alert_sent": {},
       "forming_alert_last_sent": {
-        "M15": 1792404157.966742
+        "M15": 1792499587.630862
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 7322
+          "8039158711": 7333
         }
       },
       "reminded_trade_ids": {
