@@ -64,6 +64,25 @@ R:R, and holding constraints. Combined mode remains a coordinator that resolves
 the Scalp and Intraday alert streams independently. Invalid explicit
 modes/timeframes fail rather than silently inheriting a different profile.
 
+TP/SL settings can be overridden independently by mode with environment
+variables. Use `XAU_SCALP_`, `XAU_INTRADAY_`, `XAU_SWING_`, or
+`XAU_POSITION_` followed by `ATR_PERIOD`, `STOP_BUFFER_ATR`,
+`MINIMUM_STOP_ATR`, `MAXIMUM_STOP_ATR`, `MINIMUM_TARGET_RR`, or
+`PREFERRED_TARGET_RR`. Defaults enforce at least 1.5R; the Scalp minimum is
+1.5R and its preferred target is 2R. Overrides must be positive, finite, and
+keep preferred R:R at or above the minimum. Scalp's base stop floor is 0.70 ATR;
+timeframe scaling and actual structural invalidation may require more room.
+No dollar TP/SL amount is hardcoded.
+
+Global account-risk limits remain controlled by `XAU_RISK_PER_TRADE_FRACTION`,
+`XAU_MAX_SUGGESTED_RISK_FRACTION`, and `XAU_MAX_TOTAL_RISK_FRACTION`. A mode can
+use its own risk fraction with, for example,
+`XAU_SCALP_RISK_PER_TRADE_FRACTION`; it cannot exceed the global suggested-risk
+cap. Position sizing and net dollar P&L require actual account equity, broker
+contract size, lot constraints, commission, and slippage. Until those values
+are supplied, alerts report dollar P&L as unavailable rather than treating a
+price move as a dollar return. Leverage affects margin, not price-based P&L.
+
 The bot sends analysis alerts and tracks plans; it does not connect to a broker
 or submit orders. It therefore cannot determine broker-specific contract/tick
 specifications, position size, account equity, commission, or slippage. Do not

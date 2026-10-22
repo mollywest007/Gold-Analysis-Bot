@@ -80,11 +80,11 @@ class ModeSpecificProfileTests(unittest.TestCase):
             for mode in modes
         ]
 
-        self.assertEqual(stop_floors, [0.45, 0.70, 1.00, 1.25])
+        self.assertEqual(stop_floors, [0.70, 0.70, 1.00, 1.25])
         self.assertEqual(stop_buffers, [0.10, 0.15, 0.20, 0.25])
         self.assertEqual(
             preferred_target_distances,
-            [0.675, 1.26, 2.0, 3.75],
+            [1.40, 1.40, 2.0, 3.75],
         )
         self.assertEqual(stop_floors, sorted(stop_floors))
         self.assertEqual(stop_buffers, sorted(stop_buffers))
@@ -184,7 +184,7 @@ class ModeSpecificProfileTests(unittest.TestCase):
         self.assertGreater(scalp_plan[0], 100.0)
         self.assertEqual(
             [MODES[mode].min_rr_ratio for mode in ("scalp", "intraday", "swing", "position")],
-            [1.3, 1.5, 2.0, 2.0],
+            [1.5, 1.5, 2.0, 2.0],
         )
         self.assertGreater(position_plan[0], 100.0)
 

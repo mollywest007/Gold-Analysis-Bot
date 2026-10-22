@@ -440,6 +440,24 @@ def validate_candidate(
         }
 
     zone_half_width = atr * float(profile.entry_zone_atr)
+    target_room = abs(published_tp1 - published_entry)
+    level_rationale = {
+        "stop": (
+            f"Stop is beyond structural invalidation with the {profile.minimum_stop_distance_atr:.2f} ATR "
+            "volatility floor."
+            if stop_widened_to_atr_floor
+            else (
+                "Stop is beyond the structural invalidation level with the configured ATR "
+                f"({profile.atr_period}-period) and spread buffer."
+            )
+        ),
+        "targets": (
+            f"TP1 uses the nearest confirmed opposing structure, capped before the level; "
+            f"the plan targets {target_rr:.2f}R where available, with a hard floor of "
+            f"{minimum_rr:.2f}R. Confirmed later structure determines optional TP2/TP3."
+        ),
+        "available_room": round(target_room, 2),
+    }
     return {
         "valid": True,
         "entry": published_entry,
@@ -470,6 +488,7 @@ def validate_candidate(
             else None
         ),
         "nearest_opposing_level": round(nearest_level, 2),
+        "level_rationale": level_rationale,
         "rejection_reasons": [],
     }
 

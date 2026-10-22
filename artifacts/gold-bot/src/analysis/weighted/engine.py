@@ -168,7 +168,7 @@ def analyze_weighted_market(
             data.highs,
             data.lows,
             data.closes,
-            atr_period=14,
+            atr_period=config.profile.atr_period,
         )
         structure = analyze_structure(
             data.highs,
@@ -512,6 +512,7 @@ def analyze_weighted_market(
         "preferred_rr": config.preferred_rr,
         "minimum_rr": float(config.profile.minimum_target_rr),
         "stop_buffer_atr": float(config.profile.stop_buffer_atr),
+        "atr_period": int(config.profile.atr_period),
         "minimum_stop_atr": float(config.profile.minimum_stop_distance_atr),
         "maximum_stop_atr": float(config.profile.maximum_stop_distance_atr),
         "maximum_ema_distance_atr": float(config.profile.maximum_ema_distance_atr),
@@ -524,6 +525,7 @@ def analyze_weighted_market(
         "atr_expansion_limit": config.atr_expansion_limit,
         "maximum_spread_atr": float(config.profile.maximum_spread_atr),
         "expected_holding_bars": int(config.profile.expected_holding_bars),
+        "level_rationale": plan.get("level_rationale", {}),
         "setup_candidate": chosen,
         "setup_evidence": evidence,
         "rejection_reasons": list(dict.fromkeys(rejection_reasons + directional_rejections)),

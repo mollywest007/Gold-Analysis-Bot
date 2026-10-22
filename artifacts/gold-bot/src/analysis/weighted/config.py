@@ -154,7 +154,7 @@ def resolve_analysis_config(
         strong_score=strong_score,
         atr_expansion_limit=float(mode_cfg.analysis_atr_expansion_limit),
         max_candle_age_bars=float(mode_cfg.analysis_max_candle_age_bars),
-        preferred_rr=float(mode_cfg.preferred_rr_ratio),
+        preferred_rr=float(profile.preferred_target_rr),
         score_weights=score_weights,
         breakout_lookback=max(5, int(mode_cfg.breakout_lookback)),
         sweep_lookback=max(2, int(mode_cfg.liquidity_lookback)),

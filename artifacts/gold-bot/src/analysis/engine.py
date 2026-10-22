@@ -2875,7 +2875,7 @@ def _analyze_simple_data(
 
 def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> MarketAnalysis:
     """Adapt the new decision contract to the bot's established analysis model."""
-    from .risk_policy import RISK_POLICY
+    from .risk_policy import RISK_POLICY, risk_fraction_for_mode
 
     timeframe = result["setup_timeframe"]
     price = float(result.get("price", 0.0) or 0.0)
@@ -2954,7 +2954,9 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
             "reason": "No economic-calendar feed is connected.",
         }),
         "risk_policy": {
-            "risk_per_trade_fraction": RISK_POLICY.risk_per_trade_fraction,
+            "risk_per_trade_fraction": risk_fraction_for_mode(
+                result.get("mode", mode_cfg.name)
+            ),
             "max_suggested_risk_fraction": (
                 RISK_POLICY.max_suggested_risk_fraction
             ),
@@ -2975,6 +2977,7 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
             "stop_buffer_atr": result.get("stop_buffer_atr"),
             "minimum_stop_atr": result.get("minimum_stop_atr"),
             "maximum_stop_atr": result.get("maximum_stop_atr"),
+            "atr_period": result.get("atr_period"),
             "maximum_ema_distance_atr": result.get("maximum_ema_distance_atr"),
             "maximum_live_entry_distance_atr": result.get(
                 "maximum_live_entry_distance_atr", 0.35
@@ -2997,10 +3000,15 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         "decision_summary": {
             "rejection_reasons": result.get("rejection_reasons", []),
             "invalidation_conditions": result.get("invalidation_conditions", []),
+            "position_size": None,
+            "position_size_unavailable_reason": (
+                "Account equity and broker contract specifications are not connected."
+            ),
             "stop_widened_to_atr_floor": result.get(
                 "stop_widened_to_atr_floor", False
             ),
             "stop_distance_atr": result.get("stop_distance_atr"),
+            "level_rationale": result.get("level_rationale", {}),
             "spread_filter_status": result.get("spread_status", "unavailable"),
             "observed_market_spread": result.get("spread"),
             "spread_atr": result.get("spread_atr"),

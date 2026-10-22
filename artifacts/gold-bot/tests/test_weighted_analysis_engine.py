@@ -112,7 +112,7 @@ class ModeResolutionTests(unittest.TestCase):
             "position": 65,
         }
         minimum_rr = {
-            "scalp": 1.3,
+            "scalp": 1.5,
             "intraday": 1.5,
             "swing": 2.0,
             "position": 2.0,

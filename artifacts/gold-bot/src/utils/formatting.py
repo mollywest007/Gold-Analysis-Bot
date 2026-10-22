@@ -2244,6 +2244,43 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             )
             add_row("Price distance", " · ".join(distance_parts))
 
+        rationale = decision.get("level_rationale", {}) or {}
+        stop_rationale = str(rationale.get("stop", "") or "").strip()
+        target_rationale = str(rationale.get("targets", "") or "").strip()
+        if stop_rationale:
+            add_row("SL rationale", stop_rationale)
+        if target_rationale:
+            add_row("TP rationale", target_rationale)
+
+        economics = decision.get("trade_economics", {}) or {}
+        if economics.get("available"):
+            at_stop = economics.get("at_stop", {}) or {}
+            at_target = economics.get("at_target", {}) or {}
+            add_row(
+                "Gross P/L",
+                f"SL ${float(at_stop.get('gross_pnl', 0.0)):.2f} · "
+                f"TP1 ${float(at_target.get('gross_pnl', 0.0)):.2f}",
+            )
+            add_row(
+                "Net P/L est.",
+                f"SL ${float(at_stop.get('estimated_net_pnl', 0.0)):.2f} · "
+                f"TP1 ${float(at_target.get('estimated_net_pnl', 0.0)):.2f}",
+            )
+            add_row(
+                "Position / margin",
+                f"${float(economics.get('position_value', 0.0)):.2f} / "
+                + (
+                    f"${float(economics['margin']):.2f}"
+                    if economics.get("margin") is not None
+                    else "not configured"
+                ),
+            )
+        else:
+            add_row(
+                "Dollar P/L",
+                "Unavailable — no configured account size and broker contract specifications.",
+            )
+
         if decision.get("stop_widened_to_atr_floor"):
             try:
                 minimum_stop_atr = float(mode_rules.get("minimum_stop_atr"))

@@ -268,7 +268,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 PriceZone(99.60, 99.80, 99.70, 2, "support"),
                 "supports",
                 99.60,
-                99.50,
+                99.30,
             ),
             (
                 "SELL",
@@ -276,7 +276,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 PriceZone(100.20, 100.40, 100.30, 2, "resistance"),
                 "resistances",
                 100.40,
-                100.50,
+                100.70,
             ),
         )
         for direction, invalidation, zone, zone_key, expected_level, expected_sl in cases:
@@ -305,7 +305,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
         target_buffer = max(atr * profile.target_buffer_atr, 0.01)
         for direction in ("BUY", "SELL"):
             sign = 1 if direction == "BUY" else -1
-            structural_cap = entry + sign * 0.085
+            structural_cap = entry + sign * 0.16
             level = structural_cap + sign * target_buffer
             structure = SimpleNamespace(
                 swing_highs=[(10, level)] if direction == "BUY" else [(10, 101.0)],
@@ -326,10 +326,10 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
                 if direction == "BUY":
                     self.assertLessEqual(plan["tp1"], structural_cap)
-                    self.assertEqual(plan["tp1"], 100.08)
+                    self.assertEqual(plan["tp1"], 100.14)
                 else:
                     self.assertGreaterEqual(plan["tp1"], structural_cap)
-                    self.assertEqual(plan["tp1"], 99.92)
+                    self.assertEqual(plan["tp1"], 99.86)
                 self.assertGreaterEqual(plan["rr"], profile.minimum_target_rr)
 
     def test_nearby_opposition_and_costs_reject_insufficient_trade_room(self):
@@ -359,14 +359,14 @@ class TPslFormulaAuditTests(unittest.TestCase):
             price=100.0,
             atr=1.0,
             structure=_structure(
-                "BUY", 100.0, 1.0, opposing_distance_atr=0.70
+                "BUY", 100.0, 1.0, opposing_distance_atr=1.30
             ),
             profile=scalp,
             spread=0.10,
         )
         self.assertFalse(cost_limited["valid"])
         self.assertIn(
-            "spread-adjusted r:r",
+            "spread-adjusted",
             " ".join(cost_limited["rejection_reasons"]).lower(),
         )
 
@@ -415,8 +415,8 @@ class TPslFormulaAuditTests(unittest.TestCase):
             spread=spread,
         )
         self.assertTrue(accepted["valid"], accepted.get("rejection_reasons"))
-        self.assertEqual(accepted["stop_loss"], 4167.39)
-        self.assertEqual(accepted["tp1"], 4175.46)
+        self.assertEqual(accepted["stop_loss"], 4165.77)
+        self.assertEqual(accepted["tp1"], 4179.66)
         exact_spread_rr = (
             (accepted["tp1"] - accepted["entry"] - spread)
             / (
@@ -427,7 +427,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
         self.assertGreaterEqual(exact_spread_rr, profile.minimum_target_rr)
 
         capped_structure = SimpleNamespace(
-            swing_highs=[(10, 4176.00)],
+            swing_highs=[(10, 4178.10)],
             swing_lows=[(20, entry - atr)],
             supports=[],
             resistances=[],

@@ -70,7 +70,7 @@ class RiskPolicyTests(unittest.TestCase):
 
     def test_all_four_modes_use_the_requested_minimum_target_rr(self):
         expected = {
-            "scalp": 1.3,
+            "scalp": 1.5,
             "intraday": 1.5,
             "swing": 2.0,
             "position": 2.0,

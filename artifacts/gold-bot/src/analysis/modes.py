@@ -13,6 +13,7 @@ The rest of the system picks it up automatically.
 
 from dataclasses import dataclass, field, replace
 import math
+import os
 from typing import Dict, List, Optional, Tuple
 
 
@@ -51,8 +52,9 @@ class MomentumPullbackProfile:
     confirmation_break_atr: float = 0.03
     range_trap_minimum_touches: int = 2
     expected_holding_bars: int = 24
-    minimum_target_rr: float = 1.3
-    preferred_target_rr: float = 1.5
+    minimum_target_rr: float = 1.5
+    preferred_target_rr: float = 2.0
+    atr_period: int = 14
     breakout_enabled: bool = True
     # Maximum validated reference-market spread relative to ATR14. These are
     # conservative policy caps, not values optimized from historical results.
@@ -119,6 +121,7 @@ class MomentumPullbackProfile:
             "structure_lookback_candles",
             "range_trap_minimum_touches",
             "expected_holding_bars",
+            "atr_period",
         )
         for name in integer_fields:
             value = getattr(self, name)
@@ -388,7 +391,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=40.0,
         sell_rsi_veto_above=60.0,
         stop_buffer_atr=0.10,
-        minimum_stop_distance_atr=0.45,
+        minimum_stop_distance_atr=0.70,
         maximum_stop_distance_atr=1.75,
         target_buffer_atr=0.08,
         minimum_target_room_atr=0.60,
@@ -396,8 +399,8 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_lookback_candles=16,
         range_trap_max_width_atr=2.25,
         maximum_spread_atr=0.12,
-        minimum_target_rr=1.3,
-        preferred_target_rr=1.5,
+        minimum_target_rr=1.5,
+        preferred_target_rr=2.0,
     ),
     "intraday": MomentumPullbackProfile(
         swing_change_atr=0.03,
@@ -428,7 +431,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         range_trap_max_width_atr=2.50,
         maximum_spread_atr=0.18,
         minimum_target_rr=1.5,
-        preferred_target_rr=1.8,
+        preferred_target_rr=2.0,
     ),
     "swing": MomentumPullbackProfile(
         swing_change_atr=0.05,
@@ -576,7 +579,7 @@ def resolve_momentum_pullback_profile(
 
     # All distances remain ATR-relative. Broader charts get more room for normal
     # retracements and structural stops, but never exceed the global 2.5 ATR cap.
-    return replace(
+    resolved = replace(
         profile,
         pullback_candles=pullback_bars,
         minimum_pullback_depth_atr=(
@@ -658,7 +661,11 @@ def resolve_momentum_pullback_profile(
         expected_holding_bars=_MODE_HOLDING_BARS.get(
             mode, _MODE_HOLDING_BARS["intraday"]
         )[rank],
-        minimum_target_rr=max(1.3, mode_cfg.min_rr_ratio),
+        minimum_target_rr=max(1.5, mode_cfg.min_rr_ratio, profile.minimum_target_rr),
+        preferred_target_rr=max(
+            mode_cfg.preferred_rr_ratio, profile.preferred_target_rr
+        ),
+        atr_period=profile.atr_period,
         confirmation_break_atr=(
             {"scalp": 0.005, "intraday": 0.02, "swing": 0.05, "position": 0.08}
             .get(mode, 0.02)
@@ -666,6 +673,41 @@ def resolve_momentum_pullback_profile(
             + pivot_steps * 0.015
         ),
     )
+    # Optional mode-specific overrides let an operator tune risk policy without
+    # editing strategy code. Timeframe scaling is applied first so these values
+    # describe the final profile used by the selected chart.
+    prefix = f"XAU_{mode.upper()}_"
+    numeric_overrides = {
+        "stop_buffer_atr": "STOP_BUFFER_ATR",
+        "minimum_stop_distance_atr": "MINIMUM_STOP_ATR",
+        "maximum_stop_distance_atr": "MAXIMUM_STOP_ATR",
+        "minimum_target_rr": "MINIMUM_TARGET_RR",
+        "preferred_target_rr": "PREFERRED_TARGET_RR",
+    }
+    overrides = {}
+    for field_name, env_suffix in numeric_overrides.items():
+        raw = os.getenv(prefix + env_suffix)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{prefix + env_suffix} must be a number.") from exc
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{prefix + env_suffix} must be positive and finite.")
+        overrides[field_name] = value
+    raw_period = os.getenv(prefix + "ATR_PERIOD")
+    if raw_period is not None:
+        try:
+            period = int(raw_period)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{prefix}ATR_PERIOD must be an integer.") from exc
+        if str(period) != raw_period.strip() or period < 2 or period > 100:
+            raise ValueError(f"{prefix}ATR_PERIOD must be an integer from 2 to 100.")
+        overrides["atr_period"] = period
+    if overrides:
+        resolved = replace(resolved, **overrides)
+    return resolved
 
 
 # ─── Mode definitions ─────────────────────────────────────────────────────────
@@ -692,7 +734,7 @@ MODES: Dict[str, ModeConfig] = {
         volume_spike_threshold = 1.25,
         breakout_lookback = 8,
         liquidity_lookback = 8,
-        min_rr_ratio = 1.3,
+        min_rr_ratio = 1.5,
         feature_weights = {
             "breakout": 0.12, "liquidity_sweep": 0.12, "volume_spike": 0.08,
             "momentum_shift": 0.10, "trend_regime": 0.06, "macro_alignment": 0.0,
@@ -721,7 +763,7 @@ MODES: Dict[str, ModeConfig] = {
             "Signals fire from M1 through H1. M30/H1 use broader structure "
             "than the lower-timeframe scalp rules."
         ),
-        risk_note = "Micro-structure stop; target requires at least 1.3R.",
+        risk_note = "Volatility-buffered structural stop; 1.5R minimum, preferring 2R when structure permits.",
         momentum_pullback = MOMENTUM_PULLBACK_PROFILES["scalp"],
         analysis_scan_interval_seconds = 5,
         analysis_context_timeframe = "M15",
@@ -735,7 +777,7 @@ MODES: Dict[str, ModeConfig] = {
         analysis_refinement_weight = 0.20,
         analysis_atr_expansion_limit = 2.00,
         analysis_max_candle_age_bars = 2.0,
-        preferred_rr_ratio = 1.5,
+        preferred_rr_ratio = 2.0,
     ),
 
     "intraday": ModeConfig(
@@ -789,7 +831,7 @@ MODES: Dict[str, ModeConfig] = {
         analysis_refinement_weight = 0.15,
         analysis_atr_expansion_limit = 2.10,
         analysis_max_candle_age_bars = 2.5,
-        preferred_rr_ratio = 1.8,
+        preferred_rr_ratio = 2.0,
     ),
 
     "swing": ModeConfig(
