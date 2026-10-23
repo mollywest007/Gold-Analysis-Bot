@@ -12,6 +12,7 @@ from src.analysis.risk_policy import (
     risk_fraction_for_mode,
 )
 from src.analysis.modes import MODES, resolve_momentum_pullback_profile
+from src.analysis.weighted.indicators import atr_series
 
 
 class RiskPolicyEconomicsTests(unittest.TestCase):
@@ -95,6 +96,21 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be in"):
                 risk_fraction_for_mode("scalp")
 
+    def test_position_sizing_uses_the_selected_mode_risk_override(self):
+        with patch.dict(os.environ, {"XAU_SCALP_RISK_PER_TRADE_FRACTION": "0.008"}):
+            result = calculate_position_size(
+                equity=10000,
+                entry=2000,
+                stop=1990,
+                contract_size_oz_per_lot=100,
+                lot_step=0.01,
+                minimum_lot=0.01,
+                mode="scalp",
+            )
+        self.assertTrue(result["available"])
+        self.assertEqual(result["cash_risk"], 80.0)
+        self.assertEqual(result["lots"], 0.08)
+
     def test_mode_tp_sl_profiles_have_minimum_rr_and_validated_overrides(self):
         for mode, cfg in MODES.items():
             if cfg.momentum_pullback is None:
@@ -123,6 +139,14 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
         self.assertEqual(overridden.minimum_stop_distance_atr, 0.8)
         self.assertEqual(overridden.minimum_target_rr, 1.7)
         self.assertEqual(overridden.preferred_target_rr, 2.4)
+
+    def test_atr_period_requires_a_full_window_of_completed_candles(self):
+        highs = [101.0] * 40
+        lows = [99.0] * 40
+        closes = [100.0] * 40
+
+        self.assertIsNone(atr_series(highs, lows, closes, period=40)[-1])
+        self.assertEqual(atr_series(highs, lows, closes, period=14)[-1], 2.0)
 
 
 if __name__ == "__main__":

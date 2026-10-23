@@ -88,6 +88,7 @@ def _market_data(timeframe, *, count=40, now=None):
 
 def _cent(value, rounding):
     quantum = Decimal("0.01")
+    value = Decimal(str(value))
     return float(
         (value / quantum).to_integral_value(rounding=rounding) * quantum
     )
@@ -204,12 +205,6 @@ class TPslFormulaAuditTests(unittest.TestCase):
                                 )
                             )
                         )
-                        required_reward = max(
-                            decimal_risk * preferred_rr,
-                            minimum_rr
-                            * (decimal_risk + decimal_spread / Decimal("2"))
-                            + decimal_spread,
-                        )
                         sign = 1 if direction == "BUY" else -1
                         structural_pivot = Decimal(
                             str(entry + sign * 20 * atr)
@@ -225,27 +220,13 @@ class TPslFormulaAuditTests(unittest.TestCase):
                             if direction == "BUY"
                             else structural_pivot + structural_buffer
                         )
-                        requested_target = decimal_entry + sign * required_reward
-                        constrained_target = (
-                            min(requested_target, structural_cap)
-                            if direction == "BUY"
-                            else max(requested_target, structural_cap)
-                        )
                         expected_target = (
-                            min(
-                                _cent(constrained_target, ROUND_CEILING),
-                                _cent(structural_cap, ROUND_FLOOR),
-                            )
+                            _cent(structural_cap, ROUND_FLOOR)
                             if direction == "BUY"
-                            else max(
-                                _cent(constrained_target, ROUND_FLOOR),
-                                _cent(structural_cap, ROUND_CEILING),
-                            )
+                            else _cent(structural_cap, ROUND_CEILING)
                         )
                         self.assertEqual(plan["tp1"], expected_target)
-                        self.assertGreaterEqual(
-                            plan["rr"], MODES[mode].preferred_rr_ratio
-                        )
+                        self.assertGreater(plan["rr"], float(preferred_rr))
                         self.assertGreaterEqual(
                             plan["reference_spread_target_rrs"]["TP1"],
                             profile.minimum_target_rr,
@@ -326,10 +307,10 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
                 if direction == "BUY":
                     self.assertLessEqual(plan["tp1"], structural_cap)
-                    self.assertEqual(plan["tp1"], 100.14)
+                    self.assertEqual(plan["tp1"], 100.16)
                 else:
                     self.assertGreaterEqual(plan["tp1"], structural_cap)
-                    self.assertEqual(plan["tp1"], 99.86)
+                    self.assertEqual(plan["tp1"], 99.84)
                 self.assertGreaterEqual(plan["rr"], profile.minimum_target_rr)
 
     def test_nearby_opposition_and_costs_reject_insufficient_trade_room(self):
@@ -366,7 +347,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
         )
         self.assertFalse(cost_limited["valid"])
         self.assertIn(
-            "spread-adjusted",
+            "enough room",
             " ".join(cost_limited["rejection_reasons"]).lower(),
         )
 
@@ -416,7 +397,16 @@ class TPslFormulaAuditTests(unittest.TestCase):
         )
         self.assertTrue(accepted["valid"], accepted.get("rejection_reasons"))
         self.assertEqual(accepted["stop_loss"], 4165.77)
-        self.assertEqual(accepted["tp1"], 4179.66)
+        expected_target = _cent(
+            entry
+            + 20 * atr
+            - max(atr * profile.target_buffer_atr, spread / 2, 0.01),
+            ROUND_FLOOR,
+        )
+        self.assertEqual(accepted["tp1"], expected_target)
+        self.assertGreater(
+            accepted["target_rrs"]["TP1"], profile.preferred_target_rr
+        )
         exact_spread_rr = (
             (accepted["tp1"] - accepted["entry"] - spread)
             / (
@@ -442,7 +432,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
         )
         self.assertFalse(capped["valid"])
         self.assertTrue(
-            any("spread-adjusted R:R" in reason
+            any("enough room" in reason
                 for reason in capped["rejection_reasons"]),
             capped["rejection_reasons"],
         )
@@ -530,6 +520,15 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 "mode_rules": {
                     "minimum_target_rr": profile.minimum_target_rr,
                 },
+                "decision_summary": {
+                    "level_rationale": {
+                        "stop": "Structural invalidation plus ATR buffer.",
+                        "targets": "Nearest opposing confirmed structure; 2R preferred.",
+                    },
+                    "position_size_unavailable_reason": (
+                        "Account equity and broker contract specifications are not connected."
+                    ),
+                },
             },
         )
         with patch.object(
@@ -548,6 +547,16 @@ class TPslFormulaAuditTests(unittest.TestCase):
             2,
         )
         self.assertIn(f"TP1 1:{displayed_rr:.2f}", card)
+        self.assertIn("SL rationale", card)
+        self.assertIn("TP rationale", card)
+        self.assertIn("Dollar P/L", card)
+        self.assertIn("Unavailable", card)
         self.assertEqual(plan["stop_loss"], 99.57)
-        self.assertEqual(plan["tp1"], 100.94)
+        expected_target = _cent(
+            plan["entry"]
+            + 20 * atr
+            - max(atr * profile.target_buffer_atr, 0.04 / 2, 0.01),
+            ROUND_FLOOR,
+        )
+        self.assertEqual(plan["tp1"], expected_target)
 

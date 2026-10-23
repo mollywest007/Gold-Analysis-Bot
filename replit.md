@@ -42,7 +42,9 @@ earns no points.
 The engine recognizes pullbacks, liquidity sweeps, breakouts, breakout-retests,
 and support/resistance reactions. Stops use structural invalidation plus the
 mode/timeframe ATR buffer. Targets use the nearest opposing confirmed structure
-and are capped at the configured preferred R:R when there is clear room.
+after a mode-specific R:R and available-spread check. Preferred R:R is an aim,
+not a ceiling: a farther TP1 is allowed when it is the nearest confirmed
+structure, and insufficient room is rejected rather than forced.
 Reject invalid stops, obstructed or undersized targets, stale data, material
 conflict, excessive volatility, and missed entries. `EARLY` is provisional;
 only `MODERATE`/`STRONG` produces BUY/SELL. Otherwise remain `WAIT`.

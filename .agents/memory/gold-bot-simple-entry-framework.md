@@ -41,11 +41,11 @@ A fresh validated XAU/USD bid/ask spread may be used for a configurable mode-spe
 
 ## Minimum versus preferred target R:R
 
-Each mode's hard R:R minimum is separate from its preferred target R:R. Aim for the preferred value only when confirmed structure supports it; reject targets that fall below the hard minimum after spread costs and published-price rounding.
+Each mode's hard R:R minimum is separate from its preferred target R:R. Preferred R:R is an aim, never a distance cap: use the nearest confirmed opposing structure when it offers more room, and reject targets that fall below the hard minimum after available spread costs and published-price rounding.
 
 **Why:** The user explicitly requires at least 1.5R, preferably 2R, and forbids inventing distant targets to reach a preferred ratio. The previous Scalp 1.3R floor and 1.5R preference contributed to small plans.
 
-**How to apply:** Keep Scalp at minimum 1.5R / preferred 2R; Intraday at minimum 1.5R / preferred 2R; Swing at 2R / 2R; Position at 2R / 3R unless a validated per-mode override is configured. Derive each displayed ratio from exact rounded prices.
+**How to apply:** Keep Scalp at minimum 1.5R / preferred 2R; Intraday at minimum 1.5R / preferred 2R; Swing at 2R / 2R; Position at 2R / 3R unless a validated per-mode override is configured. Let TP exceed the preference only when the nearest real structure supports it; never invent a farther target. Derive each displayed ratio from exact rounded prices.
 
 ## Spacing between structural target milestones
 

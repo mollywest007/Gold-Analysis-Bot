@@ -145,6 +145,7 @@ def calculate_position_size(
     minimum_lot: float | None,
     risk_fraction: float | None = None,
     maximum_lot: float | None = None,
+    mode: str | None = None,
     commission_rate: float = 0.0,
     slippage_per_oz: float = 0.0,
     leverage: float | None = None,
@@ -161,7 +162,9 @@ def calculate_position_size(
         equity_value, contract_size, step, min_lot = values
         entry_value, stop_value = float(entry), float(stop)
         risk = float(
-            RISK_POLICY.risk_per_trade_fraction
+            risk_fraction_for_mode(mode)
+            if risk_fraction is None and mode is not None
+            else RISK_POLICY.risk_per_trade_fraction
             if risk_fraction is None
             else risk_fraction
         )

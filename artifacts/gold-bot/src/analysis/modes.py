@@ -127,6 +127,8 @@ class MomentumPullbackProfile:
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"Momentum-pullback setting '{name}' must be a positive integer.")
+        if not 2 <= self.atr_period <= 100:
+            raise ValueError("Momentum-pullback ATR period must be between 2 and 100.")
         if type(self.chop_max_alternations) is not int or self.chop_max_alternations < 0:
             raise ValueError("chop_max_alternations must be a non-negative integer.")
 

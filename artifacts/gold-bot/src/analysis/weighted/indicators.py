@@ -51,7 +51,9 @@ def atr_series(
 ) -> list[float | None]:
     size = min(len(highs), len(lows), len(closes))
     result: list[float | None] = [None] * size
-    if period <= 0 or size < 2:
+    # ATR(period) requires a full window of `period` true ranges, which means
+    # one prior close plus `period` completed candles.
+    if period <= 0 or size <= period:
         return result
     true_ranges = [0.0] * size
     for index in range(1, size):

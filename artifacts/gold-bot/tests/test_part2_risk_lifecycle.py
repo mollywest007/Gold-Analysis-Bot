@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -180,8 +181,13 @@ class StructuralTargetTests(unittest.TestCase):
         self.assertEqual(
             plan["target_rrs"]["TP3"],
             round(
-                abs(plan["tp3"] - plan["entry"])
-                / abs(plan["entry"] - plan["stop_loss"]),
+                float(
+                    abs(Decimal(str(plan["tp3"])) - Decimal(str(plan["entry"])))
+                    / abs(
+                        Decimal(str(plan["entry"]))
+                        - Decimal(str(plan["stop_loss"]))
+                    )
+                ),
                 2,
             ),
         )

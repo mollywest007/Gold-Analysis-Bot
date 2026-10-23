@@ -259,49 +259,38 @@ def validate_candidate(
         }
     entry_decimal = Decimal(str(published_entry))
     risk_decimal = published_risk_decimal
-    target_rr_decimal = Decimal(str(target_rr))
-    preferred_reward = risk_decimal * target_rr_decimal
-    preferred_target_decimal = (
-        entry_decimal + preferred_reward
-        if direction == "BUY"
-        else entry_decimal - preferred_reward
-    )
+    minimum_reward = risk_decimal * Decimal(str(minimum_rr))
     if spread_value is not None:
         spread_decimal = Decimal(str(spread_value))
-        minimum_spread_reward = (
+        minimum_reward = max(
+            minimum_reward,
             Decimal(str(minimum_rr))
             * (risk_decimal + spread_decimal / Decimal("2"))
-            + spread_decimal
+            + spread_decimal,
         )
-        minimum_spread_target_decimal = (
-            entry_decimal + minimum_spread_reward
-            if direction == "BUY"
-            else entry_decimal - minimum_spread_reward
-        )
-    else:
-        minimum_spread_target_decimal = preferred_target_decimal
-    desired_target_decimal = (
-        max(preferred_target_decimal, minimum_spread_target_decimal)
-        if direction == "BUY"
-        else min(preferred_target_decimal, minimum_spread_target_decimal)
-    )
-    structural_target_decimal = Decimal(str(structural_target))
-    target_decimal = (
-        min(structural_target_decimal, desired_target_decimal)
-        if direction == "BUY"
-        else max(structural_target_decimal, desired_target_decimal)
-    )
     structural_target_cap = _round_toward_invalidation(
         structural_target, direction
     )
-    rounded_required_target = _round_away_from_entry(
-        target_decimal, direction
-    )
-    published_tp1 = (
-        min(rounded_required_target, structural_target_cap)
+    room_to_structure = (
+        Decimal(str(structural_target_cap)) - entry_decimal
         if direction == "BUY"
-        else max(rounded_required_target, structural_target_cap)
+        else entry_decimal - Decimal(str(structural_target_cap))
     )
+    if room_to_structure < minimum_reward:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                "Nearest confirmed opposing structure does not leave enough room "
+                f"for the minimum reward-to-risk (R:R) of {minimum_rr:.2f}R "
+                "after available spread costs."
+            ],
+            "nearest_opposing_level": nearest_level,
+            "preferred_rr": round(target_rr, 2),
+        }
+    # Preferred R:R is an aim, never a target-distance ceiling. If the nearest
+    # real opposing structure offers more room, publish that structural target;
+    # do not truncate a technically supported move to a fixed R multiple.
+    published_tp1 = structural_target_cap
     reward_decimal = (
         Decimal(str(published_tp1)) - Decimal(str(published_entry))
         if direction == "BUY"
@@ -453,7 +442,7 @@ def validate_candidate(
         ),
         "targets": (
             f"TP1 uses the nearest confirmed opposing structure, capped before the level; "
-            f"the plan targets {target_rr:.2f}R where available, with a hard floor of "
+            f"{target_rr:.2f}R is preferred, not a ceiling, with a hard floor of "
             f"{minimum_rr:.2f}R. Confirmed later structure determines optional TP2/TP3."
         ),
         "available_room": round(target_room, 2),
