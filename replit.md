@@ -76,6 +76,13 @@ keep preferred R:R at or above the minimum. Scalp's base stop floor is 0.70 ATR;
 timeframe scaling and actual structural invalidation may require more room.
 No dollar TP/SL amount is hardcoded.
 
+Optional execution-cost inputs are mode-specific:
+`XAU_SCALP_COMMISSION_RATE` / `XAU_SCALP_SLIPPAGE_PER_OZ` (and the matching
+`INTRADAY`, `SWING`, or `POSITION` prefixes). Commission is a fraction of
+notional charged on each side; slippage is a price estimate per ounce per side.
+Configured costs are included in the minimum net R:R check. Missing values are
+reported as unavailable rather than assumed to be known broker costs.
+
 Global account-risk limits remain controlled by `XAU_RISK_PER_TRADE_FRACTION`,
 `XAU_MAX_SUGGESTED_RISK_FRACTION`, and `XAU_MAX_TOTAL_RISK_FRACTION`. A mode can
 use its own risk fraction with, for example,

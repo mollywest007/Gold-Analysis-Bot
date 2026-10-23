@@ -3013,6 +3013,14 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
             "observed_market_spread": result.get("spread"),
             "spread_atr": result.get("spread_atr"),
             "maximum_spread_atr": result.get("maximum_spread_atr"),
+            "execution_cost_target_rrs": result.get(
+                "execution_cost_target_rrs", {}
+            ),
+            "execution_cost_status": result.get(
+                "execution_cost_status", "unavailable"
+            ),
+            "commission_rate": result.get("commission_rate"),
+            "slippage_per_oz": result.get("slippage_per_oz"),
         },
         "best_entry_zone": {
             "low": result.get("entry_zone_low", 0.0),

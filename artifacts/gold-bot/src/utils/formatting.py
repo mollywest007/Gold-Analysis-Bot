@@ -2312,6 +2312,53 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
                 "Unavailable — no fresh validated two-sided quote",
             )
 
+        execution_cost_rrs = (
+            decision.get("execution_cost_target_rrs", {}) or {}
+        )
+        execution_cost_parts = []
+        for label in ("TP1", "TP2", "TP3"):
+            value = execution_cost_rrs.get(label)
+            try:
+                cost_rr = float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(cost_rr):
+                execution_cost_parts.append(f"{label} 1:{cost_rr:.2f}")
+        execution_cost_status = str(
+            decision.get("execution_cost_status", "unavailable") or "unavailable"
+        ).lower()
+        if execution_cost_parts:
+            add_row(
+                "Fee/slippage R:R",
+                " | ".join(execution_cost_parts)
+                + (
+                    " · inputs partial"
+                    if execution_cost_status == "partial"
+                    else ""
+                ),
+            )
+        else:
+            add_row(
+                "Fee/slippage R:R",
+                "Unavailable — commission and slippage not configured",
+            )
+        commission_rate = decision.get("commission_rate")
+        slippage_per_oz = decision.get("slippage_per_oz")
+        cost_input_parts = []
+        if commission_rate is None:
+            cost_input_parts.append("commission unavailable")
+        else:
+            cost_input_parts.append(
+                f"commission {float(commission_rate) * 100:g}% per side"
+            )
+        if slippage_per_oz is None:
+            cost_input_parts.append("slippage unavailable")
+        else:
+            cost_input_parts.append(
+                f"slippage {float(slippage_per_oz):g} price units/oz/side"
+            )
+        add_row("Execution cost inputs", " · ".join(cost_input_parts))
+
         spread_status = str(
             decision.get("spread_filter_status", "unavailable") or "unavailable"
         ).lower()

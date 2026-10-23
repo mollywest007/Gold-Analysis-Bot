@@ -380,6 +380,19 @@ def validate_candidate(
 
     target_rrs = {}
     spread_target_rrs = {}
+    execution_cost_target_rrs = {}
+    commission_rate = getattr(profile, "commission_rate", None)
+    slippage_per_oz = getattr(profile, "slippage_per_oz", None)
+    configured_cost_inputs = sum(
+        value is not None for value in (commission_rate, slippage_per_oz)
+    )
+    execution_cost_status = (
+        "configured"
+        if configured_cost_inputs == 2
+        else "partial"
+        if configured_cost_inputs == 1
+        else "unavailable"
+    )
     for label, target_value in published_targets.items():
         if target_value is None:
             continue
@@ -401,6 +414,32 @@ def validate_candidate(
                         + spread_decimal / Decimal("2")
                     )
                 ),
+                2,
+            )
+        if configured_cost_inputs:
+            commission_decimal = Decimal(str(commission_rate or 0.0))
+            slippage_decimal = Decimal(str(slippage_per_oz or 0.0))
+            spread_decimal = Decimal(str(spread_value or 0.0))
+            target_commission = (
+                Decimal(str(published_entry)) + Decimal(str(target_value))
+            ) * commission_decimal
+            stop_commission = (
+                Decimal(str(published_entry)) + Decimal(str(published_stop))
+            ) * commission_decimal
+            net_reward = (
+                reward_decimal
+                - spread_decimal
+                - target_commission
+                - Decimal("2") * slippage_decimal
+            )
+            net_risk = (
+                published_risk_decimal
+                + spread_decimal / Decimal("2")
+                + stop_commission
+                + Decimal("2") * slippage_decimal
+            )
+            execution_cost_target_rrs[label] = round(
+                float(net_reward / net_risk) if net_risk > 0 else 0.0,
                 2,
             )
     published_rr = target_rrs["TP1"]
@@ -426,6 +465,17 @@ def validate_candidate(
             ],
             "spread_status": "rejected",
             "spread_rr": published_spread_rr,
+        }
+    configured_cost_rr = execution_cost_target_rrs.get("TP1")
+    if configured_cost_rr is not None and configured_cost_rr + 1e-9 < minimum_rr:
+        return {
+            "valid": False,
+            "rejection_reasons": [
+                f"TP1 leaves configured-fee/slippage-adjusted R:R of "
+                f"1:{configured_cost_rr:.2f}, below the 1:{minimum_rr:.2f} minimum."
+            ],
+            "execution_cost_status": execution_cost_status,
+            "execution_cost_rr": configured_cost_rr,
         }
 
     zone_half_width = atr * float(profile.entry_zone_atr)
@@ -467,6 +517,8 @@ def validate_candidate(
         "rr": published_rr,
         "target_rrs": target_rrs,
         "reference_spread_target_rrs": spread_target_rrs,
+        "execution_cost_target_rrs": execution_cost_target_rrs,
+        "execution_cost_status": execution_cost_status,
         "preferred_rr": round(target_rr, 2),
         "reference_spread_rr": published_spread_rr,
         "spread_status": spread_status,

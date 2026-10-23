@@ -416,6 +416,33 @@ class TPslFormulaAuditTests(unittest.TestCase):
         )
         self.assertGreaterEqual(exact_spread_rr, profile.minimum_target_rr)
 
+        # The previously observed tight plan used a $3.01 price stop and a
+        # $5.05 target. With the same $0.69 spread and a nearby confirmed
+        # resistance, the current Scalp geometry must reject that opportunity
+        # rather than treating its 1.68 gross R as an acceptable net ratio.
+        persisted_nearby_structure = SimpleNamespace(
+            swing_highs=[(10, 4178.10)],
+            swing_lows=[(20, entry - atr)],
+            supports=[],
+            resistances=[],
+        )
+        persisted_example = validate_candidate(
+            _candidate("BUY", entry, atr),
+            price=entry,
+            atr=atr,
+            structure=persisted_nearby_structure,
+            profile=profile,
+            spread=spread,
+        )
+        self.assertFalse(persisted_example["valid"])
+        self.assertTrue(
+            any(
+                "minimum reward-to-risk" in reason
+                for reason in persisted_example["rejection_reasons"]
+            ),
+            persisted_example["rejection_reasons"],
+        )
+
         capped_structure = SimpleNamespace(
             swing_highs=[(10, 4178.10)],
             swing_lows=[(20, entry - atr)],

@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -13,6 +14,8 @@ from src.analysis.risk_policy import (
 )
 from src.analysis.modes import MODES, resolve_momentum_pullback_profile
 from src.analysis.weighted.indicators import atr_series
+from src.analysis.weighted.validation import validate_candidate
+from types import SimpleNamespace
 
 
 class RiskPolicyEconomicsTests(unittest.TestCase):
@@ -139,6 +142,90 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
         self.assertEqual(overridden.minimum_stop_distance_atr, 0.8)
         self.assertEqual(overridden.minimum_target_rr, 1.7)
         self.assertEqual(overridden.preferred_target_rr, 2.4)
+
+    def test_mode_execution_cost_overrides_are_optional_and_validated(self):
+        base = resolve_momentum_pullback_profile(MODES["scalp"], "M5")
+        self.assertIsNone(base.commission_rate)
+        self.assertIsNone(base.slippage_per_oz)
+
+        with patch.dict(
+            os.environ,
+            {
+                "XAU_SCALP_COMMISSION_RATE": "0.0002",
+                "XAU_SCALP_SLIPPAGE_PER_OZ": "0.08",
+            },
+        ):
+            configured = resolve_momentum_pullback_profile(MODES["scalp"], "M5")
+        self.assertEqual(configured.commission_rate, 0.0002)
+        self.assertEqual(configured.slippage_per_oz, 0.08)
+
+        with patch.dict(
+            os.environ, {"XAU_SCALP_COMMISSION_RATE": "1.0"}
+        ), self.assertRaisesRegex(ValueError, "less than 1"):
+            resolve_momentum_pullback_profile(MODES["scalp"], "M5")
+
+    def test_commission_and_slippage_are_included_in_both_direction_rr_checks(self):
+        for direction in ("BUY", "SELL"):
+            sign = 1 if direction == "BUY" else -1
+            profile = replace(
+                resolve_momentum_pullback_profile(MODES["scalp"], "M5"),
+                commission_rate=0.001,
+                slippage_per_oz=0.05,
+            )
+            structure = SimpleNamespace(
+                swing_highs=[(10, 103.0)] if direction == "BUY" else [(10, 101.0)],
+                swing_lows=[(20, 99.0)] if direction == "BUY" else [(20, 97.0)],
+                supports=[],
+                resistances=[],
+            )
+            plan = validate_candidate(
+                SimpleNamespace(
+                    direction=direction,
+                    level=100.0,
+                    invalidation_level=100.0 - sign * 0.1,
+                ),
+                price=100.0,
+                atr=1.0,
+                structure=structure,
+                profile=profile,
+                spread=0.02,
+            )
+            with self.subTest(direction=direction):
+                self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+                self.assertEqual(plan["execution_cost_status"], "configured")
+                self.assertIn("TP1", plan["execution_cost_target_rrs"])
+                self.assertGreaterEqual(
+                    plan["execution_cost_target_rrs"]["TP1"],
+                    profile.minimum_target_rr,
+                )
+
+        profile = replace(
+            resolve_momentum_pullback_profile(MODES["scalp"], "M5"),
+            commission_rate=0.001,
+            slippage_per_oz=0.05,
+        )
+        constrained = validate_candidate(
+            SimpleNamespace(
+                direction="BUY",
+                level=100.0,
+                invalidation_level=99.9,
+            ),
+            price=100.0,
+            atr=1.0,
+            structure=SimpleNamespace(
+                swing_highs=[(10, 101.8)],
+                swing_lows=[(20, 99.0)],
+                supports=[],
+                resistances=[],
+            ),
+            profile=profile,
+            spread=0.02,
+        )
+        self.assertFalse(constrained["valid"])
+        self.assertIn(
+            "fee/slippage-adjusted",
+            " ".join(constrained["rejection_reasons"]).lower(),
+        )
 
     def test_atr_period_requires_a_full_window_of_completed_candles(self):
         highs = [101.0] * 40

@@ -65,6 +65,10 @@ class MomentumPullbackProfile:
     sweep_penetration_atr: float = 0.04
     # Last-mile guard between a validated plan and the current spot quote.
     maximum_live_entry_distance_atr: float = 0.35
+    # Optional broker execution-cost estimates. None means the value is
+    # unknown, not zero; configured values are used in the net R:R screen.
+    commission_rate: float | None = None
+    slippage_per_oz: float | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete or unsafe per-mode execution profiles at startup."""
@@ -153,6 +157,18 @@ class MomentumPullbackProfile:
             raise ValueError("Maximum stop distance must exceed the minimum stop distance.")
         if self.preferred_target_rr < self.minimum_target_rr:
             raise ValueError("Preferred target R:R cannot be below the mode minimum.")
+        if self.commission_rate is not None and (
+            isinstance(self.commission_rate, bool)
+            or not math.isfinite(float(self.commission_rate))
+            or not 0 <= float(self.commission_rate) < 1
+        ):
+            raise ValueError("Commission rate must be finite and in [0, 1).")
+        if self.slippage_per_oz is not None and (
+            isinstance(self.slippage_per_oz, bool)
+            or not math.isfinite(float(self.slippage_per_oz))
+            or float(self.slippage_per_oz) < 0
+        ):
+            raise ValueError("Slippage per ounce must be finite and non-negative.")
 
 
 @dataclass
@@ -707,6 +723,22 @@ def resolve_momentum_pullback_profile(
         if str(period) != raw_period.strip() or period < 2 or period > 100:
             raise ValueError(f"{prefix}ATR_PERIOD must be an integer from 2 to 100.")
         overrides["atr_period"] = period
+    for field_name, env_suffix in (
+        ("commission_rate", "COMMISSION_RATE"),
+        ("slippage_per_oz", "SLIPPAGE_PER_OZ"),
+    ):
+        raw_value = os.getenv(prefix + env_suffix)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{prefix + env_suffix} must be a number.") from exc
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{prefix + env_suffix} must be finite and non-negative.")
+        if field_name == "commission_rate" and value >= 1:
+            raise ValueError(f"{prefix + env_suffix} must be less than 1.")
+        overrides[field_name] = value
     if overrides:
         resolved = replace(resolved, **overrides)
     return resolved

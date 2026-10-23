@@ -503,6 +503,12 @@ def analyze_weighted_market(
         "reference_spread_target_rrs": plan.get(
             "reference_spread_target_rrs", {}
         ),
+        "execution_cost_target_rrs": plan.get(
+            "execution_cost_target_rrs", {}
+        ),
+        "execution_cost_status": plan.get(
+            "execution_cost_status", "unavailable"
+        ),
         "reference_spread_rr": plan.get("reference_spread_rr"),
         "minimum_target_spacing": plan.get("minimum_target_spacing"),
         "spread_status": validation.get("spread_status", "unavailable"),
@@ -524,6 +530,8 @@ def analyze_weighted_market(
         "sweep_lookback": config.sweep_lookback,
         "atr_expansion_limit": config.atr_expansion_limit,
         "maximum_spread_atr": float(config.profile.maximum_spread_atr),
+        "commission_rate": config.profile.commission_rate,
+        "slippage_per_oz": config.profile.slippage_per_oz,
         "expected_holding_bars": int(config.profile.expected_holding_bars),
         "level_rationale": plan.get("level_rationale", {}),
         "setup_candidate": chosen,
