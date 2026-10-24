@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes, CommandHandler, Application
 
 from src.analysis import get_analysis
 from src.alerts import register_user, unregister_user, is_registered
-from src.market_hours import market_status
+from src.market_hours import market_closed_message, market_status
 from src.utils.formatting import (
     welcome_text, help_text, analysis_card, signal_card,
     trend_card, levels_card, outlook_card, recommend_card, news_card,
@@ -108,21 +108,7 @@ def _open_trade_banner(tf: str, account_id: int) -> str:
 
 
 def _market_closed_text() -> str:
-    ms = market_status()
-    lines = [
-        "MARKET CLOSED",
-        "=" * 28,
-        f"Status:  {ms['status_text']}",
-        f"Info:    {ms['note']}",
-        "=" * 28,
-        "Analysis is only available",
-        "when the market is open.",
-        "─" * 28,
-        "Gold futures trade:",
-        "Sun 6 PM  to  Fri 5 PM ET",
-        "Daily break: 5-6 PM ET",
-    ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return market_closed_message()
 
 
 def _is_market_open() -> bool:

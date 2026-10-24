@@ -21,6 +21,7 @@ from src.handlers import (
     register_message_handlers,
     register_photo_handlers,
 )
+from src.handlers.market_gate import stop_if_market_closed
 from src.alerts import (
     check_and_alert,
     check_open_trades_fast,
@@ -88,6 +89,7 @@ async def _access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             and not is_alerts_disabled(update.effective_chat.id)
         ):
             register_user(update.effective_chat.id)
+        await stop_if_market_closed(update)
         return
 
     # Reject the stranger

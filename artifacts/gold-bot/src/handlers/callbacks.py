@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, Application
 
 from src.analysis import analyze
-from src.market_hours import market_status
+from src.market_hours import market_closed_message, market_status
 from src.utils.formatting import (
     analysis_card, signal_card, trend_card, levels_card,
     outlook_card, recommend_card, multi_timeframe_card,
@@ -115,21 +115,7 @@ def _settings_text(chat_id: int, cfg, *, change: str = "") -> str:
 
 
 def _closed_text() -> str:
-    ms = market_status()
-    lines = [
-        "MARKET CLOSED  |  XAU/USD",
-        "=" * 28,
-        f"Status:  {ms['status_text']}",
-        f"Info:    {ms['note']}",
-        "=" * 28,
-        "Gold futures trade:",
-        "Sun 6 PM  to  Fri 5 PM ET",
-        "Daily break: 5:00–6:00 PM ET",
-        "─" * 28,
-        "Analysis is only available",
-        "when the market is open.",
-    ]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return market_closed_message()
 
 
 def _is_open() -> bool:

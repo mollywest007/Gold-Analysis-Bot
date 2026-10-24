@@ -2311,7 +2311,7 @@
       "stop_distance_atr": 1.0223,
       "stop_widened_to_atr_floor": false,
       "opened_at": 1792766701.1469207,
-      "status": "open",
+      "status": "expired",
       "invalidation_level": 3990.5,
       "minimum_rr": 1.5,
       "risk_fraction": 0.005,
@@ -2319,10 +2319,12 @@
       "reference_spread": 0.6619999999998072,
       "reference_spread_status": "passed",
       "reference_spread_rr": 2.98,
-      "lifecycle_status": "ACTIVE",
+      "lifecycle_status": "EXPIRED",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "lifecycle_notification_event": "EXPIRED",
+      "lifecycle_notification_pending": true
     }
   ]
 }

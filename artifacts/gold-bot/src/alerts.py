@@ -3343,6 +3343,15 @@ async def _send_trade_reminder_once(
       • ~6 candles — long-running trade update with live P&L
     Each milestone fires at most once per trade.
     """
+    from src.market_hours import market_status
+
+    status = market_status()
+    if not status["is_open"]:
+        logger.info(
+            "Trade reminder scan skipped — %s.", status["status_text"]
+        )
+        return
+
     if account_id is not None:
         state = state or _load_account_state(account_id)
         open_trades = trade_tracker.get_active_trades(account_id)

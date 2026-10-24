@@ -1317,7 +1317,11 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
                  "get_active_trades",
                  return_value=trades,
              ), \
-             patch.object(alerts, "_save_signal_state"):
+             patch.object(alerts, "_save_signal_state"), \
+             patch(
+                 "src.market_hours.market_status",
+                 return_value={"is_open": True},
+             ):
             await alerts._send_trade_reminder_once(
                 context, account_id=123, state=state
             )

@@ -5,7 +5,7 @@ Gold futures (COMEX GC=F) trading hours:
   - Weekend break: Friday 5:00 PM ET → Sunday 6:00 PM ET
 Uses America/New_York for proper DST handling.
 """
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -15,46 +15,93 @@ def _now_et() -> datetime:
     return datetime.now(tz=ET)
 
 
-def market_status() -> dict:
+def market_status(now: datetime | None = None) -> dict:
     """
     Returns:
       is_open     bool
       status_text str   — short phrase for display
       note        str   — optional extra context
     """
-    now = _now_et()
+    now = _now_et() if now is None else now
+    now = now.replace(tzinfo=ET) if now.tzinfo is None else now.astimezone(ET)
     wd  = now.weekday()   # Mon=0 … Sun=6
     h   = now.hour
     m   = now.minute
 
     # Weekend: closed Fri 17:00 ET through Sun 17:59 ET
     if wd == 4 and (h, m) >= (17, 0):
-        return _closed("MARKET CLOSED", "Re-opens Sunday 6:00 PM ET")
+        return _closed("MARKET CLOSED", _next_weekly_open(now))
     if wd == 5:
-        return _closed("MARKET CLOSED", "Re-opens Sunday 6:00 PM ET")
+        return _closed("MARKET CLOSED", _next_weekly_open(now))
     if wd == 6 and (h, m) < (18, 0):
-        return _closed("MARKET CLOSED", f"Opens in ~{_opens_in(now)}h")
+        return _closed("MARKET CLOSED", _next_weekly_open(now))
 
     # Daily maintenance break: 17:00–18:00 ET
     if 17 <= h < 18:
-        mins_left = 60 - m
-        return _closed("DAILY MAINTENANCE", f"Reopens in {mins_left} min")
+        next_open = now.replace(hour=18, minute=0, second=0, microsecond=0)
+        return _closed("DAILY MAINTENANCE", next_open)
 
     return {
         "is_open":     True,
         "status_text": "MARKET OPEN",
         "note":        _session_label(h),
+        "next_open_at": None,
+        "next_open_label": None,
     }
 
 
-def _opens_in(now: datetime) -> int:
-    """Hours until Sunday 18:00 ET."""
-    wd  = now.weekday()
-    h   = now.hour
-    if wd == 6:
-        return max(0, 18 - h)
-    # Saturday
-    return (18 - h) + 24
+def _next_weekly_open(now: datetime) -> datetime:
+    """Return the next Sunday 18:00 ET opening across the weekend break."""
+    days_until_sunday = (6 - now.weekday()) % 7
+    if days_until_sunday == 0 and now.hour >= 18:
+        days_until_sunday = 7
+    return (now + timedelta(days=days_until_sunday)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+
+
+def _format_opening_time(value: datetime) -> str:
+    """Format an exact, timezone-labelled opening time for Telegram users."""
+    return (
+        f"{value.strftime('%A, %B')} {value.day} at "
+        f"{value.strftime('%I:%M %p').lstrip('0')} ET"
+    )
+
+
+def _closed(status: str, next_open: datetime) -> dict:
+    label = _format_opening_time(next_open)
+    return {
+        "is_open": False,
+        "status_text": status,
+        "note": f"Reopens {label}",
+        "next_open_at": next_open.isoformat(),
+        "next_open_label": label,
+    }
+
+
+def market_closed_message(status: dict | None = None) -> str:
+    """Detailed closed-market notice shared by commands and dashboard actions."""
+    status = status or market_status()
+    next_open = status.get("next_open_label") or status.get("note", "unknown time")
+    lines = [
+        "MARKET CLOSED  |  XAU/USD",
+        "=" * 30,
+        f"Status:  {status.get('status_text', 'MARKET CLOSED')}",
+        f"Reopens: {next_open}",
+        "=" * 30,
+        "Trading and analysis tools are",
+        "unavailable until the market opens.",
+        "Gold futures: Sun 6 PM to Fri 5 PM ET",
+        "Daily break: 5–6 PM ET",
+    ]
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
+def market_closed_alert(status: dict | None = None) -> str:
+    """Short text that fits Telegram's callback alert limit."""
+    status = status or market_status()
+    next_open = status.get("next_open_label") or status.get("note", "unknown time")
+    return f"MARKET CLOSED · Reopens {next_open}"[:200]
 
 
 def _session_label(h: int) -> str:
@@ -65,10 +112,6 @@ def _session_label(h: int) -> str:
     if 3 <= h < 9:
         return "London session"
     return "Pre-market / overlap"
-
-
-def _closed(status: str, note: str) -> dict:
-    return {"is_open": False, "status_text": status, "note": note}
 
 
 def market_status_line() -> str:

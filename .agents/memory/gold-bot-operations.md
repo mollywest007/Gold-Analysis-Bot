@@ -42,3 +42,14 @@ still reports it as running.
 **How to apply:** Compare the newest scheduled-job timestamps with the active
 trade's opening time; after recovery, verify new scan logs and recheck persisted
 trade status before concluding that a price level was or was not reached.
+
+While gold is closed, all interactive commands, dashboard buttons, inline
+callbacks, and photo-analysis requests must be blocked with the exact next
+opening time in Eastern Time. Market transition notices may still run.
+
+**Why:** The user requested that bot functions stop during market closures and
+that dashboard taps explain when the market will reopen.
+
+**How to apply:** Keep the market-hours gate ahead of every Telegram feature
+handler, and maintain one shared closed-market message so all entry points stay
+consistent.

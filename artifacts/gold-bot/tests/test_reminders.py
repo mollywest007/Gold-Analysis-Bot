@@ -70,9 +70,34 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
                  alerts,
                  "_broadcast_text",
                  new=AsyncMock(return_value=broadcast_result),
-             ) as broadcast:
+             ) as broadcast, \
+             patch(
+                 "src.market_hours.market_status",
+                 return_value={"is_open": True},
+             ):
             await alerts.send_trade_reminder(context)
         return broadcast
+
+    async def test_closed_market_skips_trade_reminders(self):
+        self._write_trade(time.time() - 15 * 60)
+        bot = AsyncMock()
+        context = type("Context", (), {"bot": bot})()
+        price = AsyncMock(return_value=100.10)
+        broadcast = AsyncMock(return_value=(set(), True))
+
+        with patch(
+            "src.market_hours.market_status",
+            return_value={
+                "is_open": False,
+                "status_text": "MARKET CLOSED",
+            },
+        ), patch.object(alerts, "get_gold_price", new=price), patch.object(
+            alerts, "_broadcast_text", new=broadcast
+        ):
+            await alerts.send_trade_reminder(context)
+
+        price.assert_not_awaited()
+        broadcast.assert_not_awaited()
 
     async def test_near_entry_sends_missed_alert(self):
         self._write_trade(time.time() - 15 * 60)

@@ -4573,13 +4573,14 @@ def market_open_card(a: MarketAnalysis) -> str:
 def weekly_closed_recap_text() -> str:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%A %d %b %Y  %H:%M UTC")
+    market = market_status()
     lines = ["<pre>",
         "MARKET CLOSED  |  XAU/USD",
         "─" * 30,
         f"Time:   {now}",
         "─" * 30,
-        "Gold futures closed for the weekend.",
-        "Analysis resumes Sunday 6:00 PM ET.",
+        "Gold futures are closed for the scheduled break.",
+        f"Reopens {market['next_open_label'] or market['note']}.",
         "─" * 30,
         "Active trades remain tracked.",
         "</pre>",
