@@ -143,6 +143,34 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
         self.assertEqual(overridden.minimum_target_rr, 1.7)
         self.assertEqual(overridden.preferred_target_rr, 2.4)
 
+    def test_minimum_rr_override_cannot_lower_the_mode_floor(self):
+        for mode in ("scalp", "intraday", "swing", "position"):
+            cfg = MODES[mode]
+            base = resolve_momentum_pullback_profile(
+                cfg, cfg.analysis_setup_timeframe
+            )
+            floor = max(1.5, cfg.min_rr_ratio, base.minimum_target_rr)
+            with self.subTest(mode=mode):
+                with patch.dict(
+                    os.environ,
+                    {f"XAU_{mode.upper()}_MINIMUM_TARGET_RR": str(floor - 0.1)},
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "at least this mode's minimum target R:R"
+                    ):
+                        resolve_momentum_pullback_profile(
+                            cfg, cfg.analysis_setup_timeframe
+                        )
+
+                with patch.dict(
+                    os.environ,
+                    {f"XAU_{mode.upper()}_MINIMUM_TARGET_RR": str(floor)},
+                ):
+                    configured = resolve_momentum_pullback_profile(
+                        cfg, cfg.analysis_setup_timeframe
+                    )
+                self.assertEqual(configured.minimum_target_rr, floor)
+
     def test_mode_execution_cost_overrides_are_optional_and_validated(self):
         base = resolve_momentum_pullback_profile(MODES["scalp"], "M5")
         self.assertIsNone(base.commission_rate)

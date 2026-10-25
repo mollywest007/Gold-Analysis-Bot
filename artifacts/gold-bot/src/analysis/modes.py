@@ -713,6 +713,17 @@ def resolve_momentum_pullback_profile(
             raise ValueError(f"{prefix + env_suffix} must be a number.") from exc
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{prefix + env_suffix} must be positive and finite.")
+        if field_name == "minimum_target_rr":
+            mode_floor = max(
+                1.5,
+                float(mode_cfg.min_rr_ratio),
+                float(profile.minimum_target_rr),
+            )
+            if value < mode_floor:
+                raise ValueError(
+                    f"{prefix + env_suffix} must be at least this mode's "
+                    f"minimum target R:R of {mode_floor:g}."
+                )
         overrides[field_name] = value
     raw_period = os.getenv(prefix + "ATR_PERIOD")
     if raw_period is not None:

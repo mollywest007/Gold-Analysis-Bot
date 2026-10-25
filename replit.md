@@ -72,8 +72,9 @@ variables. Use `XAU_SCALP_`, `XAU_INTRADAY_`, `XAU_SWING_`, or
 `MINIMUM_STOP_ATR`, `MAXIMUM_STOP_ATR`, `MINIMUM_TARGET_RR`, or
 `PREFERRED_TARGET_RR`. Defaults enforce at least 1.5R; the Scalp minimum is
 1.5R and its preferred target is 2R. Overrides must be positive, finite, and
-keep preferred R:R at or above the minimum. Scalp's base stop floor is 0.70 ATR;
-timeframe scaling and actual structural invalidation may require more room.
+cannot reduce the minimum below the effective mode floor; preferred R:R must
+remain at or above that minimum. Scalp's base stop floor is 0.70 ATR; timeframe
+scaling and actual structural invalidation may require more room.
 No dollar TP/SL amount is hardcoded.
 
 Optional execution-cost inputs are mode-specific:
