@@ -159,6 +159,7 @@ def _result_card(r: ChartAnalysisResult) -> str:
     )
     lines += [
         f"  Market Bias : {_esc(r.bias.capitalize())}",
+        f"  Mode / side : {_esc(r.analysis_mode.upper())} / {_esc(r.direction)}",
         f"  Structure   : {_esc(ms_map)}",
         f"  Key Zone    : "
         f"{r.key_support[0]:,.2f} support / {r.key_resistance[0]:,.2f} resistance"
@@ -185,6 +186,45 @@ def _result_card(r: ChartAnalysisResult) -> str:
             lines.append(f"  TP2      : {r.take_profit_2:,.2f}")
         if r.take_profit_3:
             lines.append(f"  TP3      : {r.take_profit_3:,.2f}")
+        risk_distance = abs(r.entry - r.stop_loss) if r.stop_loss else 0.0
+        if risk_distance > 0:
+            atr_note = (
+                f" ({risk_distance / r.atr14:.2f} ATR)"
+                if r.atr14 and r.atr14 > 0
+                else ""
+            )
+            lines.append(f"  SL distance: {risk_distance:,.2f}{atr_note}")
+            for label, target in (
+                ("TP1", r.take_profit_1),
+                ("TP2", r.take_profit_2),
+                ("TP3", r.take_profit_3),
+            ):
+                if target:
+                    distance = abs(target - r.entry)
+                    rr = distance / risk_distance
+                    atr_note = (
+                        f", {distance / r.atr14:.2f} ATR"
+                        if r.atr14 and r.atr14 > 0
+                        else ""
+                    )
+                    lines.append(
+                        f"  {label} distance: {distance:,.2f}{atr_note} "
+                        f"(1:{rr:.2f} R:R)"
+                    )
+            validation = (r.raw or {}).get("tp_sl_validation", {})
+            rationale = (validation.get("level_rationale", {}) or {})
+            if rationale.get("stop"):
+                lines.append(f"  SL basis : {_esc(rationale['stop'])}")
+            if rationale.get("targets"):
+                lines.append(f"  TP basis : {_esc(rationale['targets'])}")
+            lines.append(
+                "  Dollar P/L: Unavailable — account equity and broker contract "
+                "specifications are not configured."
+            )
+            lines.append(
+                "  Costs    : Live spread, commission, and slippage are unavailable "
+                "for image-only analysis."
+            )
         if r.invalidation:
             lines.append(f"  Invalidat: {r.invalidation:,.2f}")
         if r.entry_reason:

@@ -15,9 +15,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Optional
 
 import aiohttp
@@ -92,6 +94,7 @@ class ChartAnalysisResult:
     entry_type: str                     # "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT"
     setup_status: str                   # WAIT | DEVELOPING | MODERATE ENTRY | MISSED | INVALID
     current_confirmation: str           # what has already happened on the chart
+    atr14: Optional[float]
     moderate_entry_low: Optional[float]
     moderate_entry_high: Optional[float]
     entry: Optional[float]
@@ -260,6 +263,9 @@ skip_detail. Never return a bare WAIT without its reason.
 • Stop Loss: beyond the setup's structural invalidation swing/level with the
   mode/timeframe ATR14 buffer. If the structural stop is unreasonable or wider
   than the profile cap, skip; never widen it away from structure.
+• Read ATR14 only when its value is visible and legible on this chart. If it is
+  not displayed or cannot be read reliably, set atr14 to null and do not issue
+  MODERATE ENTRY; ATR-based stop distance cannot otherwise be verified.
 • TP1: a real opposing swing/liquidity level visible on this chart or a
   higher-timeframe level explicitly shown in the input, with at least 1.5R
   realistic room. If opposing structure blocks it, use WAIT rather than invent
@@ -343,6 +349,7 @@ Return ONLY a single valid JSON object — no markdown fences, no explanation, n
   "entry_type":           "ENTRY" | "BREAKOUT" | "RETEST" | "REVERSAL" | "WAIT",
   "setup_status":         "WAIT" | "DEVELOPING" | "MODERATE ENTRY" | "MISSED" | "INVALID",
   "current_confirmation": "<exact confirmation already visible, or what is still missing>",
+  "atr14":                <visible selected-timeframe ATR14 value, or null if not shown/readable>,
   "moderate_entry_low":   <float or null>,
   "moderate_entry_high":  <float or null>,
   "entry":                <float or null>,
@@ -373,6 +380,8 @@ Critical rules:
 - Keep the stop beyond structural invalidation with the mode/timeframe ATR14
   buffer; reject unreasonable or profile-cap-exceeding structure rather than
   widening a stop away from its level.
+- A MODERATE ENTRY is actionable only if the deterministic mode-specific level
+  validator can verify ATR14, invalidation, and visible opposing structure.
 - Targets must be real opposing levels from this chart. Never claim profitability
   or present an untested win probability as a historical statistic.
 - For any non-entry status, populate mode, timeframe, direction, setup_type,
@@ -529,6 +538,82 @@ def _canonical_timeframe(value: str) -> str:
         "3M": "M3",
     }
     return aliases.get(normalized, normalized)
+
+
+def _chart_number(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _validate_chart_trade_levels(
+    parsed: dict,
+    analysis_mode: str,
+    timeframe: str,
+) -> tuple[dict | None, str | None]:
+    """Recalculate image-derived levels with the same deterministic engine as live alerts."""
+    if analysis_mode not in MODES or MODES[analysis_mode].momentum_pullback is None:
+        return None, "A standalone trading mode could not be resolved for this chart."
+    try:
+        profile = resolve_momentum_pullback_profile(
+            MODES[analysis_mode], _canonical_timeframe(timeframe)
+        )
+    except (TypeError, ValueError) as exc:
+        return None, f"The chart timeframe cannot be validated: {exc}"
+
+    entry = _chart_number(parsed.get("entry"))
+    invalidation = _chart_number(parsed.get("invalidation"))
+    atr = _chart_number(parsed.get("atr14"))
+    direction = str(parsed.get("direction") or "").strip().upper()
+    if atr is None or atr <= 0:
+        return None, "Selected-timeframe ATR14 is not visible and verifiable in the image."
+    if entry is None or invalidation is None:
+        return None, "Entry or structural invalidation is missing or unreadable."
+    if direction not in {"BUY", "SELL"}:
+        return None, "Trade direction is missing or invalid."
+
+    def levels(key: str) -> list[tuple[int, float]]:
+        raw_levels = parsed.get(key)
+        if not isinstance(raw_levels, list):
+            return []
+        return [
+            (index, value)
+            for index, raw_value in enumerate(raw_levels)
+            if (value := _chart_number(raw_value)) is not None and value > 0
+        ]
+
+    structure = SimpleNamespace(
+        swing_highs=levels("key_resistance"),
+        swing_lows=levels("key_support"),
+        supports=[],
+        resistances=[],
+    )
+    from src.analysis.weighted.validation import validate_candidate
+
+    result = validate_candidate(
+        SimpleNamespace(
+            direction=direction,
+            level=entry,
+            invalidation_level=invalidation,
+        ),
+        price=entry,
+        atr=atr,
+        structure=structure,
+        profile=profile,
+        spread=None,
+    )
+    if not result.get("valid"):
+        reasons = result.get("rejection_reasons") or [
+            "The image-derived plan failed deterministic level validation."
+        ]
+        return None, " ".join(str(reason) for reason in reasons)
+    result["atr14"] = atr
+    result["atr_period"] = profile.atr_period
+    return result, None
 
 
 def _resolve_chart_scope(
@@ -754,6 +839,7 @@ async def analyse_chart_bytes(
         else "SELL" if bias == "BEARISH"
         else "NEUTRAL"
     )
+    parsed["direction"] = direction
     setup_type = str(
         parsed.get("setup_type") or parsed.get("entry_type") or "Unclassified"
     )
@@ -764,6 +850,80 @@ async def analyse_chart_bytes(
         or parsed.get("current_confirmation")
         or "The selected setup conditions are incomplete."
     ).strip()
+    level_validation = None
+    if setup_status == "MODERATE ENTRY":
+        level_validation, level_error = _validate_chart_trade_levels(
+            parsed,
+            resolved_mode,
+            str(parsed.get("timeframe") or ""),
+        )
+        if level_validation is None:
+            setup_status = "WAIT"
+            parsed["setup_status"] = setup_status
+            parsed["entry_type"] = "WAIT"
+            skip_reason = (
+                "Insufficient TP room"
+                if any(
+                    word in level_error.lower()
+                    for word in (
+                        "target",
+                        "room",
+                        "reward",
+                        "opposing",
+                        "tp1",
+                        "r:r",
+                    )
+                )
+                else "Invalid SL structure"
+            )
+            skip_detail = (
+                "Deterministic mode-specific TP/SL validation rejected the "
+                f"image-derived plan: {level_error}"
+            )
+            _suppress_unscoped_setup(parsed, skip_detail)
+            parsed["skip_reason"] = skip_reason
+            parsed["skip_detail"] = skip_detail
+        else:
+            parsed.update(
+                {
+                    "entry": level_validation["entry"],
+                    "stop_loss": level_validation["stop_loss"],
+                    "take_profit_1": level_validation["tp1"],
+                    "take_profit_2": level_validation["tp2"],
+                    "take_profit_3": level_validation["tp3"],
+                    "invalidation": level_validation["invalidation_level"],
+                    "rr_ratio": level_validation["rr"],
+                    "tp_sl_validation": {
+                        "atr14": level_validation["atr14"],
+                        "atr_period": level_validation["atr_period"],
+                        "stop_distance": level_validation["risk"],
+                        "target_distances": {
+                            label: round(abs(price - level_validation["entry"]), 5)
+                            for label, price in (
+                                ("TP1", level_validation["tp1"]),
+                                ("TP2", level_validation["tp2"]),
+                                ("TP3", level_validation["tp3"]),
+                            )
+                            if price is not None
+                        },
+                        "target_rrs": level_validation["target_rrs"],
+                        "level_rationale": level_validation["level_rationale"],
+                        "spread_status": level_validation["spread_status"],
+                        "execution_cost_status": (
+                            level_validation["execution_cost_status"]
+                        ),
+                    },
+                }
+            )
+            model_reason = str(parsed.get("entry_reason") or "").strip()
+            validator_reason = (
+                "TP/SL levels were recalculated from the visible ATR14, "
+                "structural invalidation, and nearest confirmed opposing "
+                "chart levels using the selected mode's rules."
+            )
+            parsed["entry_reason"] = (
+                f"{model_reason} {validator_reason}".strip()
+            )
     valid_skip_reasons = {
         "Insufficient TP room",
         "Strong opposing resistance/support",
@@ -852,6 +1012,7 @@ async def analyse_chart_bytes(
         entry_type=str(parsed.get("entry_type", "WAIT")).upper(),
         setup_status=setup_status,
         current_confirmation=str(parsed.get("current_confirmation", "")),
+        atr14=_chart_number(parsed.get("atr14")),
         moderate_entry_low=_f("moderate_entry_low"),
         moderate_entry_high=_f("moderate_entry_high"),
         entry=_f("entry"),

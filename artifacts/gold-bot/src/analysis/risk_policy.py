@@ -146,11 +146,16 @@ def calculate_position_size(
     risk_fraction: float | None = None,
     maximum_lot: float | None = None,
     mode: str | None = None,
+    existing_open_risk: float = 0.0,
     commission_rate: float = 0.0,
     slippage_per_oz: float = 0.0,
     leverage: float | None = None,
 ) -> dict:
-    """Calculate lots only from supplied account equity and broker specs."""
+    """Calculate lots within both per-trade and remaining account risk budgets.
+
+    ``existing_open_risk`` is the cash risk already committed across active
+    positions. It must use the same account currency as ``equity``.
+    """
     required = (equity, contract_size_oz_per_lot, lot_step, minimum_lot)
     if any(value is None for value in required):
         return {
@@ -169,12 +174,13 @@ def calculate_position_size(
             else risk_fraction
         )
         max_lot = float(maximum_lot) if maximum_lot is not None else None
+        open_risk = float(existing_open_risk)
         commission = float(commission_rate)
         slippage = float(slippage_per_oz)
         leverage_value = float(leverage) if leverage is not None else None
     except (TypeError, ValueError, OverflowError):
         return {"available": False, "reason": "Position-sizing inputs are invalid."}
-    numeric = [*values, entry_value, stop_value, risk]
+    numeric = [*values, entry_value, stop_value, risk, open_risk]
     if max_lot is not None:
         numeric.append(max_lot)
     numeric.extend((commission, slippage))
@@ -192,6 +198,7 @@ def calculate_position_size(
         or entry_value == stop_value
         or risk <= 0
         or risk > RISK_POLICY.max_suggested_risk_fraction
+        or open_risk < 0
         or commission < 0
         or commission >= 1
         or slippage < 0
@@ -200,7 +207,18 @@ def calculate_position_size(
     ):
         return {"available": False, "reason": "Position-sizing inputs violate risk limits."}
 
-    cash_risk = equity_value * risk
+    per_trade_cash_risk = equity_value * risk
+    total_risk_limit = equity_value * RISK_POLICY.max_total_risk_fraction
+    remaining_total_risk = total_risk_limit - open_risk
+    cash_risk = min(per_trade_cash_risk, remaining_total_risk)
+    if cash_risk <= 0:
+        return {
+            "available": False,
+            "reason": "No remaining risk budget under the account-wide maximum.",
+            "existing_open_risk": round(open_risk, 2),
+            "total_risk_limit": round(total_risk_limit, 2),
+            "remaining_total_risk_budget": round(max(0.0, remaining_total_risk), 2),
+        }
     price_risk_per_lot = abs(entry_value - stop_value) * contract_size
     execution_cost_per_lot = (
         (entry_value + stop_value) * contract_size * commission
@@ -222,9 +240,16 @@ def calculate_position_size(
         "available": True,
         "lots": round(lots, 8),
         "cash_risk": round(cash_risk, 2),
+        "per_trade_cash_risk_limit": round(per_trade_cash_risk, 2),
+        "existing_open_risk": round(open_risk, 2),
+        "total_risk_limit": round(total_risk_limit, 2),
+        "remaining_total_risk_budget": round(remaining_total_risk, 2),
         "price_risk": round(lots * price_risk_per_lot, 2),
         "estimated_execution_cost": round(lots * execution_cost_per_lot, 2),
         "actual_risk_fraction": round(lots * risk_per_lot / equity_value, 8),
+        "aggregate_risk_fraction": round(
+            (open_risk + lots * risk_per_lot) / equity_value, 8
+        ),
         "estimated_position_value": round(
             lots * contract_size * entry_value, 2
         ),

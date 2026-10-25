@@ -49,6 +49,12 @@ Reject invalid stops, obstructed or undersized targets, stale data, material
 conflict, excessive volatility, and missed entries. `EARLY` is provisional;
 only `MODERATE`/`STRONG` produces BUY/SELL. Otherwise remain `WAIT`.
 
+Chart-photo analysis uses the same deterministic, mode-specific TP/SL validator
+before showing an actionable setup. If selected-timeframe ATR14, structural
+invalidation, or opposing chart structure is unreadable, return `WAIT`. Image
+analysis does not report dollar P/L or live execution costs without account and
+broker contract details.
+
 Modes retain their existing timeframe scope and holding windows:
 
 | Mode | Selectable timeframes | Typical intent |

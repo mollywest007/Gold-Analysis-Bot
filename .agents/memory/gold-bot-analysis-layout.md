@@ -14,3 +14,9 @@ Telegram clients display monospaced rows on narrow screens, so wrap long values 
 **Why:** The user wants the original sectioned card to remain recognizable while being easier to scan on a phone.
 
 **How to apply:** Use clear WAIT/BUY/SELL status markers and state explicitly when no structural invalidation level exists instead of inventing one.
+
+Image-based chart analysis must not bypass the deterministic mode-specific TP/SL validator. Require readable selected-timeframe ATR14, a structural invalidation level, and visible opposing structure before presenting an actionable setup; otherwise return WAIT. Display price distances, validated R:R, and level rationale, but do not invent dollar P/L or execution costs when account and broker specifications are unavailable.
+
+**Why:** Vision-derived levels are estimates, and screenshots do not provide reliable account sizing or execution-cost data; the same risk floor must apply across signal paths.
+
+**How to apply:** Recalculate image-derived levels through the shared validator and label unavailable dollar economics and live costs explicitly.

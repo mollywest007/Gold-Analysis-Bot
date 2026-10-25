@@ -81,6 +81,35 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
         self.assertGreater(result["estimated_execution_cost"], 0)
         self.assertIsNotNone(result["estimated_margin"])
 
+    def test_position_size_uses_only_remaining_account_wide_risk_budget(self):
+        result = calculate_position_size(
+            equity=10000,
+            entry=2000,
+            stop=1990,
+            contract_size_oz_per_lot=100,
+            lot_step=0.01,
+            minimum_lot=0.01,
+            risk_fraction=0.005,
+            existing_open_risk=170,
+        )
+        self.assertTrue(result["available"])
+        self.assertEqual(result["cash_risk"], 30.0)
+        self.assertEqual(result["existing_open_risk"], 170.0)
+        self.assertEqual(result["total_risk_limit"], 200.0)
+        self.assertLessEqual(result["aggregate_risk_fraction"], 0.02)
+
+        exhausted = calculate_position_size(
+            equity=10000,
+            entry=2000,
+            stop=1990,
+            contract_size_oz_per_lot=100,
+            lot_step=0.01,
+            minimum_lot=0.01,
+            existing_open_risk=200,
+        )
+        self.assertFalse(exhausted["available"])
+        self.assertIn("No remaining risk budget", exhausted["reason"])
+
     def test_invalid_trade_economics_are_unavailable_not_guessed(self):
         result = calculate_trade_economics(
             direction="BUY",
