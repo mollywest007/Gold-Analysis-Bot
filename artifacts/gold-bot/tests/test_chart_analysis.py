@@ -28,6 +28,8 @@ class ChartAnalysisPromptTests(unittest.TestCase):
         self.assertIn('"open_trade_notes"', prompt)
         self.assertIn("Selected mode: Intraday", prompt)
         self.assertIn("Return ONLY a single valid JSON object", prompt)
+        self.assertIn("active mode's configured minimum R:R", prompt)
+        self.assertNotIn("with at least 1.5R", prompt)
         self.assertNotIn("{mode_instructions}", prompt)
         self.assertNotIn("{open_trade_section}", prompt)
         self.assertIn('"atr14"', prompt)

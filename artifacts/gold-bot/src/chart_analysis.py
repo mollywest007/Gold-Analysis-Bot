@@ -267,9 +267,10 @@ skip_detail. Never return a bare WAIT without its reason.
   not displayed or cannot be read reliably, set atr14 to null and do not issue
   MODERATE ENTRY; ATR-based stop distance cannot otherwise be verified.
 • TP1: a real opposing swing/liquidity level visible on this chart or a
-  higher-timeframe level explicitly shown in the input, with at least 1.5R
-  realistic room. If opposing structure blocks it, use WAIT rather than invent
-  or extend a target.
+  higher-timeframe level explicitly shown in the input, with at least the
+  active mode's configured minimum R:R from the selected mode instructions and
+  enough realistic room. If opposing structure blocks it, use WAIT rather than
+  invent or extend a target.
 • TP2 / TP3: only farther, distinct opposing structural levels actually visible.
   Never invent measured-move or fixed-R targets.
 • Invalidation: the specific candle CLOSE that definitively cancels the setup thesis
