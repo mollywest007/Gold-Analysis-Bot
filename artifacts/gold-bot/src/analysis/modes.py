@@ -239,7 +239,8 @@ class ModeConfig:
     })
 
     # ── Risk / reward ──────────────────────────────────────────────────────────
-    # ATR multiplier for SL distance — keyed by timeframe; missing TFs get default
+    # Legacy single-timeframe ATR multipliers. Normal live analysis uses the
+    # weighted momentum_pullback profile's structural stop rules instead.
     sl_mult_override: Dict[str, float] = field(default_factory=dict)
     # TP distances as SL multiples: (TP1, TP2, TP3)
     tp_mult: Tuple[float, float, float] = (2.0, 3.5, 4.5)
@@ -409,7 +410,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=40.0,
         sell_rsi_veto_above=60.0,
         stop_buffer_atr=0.10,
-        minimum_stop_distance_atr=0.70,
+        minimum_stop_distance_atr=1.00,
         maximum_stop_distance_atr=1.75,
         target_buffer_atr=0.08,
         minimum_target_room_atr=0.60,
@@ -440,7 +441,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=44.0,
         sell_rsi_veto_above=56.0,
         stop_buffer_atr=0.15,
-        minimum_stop_distance_atr=0.70,
+        minimum_stop_distance_atr=1.10,
         maximum_stop_distance_atr=2.00,
         target_buffer_atr=0.10,
         minimum_target_room_atr=0.75,
@@ -471,7 +472,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=46.0,
         sell_rsi_veto_above=54.0,
         stop_buffer_atr=0.20,
-        minimum_stop_distance_atr=1.00,
+        minimum_stop_distance_atr=1.25,
         maximum_stop_distance_atr=2.25,
         target_buffer_atr=0.12,
         minimum_target_room_atr=0.90,
@@ -502,7 +503,7 @@ MOMENTUM_PULLBACK_PROFILES: Dict[str, MomentumPullbackProfile] = {
         buy_rsi_veto_below=48.0,
         sell_rsi_veto_above=52.0,
         stop_buffer_atr=0.25,
-        minimum_stop_distance_atr=1.25,
+        minimum_stop_distance_atr=1.50,
         maximum_stop_distance_atr=2.50,
         target_buffer_atr=0.15,
         minimum_target_room_atr=1.00,

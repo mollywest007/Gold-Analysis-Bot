@@ -57,8 +57,8 @@ Require each later target to be at least the selected mode/timeframe's `minimum_
 
 ## Mode-specific TP/SL scale
 
-Keep Scalp stops and targets shortest, then scale up progressively for Intraday, Swing, and Position using each mode's ATR-based stop floor, structural invalidation, and preferred R:R. Do not use a shared fixed-dollar distance; if real structure cannot support the wider stop and minimum target R:R, return WAIT.
+Keep mode-specific ATR stop floors and buffers, increasing with the intended holding horizon. Do not use a shared fixed-dollar distance; if real structure cannot support the stop and minimum target R:R, return WAIT.
 
-**Why:** The user explicitly asked for mode-distinct levels because the existing TP and SL distances were too small, especially for longer-horizon modes.
+**Why:** The user asked for more room in Scalp Mode; the inspected M15 plan had been pinned to a 0.715 ATR floor. The user also wants longer-horizon modes to retain progressively wider settings.
 
-**How to apply:** Maintain increasing mode-specific ATR floors and buffers, preserve hard risk caps, and cap targets at confirmed market structure rather than inventing farther levels.
+**How to apply:** Use base minimum stop distances of 1.0 ATR (Scalp), 1.1 ATR (Intraday), 1.25 ATR (Swing), and 1.5 ATR (Position), then apply timeframe scaling. Keep structural invalidation and mode caps authoritative; reject setups without enough opposing target room. Legacy `sl_mult_override` values are not used by normal live weighted analysis.

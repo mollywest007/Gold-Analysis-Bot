@@ -80,11 +80,11 @@ class ModeSpecificProfileTests(unittest.TestCase):
             for mode in modes
         ]
 
-        self.assertEqual(stop_floors, [0.70, 0.70, 1.00, 1.25])
+        self.assertEqual(stop_floors, [1.00, 1.10, 1.25, 1.50])
         self.assertEqual(stop_buffers, [0.10, 0.15, 0.20, 0.25])
         self.assertEqual(
             preferred_target_distances,
-            [1.40, 1.40, 2.0, 3.75],
+            [2.0, 2.2, 2.5, 4.5],
         )
         self.assertEqual(stop_floors, sorted(stop_floors))
         self.assertEqual(stop_buffers, sorted(stop_buffers))
@@ -92,6 +92,8 @@ class ModeSpecificProfileTests(unittest.TestCase):
             preferred_target_distances,
             sorted(preferred_target_distances),
         )
+        scalp_m15 = resolve_momentum_pullback_profile(MODES["scalp"], "M15")
+        self.assertAlmostEqual(scalp_m15.minimum_stop_distance_atr, 1.015)
 
     def test_mode_rules_scale_with_the_selected_timeframe(self):
         scalp_m1 = resolve_momentum_pullback_profile(MODES["scalp"], "M1")

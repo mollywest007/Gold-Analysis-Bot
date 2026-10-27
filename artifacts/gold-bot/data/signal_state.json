@@ -8,11 +8,11 @@
       },
       "closed_signal": {},
       "last_fired": {
-        "M15": 1792766710.0895472
+        "M15": 1793084593.4666283
       },
       "pending_signal": {},
       "sl_cooldown_until": {
-        "M15": 1792568376.2250862
+        "M15": 1793083857.8607557
       },
       "tp_cooldown_until": {},
       "tp_reanalysis_until": {},
@@ -74,6 +74,9 @@
           "update_6x"
         ],
         "3b8247972f98459487656be6d7394d45": [
+          "entry"
+        ],
+        "d986ed59d5aa4021b40f043f37e995c7": [
           "entry"
         ]
       }

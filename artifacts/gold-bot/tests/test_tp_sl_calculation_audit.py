@@ -249,7 +249,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 PriceZone(99.60, 99.80, 99.70, 2, "support"),
                 "supports",
                 99.60,
-                99.30,
+                99.00,
             ),
             (
                 "SELL",
@@ -257,7 +257,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
                 PriceZone(100.20, 100.40, 100.30, 2, "resistance"),
                 "resistances",
                 100.40,
-                100.70,
+                101.00,
             ),
         )
         for direction, invalidation, zone, zone_key, expected_level, expected_sl in cases:
@@ -396,7 +396,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
             spread=spread,
         )
         self.assertTrue(accepted["valid"], accepted.get("rejection_reasons"))
-        self.assertEqual(accepted["stop_loss"], 4165.77)
+        self.assertEqual(accepted["stop_loss"], 4163.83)
         expected_target = _cent(
             entry
             + 20 * atr
@@ -578,7 +578,7 @@ class TPslFormulaAuditTests(unittest.TestCase):
         self.assertIn("TP rationale", card)
         self.assertIn("Dollar P/L", card)
         self.assertIn("Unavailable", card)
-        self.assertEqual(plan["stop_loss"], 99.57)
+        self.assertEqual(plan["stop_loss"], 99.47)
         expected_target = _cent(
             plan["entry"]
             + 20 * atr

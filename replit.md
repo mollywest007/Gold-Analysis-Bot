@@ -49,6 +49,12 @@ Reject invalid stops, obstructed or undersized targets, stale data, material
 conflict, excessive volatility, and missed entries. `EARLY` is provisional;
 only `MODERATE`/`STRONG` produces BUY/SELL. Otherwise remain `WAIT`.
 
+Before timeframe scaling, the active mode stop-distance floors are 1.0 ATR
+(Scalp), 1.1 ATR (Intraday), 1.25 ATR (Swing), and 1.5 ATR (Position).
+Structural invalidation may require a wider stop; the mode cap and target
+quality checks still reject plans that cannot support it. Legacy
+`sl_mult_override` settings do not control normal live weighted analysis.
+
 Chart-photo analysis uses the same deterministic, mode-specific TP/SL validator
 before showing an actionable setup. If selected-timeframe ATR14, structural
 invalidation, or opposing chart structure is unreadable, return `WAIT`. Image
