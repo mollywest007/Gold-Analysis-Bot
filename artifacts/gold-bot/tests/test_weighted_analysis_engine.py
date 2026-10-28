@@ -1024,9 +1024,12 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CURRENT CONFIRMATION", card)
         self.assertIn("ENTRY CONFIRMATION LEVELS", card)
         self.assertIn("Current price", card)
-        self.assertIn("Confirmation level", card)
+        self.assertIn("Confirm level", card)
         self.assertIn("Entry status", card)
         self.assertIn("Next action", card)
+        self.assertIn("BUY WATCH", card)
+        self.assertIn("SELL WATCH", card)
+        self.assertIn("MOVEMENT", card)
         self.assertNotIn("Not backtested", card)
         self.assertEqual(
             {role: report["timeframe"] for role, report in result.analysis_timeframes.items()},

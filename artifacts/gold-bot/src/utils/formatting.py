@@ -2004,9 +2004,9 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
     if not available:
         rows.extend(
             [
-                ("Breakout level", "Not available — no verified live setup candles"),
-                ("Pullback/retest", "Not available"),
-                ("Confirmation", "Not available"),
+                ("Breakout level", "Not available — verified live setup candles required"),
+                ("Retest level", "Not available"),
+                ("Confirm level", "Not available"),
                 (
                     "Entry status",
                     str(
@@ -2029,6 +2029,28 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
         )
         return rows
 
+    def add_steps_and_status() -> None:
+        steps = levels.get("steps", []) or []
+        if steps:
+            rows.append(("", "MOVEMENT"))
+            for index, step in enumerate(steps[:3], 1):
+                text = str(step).strip()
+                numbered_prefix = f"{index}."
+                if text.startswith(numbered_prefix):
+                    text = text[len(numbered_prefix):].lstrip()
+                rows.append((f"Step {index}", text))
+        rows.extend(
+            [
+                ("", "STATUS"),
+                ("Entry status", str(levels.get("entry_status", "WAIT — not confirmed"))),
+                ("Next action", str(levels.get("next_action", "Wait; do not enter yet."))),
+                (
+                    "Updates",
+                    "Recalculated on each Analysis refresh from live price and completed candles.",
+                ),
+            ]
+        )
+
     direction = str(levels.get("direction", "WAIT") or "WAIT").upper()
     if direction in ("BUY", "SELL"):
         setup_type = str(levels.get("setup_type", "") or "").upper()
@@ -2043,14 +2065,12 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
             else "context only; this setup does not require a separate breakout"
         )
         rows.append(("Direction", f"{direction} · {setup_type.replace('_', ' ').title()}"))
-        rows.append(("Breakout level", f"{breakout_level} ({breakout_note})"))
-        rows.append(
-            ("Pullback/retest", f"{retest_level} ± {tolerance}")
-        )
+        rows.append(("Breakout", f"{breakout_level} ({breakout_note})"))
+        rows.append(("Retest level", f"{retest_level} ± {tolerance}"))
         if confirmation_level is not None:
             rows.append(
                 (
-                    "Confirmation level",
+                    "Confirm level",
                     f"{_entry_confirmation_price(confirmation_level)} "
                     f"(completed close {direction_word})",
                 )
@@ -2058,15 +2078,14 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
         else:
             rows.append(
                 (
-                    "Confirmation level",
+                    "Confirm level",
                     "No fixed price — use the strategy's completed-candle pattern",
                 )
             )
         confirmation_rule = str(levels.get("confirmation_rule", "") or "")
         if confirmation_rule:
-            rows.append(("Confirmation rule", confirmation_rule))
-        for index, step in enumerate(levels.get("steps", [])[:3], 1):
-            rows.append((f"Step {index}", str(step)))
+            rows.append(("Confirm rule", confirmation_rule))
+        add_steps_and_status()
     else:
         watches = levels.get("watches", {}) or {}
         buy_watch = watches.get("BUY", {}) or {}
@@ -2074,9 +2093,10 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
         rows.append(("Direction", "WAIT — no single setup selected"))
         for side, watch in (("BUY", buy_watch), ("SELL", sell_watch)):
             side_word = "above" if side == "BUY" else "below"
+            rows.append(("", f"{side} WATCH"))
             rows.append(
                 (
-                    f"Breakout level {side}",
+                    "Breakout",
                     f"{_entry_confirmation_price(watch.get('breakout_level'))}; "
                     f"close {side_word} "
                     f"{_entry_confirmation_price(watch.get('breakout_trigger_level'))}",
@@ -2084,29 +2104,20 @@ def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
             )
             rows.append(
                 (
-                    f"Pullback/retest {side}",
+                    "Retest level",
                     f"{_entry_confirmation_price(watch.get('retest_level'))} "
                     f"± {_entry_confirmation_price(watch.get('retest_tolerance'))}",
                 )
             )
             rows.append(
                 (
-                    f"Confirmation level {side}",
+                    "Confirm level",
                     f"completed close {side_word} "
                     f"{_entry_confirmation_price(watch.get('confirmation_level'))} "
                     "after retest",
                 )
             )
-        for index, step in enumerate(levels.get("steps", [])[:3], 1):
-            rows.append((f"Step {index}", str(step)))
-
-    rows.extend(
-        [
-            ("Entry status", str(levels.get("entry_status", "WAIT — not confirmed"))),
-            ("Next action", str(levels.get("next_action", "Wait; do not enter yet."))),
-            ("Updates", "Recalculated on each Analysis refresh from live price and completed candles."),
-        ]
-    )
+        add_steps_and_status()
     return rows
 
 
@@ -2539,7 +2550,10 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
 
     start_section("ENTRY CONFIRMATION LEVELS")
     for label, value in _entry_confirmation_level_rows(a):
-        add_row(label, value)
+        if label:
+            add_row(label, value)
+        else:
+            lines.extend(["", f"  {value}"] if value else [""])
 
     skipped_setup = report.get("skipped_setup")
     if not isinstance(skipped_setup, dict):
