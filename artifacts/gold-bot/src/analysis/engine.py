@@ -214,6 +214,9 @@ class MarketAnalysis:
     data_quality: str = "UNKNOWN"
     expected_holding_bars: int = 0
 
+    # Exact, live confirmation stages from the active weighted setup path.
+    entry_confirmation_levels: dict = field(default_factory=dict)
+
 
 
 # ─── TA core functions ────────────────────────────────────────────────────────
@@ -3158,6 +3161,9 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
         expected_holding_bars=int(
             result.get("expected_holding_bars", 0) or 0
         ),
+        entry_confirmation_levels=result.get(
+            "entry_confirmation_levels", {}
+        ) or {},
         setup_quality=category_grade,
         setup_grade=category_grade,
         tp3=target3,

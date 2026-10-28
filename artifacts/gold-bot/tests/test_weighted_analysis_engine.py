@@ -12,7 +12,11 @@ from src.analysis import engine
 from src.analysis.market_data import OHLCVData
 from src.analysis.modes import MODES
 from src.analysis.weighted.config import resolve_analysis_config
-from src.analysis.weighted.engine import _category_for_score, analyze_weighted_market
+from src.analysis.weighted.engine import (
+    _build_entry_confirmation_levels,
+    _category_for_score,
+    analyze_weighted_market,
+)
 from src.analysis.weighted.indicators import IndicatorSnapshot, calculate_indicators
 from src.analysis.weighted.market import prepare_completed_candles
 from src.analysis.weighted.regime import classify_regime
@@ -95,6 +99,143 @@ def _structure(
         swing_highs[-1][1] if swing_highs else None,
         swing_lows[-1][1] if swing_lows else None,
     )
+
+
+class EntryConfirmationLevelTests(unittest.TestCase):
+    def test_direct_breakout_has_atr_buffer_and_wait_is_never_shown_as_confirmed(self):
+        data = _candles("M5")
+        profile = MODES["scalp"].momentum_pullback
+        candidate = SetupCandidate(
+            "BUY", "BREAKOUT", 2403.0, 2401.0,
+            0.8, 0.8, 0.8, 0.2, ("Completed breakout",),
+        )
+        args = {
+            "candidate": candidate,
+            "setup_data": data,
+            "price": data.price,
+            "atr": 1.25,
+            "profile": profile,
+            "breakout_lookback": 20,
+            "data_is_valid": True,
+        }
+        waiting = _build_entry_confirmation_levels(
+            **args,
+            category="EARLY",
+            action="WAIT",
+        )
+        confirmed = _build_entry_confirmation_levels(
+            **args,
+            category="MODERATE",
+            action="BUY",
+        )
+
+        expected = candidate.level + max(1.25 * profile.confirmation_break_atr, 0.01)
+        self.assertAlmostEqual(waiting["confirmation_level"], expected)
+        self.assertIn("NOT CONFIRMED", waiting["entry_status"])
+        self.assertEqual(confirmed["entry_status"], "ENTRY CONFIRMED — BUY")
+
+    def test_pullback_confirmation_remains_pattern_based_not_a_made_up_price(self):
+        data = _candles("M5")
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 2402.0, 2399.0,
+            0.7, 0.8, 0.7, 0.2, ("Support retest",),
+        )
+        result = _build_entry_confirmation_levels(
+            candidate=candidate,
+            setup_data=data,
+            price=data.price,
+            atr=1.25,
+            profile=MODES["scalp"].momentum_pullback,
+            breakout_lookback=20,
+            category="EARLY",
+            action="WAIT",
+            data_is_valid=True,
+        )
+
+        self.assertEqual(result["retest_level"], candidate.level)
+        self.assertIsNone(result["confirmation_level"])
+        self.assertFalse(result["breakout_required"])
+        self.assertIn("no single fixed confirmation price", result["confirmation_rule"])
+        self.assertIn("NOT CONFIRMED", result["entry_status"])
+
+    def test_missing_verified_setup_data_produces_no_numeric_watch_levels(self):
+        for setup_data in (None, _candles("M5")):
+            result = _build_entry_confirmation_levels(
+                candidate=None,
+                setup_data=setup_data,
+                price=2400.0,
+                atr=1.25,
+                profile=MODES["scalp"].momentum_pullback,
+                breakout_lookback=20,
+                category="WAIT",
+                action="WAIT",
+                data_is_valid=False,
+            )
+
+            self.assertFalse(result["available"])
+            self.assertEqual(result["watches"], {})
+            self.assertIsNone(result["confirmation_level"])
+            self.assertNotIn("CONFIRMED", result["entry_status"])
+
+    def test_waiting_analysis_exposes_live_two_sided_breakout_and_retest_levels(self):
+        data = _candles("M5")
+        profile = MODES["scalp"].momentum_pullback
+        atr = 1.25
+        result = _build_entry_confirmation_levels(
+            candidate=None,
+            setup_data=data,
+            price=data.price,
+            atr=atr,
+            profile=profile,
+            breakout_lookback=20,
+            category="WAIT",
+            action="WAIT",
+            data_is_valid=True,
+        )
+
+        expected_high = max(data.highs[-21:-1])
+        expected_low = min(data.lows[-21:-1])
+        buffer = max(atr * profile.confirmation_break_atr, 0.01)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["direction"], "WAIT")
+        self.assertAlmostEqual(result["watches"]["BUY"]["breakout_level"], expected_high)
+        self.assertAlmostEqual(
+            result["watches"]["BUY"]["breakout_trigger_level"], expected_high + buffer
+        )
+        self.assertAlmostEqual(result["watches"]["SELL"]["breakout_level"], expected_low)
+        self.assertAlmostEqual(
+            result["watches"]["SELL"]["breakout_trigger_level"], expected_low - buffer
+        )
+        self.assertAlmostEqual(result["watches"]["BUY"]["confirmation_level"], expected_high)
+        self.assertAlmostEqual(result["watches"]["SELL"]["confirmation_level"], expected_low)
+        self.assertEqual(result["entry_status"], "WAIT — no qualifying setup selected")
+        self.assertNotIn("CONFIRMED", result["entry_status"])
+
+    def test_breakout_retest_levels_follow_the_candidate_and_early_is_not_confirmed(self):
+        data = _candles("M5")
+        profile = MODES["scalp"].momentum_pullback
+        candidate = SetupCandidate(
+            "SELL", "BREAKOUT_RETEST", 2399.5, 2401.0,
+            0.9, 0.9, 0.9, 0.2, ("Breakdown and retest",),
+        )
+        result = _build_entry_confirmation_levels(
+            candidate=candidate,
+            setup_data=data,
+            price=data.price,
+            atr=1.25,
+            profile=profile,
+            breakout_lookback=20,
+            category="EARLY",
+            action="WAIT",
+            data_is_valid=True,
+        )
+
+        self.assertEqual(result["direction"], "SELL")
+        self.assertEqual(result["breakout_level"], candidate.level)
+        self.assertEqual(result["retest_level"], candidate.level)
+        self.assertEqual(result["confirmation_level"], candidate.level)
+        self.assertIn("NOT CONFIRMED", result["entry_status"])
+        self.assertTrue(all("detected" in step or "WAIT" in step for step in result["steps"]))
 
 
 class ModeResolutionTests(unittest.TestCase):
@@ -881,6 +1022,11 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("WHAT TO DO", card)
         self.assertIn("HOW IT IS ANALYZING", card)
         self.assertIn("CURRENT CONFIRMATION", card)
+        self.assertIn("ENTRY CONFIRMATION LEVELS", card)
+        self.assertIn("Current price", card)
+        self.assertIn("Confirmation level", card)
+        self.assertIn("Entry status", card)
+        self.assertIn("Next action", card)
         self.assertNotIn("Not backtested", card)
         self.assertEqual(
             {role: report["timeframe"] for role, report in result.analysis_timeframes.items()},

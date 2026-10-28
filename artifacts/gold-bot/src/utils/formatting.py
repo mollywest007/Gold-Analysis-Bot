@@ -1973,6 +1973,143 @@ def _analysis_invalidation_text(
      return "Not set — no validated setup has a structural invalidation level."
 
 
+def _entry_confirmation_price(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "Not available"
+    if not math.isfinite(number) or number <= 0:
+        return "Not available"
+    return f"{number:,.4f}".rstrip("0").rstrip(".")
+
+
+def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
+    """Render live numeric watch levels without inventing missing triggers."""
+    report = getattr(a, "institutional_report", {}) or {}
+    levels = (
+        getattr(a, "entry_confirmation_levels", None)
+        or report.get("entry_confirmation_levels", {})
+        or {}
+    )
+    if not isinstance(levels, dict):
+        levels = {}
+    available = bool(levels.get("available"))
+    current_price = (
+        _entry_confirmation_price(levels.get("current_price"))
+        if available
+        else "Unavailable — verified setup data required"
+    )
+    rows: list[tuple[str, str]] = [("Current price", current_price)]
+
+    if not available:
+        rows.extend(
+            [
+                ("Breakout level", "Not available — no verified live setup candles"),
+                ("Pullback/retest", "Not available"),
+                ("Confirmation", "Not available"),
+                (
+                    "Entry status",
+                    str(
+                        levels.get(
+                            "entry_status",
+                            "WAIT — verified live setup data unavailable",
+                        )
+                    ),
+                ),
+                (
+                    "Next action",
+                    str(
+                        levels.get(
+                            "next_action",
+                            "Wait for verified live spot data; do not enter from this analysis.",
+                        )
+                    ),
+                ),
+            ]
+        )
+        return rows
+
+    direction = str(levels.get("direction", "WAIT") or "WAIT").upper()
+    if direction in ("BUY", "SELL"):
+        setup_type = str(levels.get("setup_type", "") or "").upper()
+        breakout_level = _entry_confirmation_price(levels.get("breakout_level"))
+        retest_level = _entry_confirmation_price(levels.get("retest_level"))
+        tolerance = _entry_confirmation_price(levels.get("retest_tolerance"))
+        confirmation_level = levels.get("confirmation_level")
+        direction_word = "above" if direction == "BUY" else "below"
+        breakout_note = (
+            "active trigger boundary"
+            if levels.get("breakout_required")
+            else "context only; this setup does not require a separate breakout"
+        )
+        rows.append(("Direction", f"{direction} · {setup_type.replace('_', ' ').title()}"))
+        rows.append(("Breakout level", f"{breakout_level} ({breakout_note})"))
+        rows.append(
+            ("Pullback/retest", f"{retest_level} ± {tolerance}")
+        )
+        if confirmation_level is not None:
+            rows.append(
+                (
+                    "Confirmation level",
+                    f"{_entry_confirmation_price(confirmation_level)} "
+                    f"(completed close {direction_word})",
+                )
+            )
+        else:
+            rows.append(
+                (
+                    "Confirmation level",
+                    "No fixed price — use the strategy's completed-candle pattern",
+                )
+            )
+        confirmation_rule = str(levels.get("confirmation_rule", "") or "")
+        if confirmation_rule:
+            rows.append(("Confirmation rule", confirmation_rule))
+        for index, step in enumerate(levels.get("steps", [])[:3], 1):
+            rows.append((f"Step {index}", str(step)))
+    else:
+        watches = levels.get("watches", {}) or {}
+        buy_watch = watches.get("BUY", {}) or {}
+        sell_watch = watches.get("SELL", {}) or {}
+        rows.append(("Direction", "WAIT — no single setup selected"))
+        for side, watch in (("BUY", buy_watch), ("SELL", sell_watch)):
+            side_word = "above" if side == "BUY" else "below"
+            rows.append(
+                (
+                    f"Breakout level {side}",
+                    f"{_entry_confirmation_price(watch.get('breakout_level'))}; "
+                    f"close {side_word} "
+                    f"{_entry_confirmation_price(watch.get('breakout_trigger_level'))}",
+                )
+            )
+            rows.append(
+                (
+                    f"Pullback/retest {side}",
+                    f"{_entry_confirmation_price(watch.get('retest_level'))} "
+                    f"± {_entry_confirmation_price(watch.get('retest_tolerance'))}",
+                )
+            )
+            rows.append(
+                (
+                    f"Confirmation level {side}",
+                    f"completed close {side_word} "
+                    f"{_entry_confirmation_price(watch.get('confirmation_level'))} "
+                    "after retest",
+                )
+            )
+        for index, step in enumerate(levels.get("steps", [])[:3], 1):
+            rows.append((f"Step {index}", str(step)))
+
+    rows.extend(
+        [
+            ("Entry status", str(levels.get("entry_status", "WAIT — not confirmed"))),
+            ("Next action", str(levels.get("next_action", "Wait; do not enter yet."))),
+            ("Updates", "Recalculated on each Analysis refresh from live price and completed candles."),
+        ]
+    )
+    return rows
+
+
 def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     """Render the familiar sectioned Telegram card with clearer spacing."""
     report = getattr(a, "institutional_report", {}) or {}
@@ -2399,6 +2536,10 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     add_row("Waiting for", waiting)
     add_row("Entry trigger", trigger)
     add_row("Invalidation", invalidation)
+
+    start_section("ENTRY CONFIRMATION LEVELS")
+    for label, value in _entry_confirmation_level_rows(a):
+        add_row(label, value)
 
     skipped_setup = report.get("skipped_setup")
     if not isinstance(skipped_setup, dict):

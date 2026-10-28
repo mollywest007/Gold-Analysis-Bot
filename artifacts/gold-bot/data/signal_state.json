@@ -20,11 +20,11 @@
       "momentum_shift_warned": {},
       "forming_alert_sent": {},
       "forming_alert_last_sent": {
-        "M15": 1793168981.5280995
+        "M15": 1793177642.744709
       },
       "forming_alert_message_ids": {
         "M15": {
-          "8039158711": 7489
+          "8039158711": 7507
         }
       },
       "reminded_trade_ids": {

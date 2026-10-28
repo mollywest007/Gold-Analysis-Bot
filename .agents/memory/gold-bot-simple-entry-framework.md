@@ -62,3 +62,11 @@ Keep mode-specific ATR stop floors and buffers, increasing with the intended hol
 **Why:** The user asked for more room in Scalp Mode; the inspected M15 plan had been pinned to a 0.715 ATR floor. The user also wants longer-horizon modes to retain progressively wider settings.
 
 **How to apply:** Use base minimum stop distances of 1.0 ATR (Scalp), 1.1 ATR (Intraday), 1.25 ATR (Swing), and 1.5 ATR (Position), then apply timeframe scaling. Keep structural invalidation and mode caps authoritative; reject setups without enough opposing target room. Legacy `sl_mult_override` values are not used by normal live weighted analysis.
+
+## Entry confirmation levels
+
+Analysis must show numerical entry stages from live spot data and completed setup candles, while preserving the active setup type's real confirmation rule. Recalculate on each Analysis refresh. If a setup uses pattern confirmation without a fixed price threshold, say so instead of inventing one. Keep WAIT and EARLY provisional until the weighted context, score, and risk gates pass; an analysis confirmation is not a broker fill.
+
+**Why:** The user explicitly asked for exact, step-by-step live price levels and required that entries never be labeled confirmed before the strategy conditions are met.
+
+**How to apply:** Separate the buffered initial breakout trigger from post-retest confirmation, preserve direct-breakout paths where retests are optional, and show an explicit unavailable/WAIT state when verified live data or a numeric trigger is missing.

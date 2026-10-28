@@ -55,6 +55,286 @@ def _candidate_reason(candidate: SetupCandidate | None) -> str:
     return " ".join(candidate.evidence)
 
 
+def _build_entry_confirmation_levels(
+    *,
+    candidate: SetupCandidate | None,
+    setup_data,
+    price: float,
+    atr: float,
+    profile,
+    breakout_lookback: int,
+    category: str,
+    action: str,
+    rejection_reasons: list[str] | None = None,
+    data_is_valid: bool = False,
+) -> dict:
+    """Expose exact live levels and stages from the active weighted setup rules."""
+    result = {
+        "available": False,
+        "direction": "WAIT",
+        "current_price": float(price or 0.0) or None,
+        "setup_type": "",
+        "breakout_level": None,
+        "retest_level": None,
+        "retest_tolerance": None,
+        "confirmation_level": None,
+        "confirmation_rule": "Verified completed setup candles are unavailable.",
+        "breakout_required": False,
+        "watches": {},
+        "steps": [],
+        "entry_status": "WAIT — verified live setup data unavailable",
+        "next_action": "Wait for verified live spot data, then refresh Analysis.",
+    }
+    if not data_is_valid or setup_data is None or price <= 0 or atr <= 0:
+        return result
+
+    opens = list(getattr(setup_data, "opens", ()) or ())
+    highs = list(getattr(setup_data, "highs", ()) or ())
+    lows = list(getattr(setup_data, "lows", ()) or ())
+    closes = list(getattr(setup_data, "closes", ()) or ())
+    size = min(len(opens), len(highs), len(lows), len(closes))
+    if size < 20:
+        return result
+    highs, lows, closes = highs[:size], lows[:size], closes[:size]
+    range_lookback = min(max(int(breakout_lookback), 5), size - 1)
+    prior_high = max(float(value) for value in highs[-range_lookback - 1:-1])
+    prior_low = min(float(value) for value in lows[-range_lookback - 1:-1])
+    breakout_buffer = max(
+        float(atr) * float(profile.confirmation_break_atr), 0.01
+    )
+    retest_tolerance = max(
+        float(atr) * float(profile.level_tolerance_atr), 0.01
+    )
+
+    def price_text(value: float) -> str:
+        return f"{float(value):,.4f}".rstrip("0").rstrip(".")
+
+    def watch(side: str, boundary: float) -> dict:
+        breakout_trigger = (
+            boundary + breakout_buffer
+            if side == "BUY"
+            else boundary - breakout_buffer
+        )
+        return {
+            "breakout_level": boundary,
+            "breakout_trigger_level": breakout_trigger,
+            "retest_level": boundary,
+            "retest_tolerance": retest_tolerance,
+            "confirmation_level": boundary,
+        }
+
+    result.update(
+        available=True,
+        current_price=float(price),
+        watches={
+            "BUY": watch("BUY", prior_high),
+            "SELL": watch("SELL", prior_low),
+        },
+    )
+    if candidate is None:
+        result.update(
+            steps=[
+                (
+                    f"1. Breakout: BUY completed close above "
+                    f"{price_text(prior_high + breakout_buffer)}; SELL below "
+                    f"{price_text(prior_low - breakout_buffer)}."
+                ),
+                (
+                    f"2. Pullback/retest: revisit {price_text(prior_high)} or "
+                    f"{price_text(prior_low)} within ±{price_text(retest_tolerance)} "
+                    "and hold or reject."
+                ),
+                (
+                    f"3. Retest confirmation: close back above the BUY level or "
+                    "below the SELL level; a contained breakout may qualify "
+                    "without a retest. Stay WAIT for all mode gates."
+                ),
+            ],
+            entry_status="WAIT — no qualifying setup selected",
+            next_action=(
+                "Wait for completed-candle price action and refresh Analysis "
+                "to recalculate these levels."
+            ),
+        )
+        return result
+
+    direction = str(candidate.direction).upper()
+    setup_type = str(candidate.setup_type).upper()
+    candidate_level = float(candidate.level)
+    breakout_setups = {
+        "BREAKOUT",
+        "BREAKOUT_RETEST",
+        "FAILED_BREAKOUT",
+        "LIQUIDITY_SWEEP",
+    }
+    breakout_level = (
+        candidate_level
+        if setup_type in breakout_setups
+        else prior_high if direction == "BUY" else prior_low
+    )
+    retest_level = candidate_level
+    confirmation_level = None
+    if setup_type == "BREAKOUT":
+        confirmation_level = (
+            breakout_level + breakout_buffer
+            if direction == "BUY"
+            else breakout_level - breakout_buffer
+        )
+        confirmation_rule = (
+            "Completed candle close beyond the breakout level plus the mode ATR "
+            "buffer; configured candle-shape limits also apply."
+        )
+    elif setup_type == "BREAKOUT_RETEST":
+        confirmation_level = candidate_level
+        confirmation_rule = (
+            f"After the buffered break, retest {price_text(candidate_level)} within "
+            f"±{price_text(retest_tolerance)} and close back on the {direction.lower()} "
+            "side with a directional candle or rejection."
+        )
+    elif setup_type == "FAILED_BREAKOUT":
+        confirmation_level = candidate_level
+        confirmation_rule = (
+            f"After the break, a completed candle must re-enter the range across "
+            f"{price_text(candidate_level)} with rejection, structure-shift, or momentum evidence."
+        )
+    elif setup_type == "LIQUIDITY_SWEEP":
+        confirmation_level = candidate_level
+        confirmation_rule = (
+            f"Sweep the prior boundary at {price_text(candidate_level)}, then close back "
+            "inside the range with the strategy's penetration and close-position checks."
+        )
+    elif setup_type == "TREND_PULLBACK":
+        confirmation_rule = (
+            f"Retest {price_text(candidate_level)} within tolerance, then show a "
+            "direction-aligned rejection, momentum recovery, or refinement shift; "
+            "there is no single fixed confirmation price."
+        )
+    elif setup_type == "SUPPORT_RESISTANCE_REACTION":
+        confirmation_rule = (
+            f"Test the repeated zone at {price_text(candidate_level)} and close with a "
+            "directional rejection; there is no separate fixed breakout price."
+        )
+    else:
+        confirmation_rule = (
+            "The selected setup uses a completed-candle pattern rather than a "
+            "fixed numeric confirmation threshold."
+        )
+
+    rejections = list(rejection_reasons or [])
+    if action in ("BUY", "SELL"):
+        entry_status = f"ENTRY CONFIRMED — {action}"
+        gate_step = (
+            "Weighted context, score, and risk gates passed; no broker order is placed."
+        )
+        next_action = (
+            "Strategy conditions are confirmed. This analysis does not place a broker order."
+        )
+    elif str(category).upper() == "EARLY":
+        entry_status = f"DEVELOPING — {direction}, NOT CONFIRMED"
+        gate_step = (
+            "Still WAIT: EARLY is provisional; MODERATE/STRONG and validation are required."
+        )
+        next_action = (
+            "Wait for MODERATE/STRONG and all selected-mode validation gates; do not enter yet."
+        )
+    else:
+        entry_status = f"WAIT — {direction} setup has not passed final gates"
+        gate_step = (
+            "Still WAIT: "
+            + (
+                str(rejections[0])[:150]
+                if rejections
+                else "selected-mode context, score, and risk checks are incomplete."
+            )
+        )
+        next_action = (
+            str(rejections[0])[:180]
+            if rejections
+            else "Wait for the selected-mode context, score, and risk checks; do not enter."
+        )
+
+    side_word = "above" if direction == "BUY" else "below"
+    if setup_type == "BREAKOUT":
+        steps = [
+            (
+                f"1. Breakout: completed close {side_word} "
+                f"{price_text(confirmation_level)} (detected)."
+            ),
+            (
+                f"2. Retest: {price_text(retest_level)} ± {price_text(retest_tolerance)} "
+                "is optional for this contained-breakout path."
+            ),
+            f"3. Final entry gate: {gate_step}",
+        ]
+    elif setup_type == "BREAKOUT_RETEST":
+        steps = [
+            (
+                f"1. Breakout: completed close {side_word} "
+                f"{price_text(breakout_level + breakout_buffer if direction == 'BUY' else breakout_level - breakout_buffer)} "
+                "(detected)."
+            ),
+            (
+                f"2. Retest: tested {price_text(retest_level)} within "
+                f"±{price_text(retest_tolerance)} and held (detected)."
+            ),
+            (
+                f"3. Confirmation: close {side_word} {price_text(confirmation_level)} "
+                f"with candle recovery/rejection; {gate_step}"
+            ),
+        ]
+    elif setup_type in ("FAILED_BREAKOUT", "LIQUIDITY_SWEEP"):
+        steps = [
+            (
+                f"1. Price swept/broke the boundary at {price_text(breakout_level)} "
+                "(detected)."
+            ),
+            (
+                f"2. Completed close returned across {price_text(confirmation_level)} "
+                "into the range (detected)."
+            ),
+            f"3. Reversal evidence: {confirmation_rule} {gate_step}",
+        ]
+    elif setup_type == "TREND_PULLBACK":
+        steps = [
+            (
+                f"1. Pullback tested {price_text(retest_level)} within "
+                f"±{price_text(retest_tolerance)} (detected)."
+            ),
+            f"2. Confirmation: {confirmation_rule}",
+            f"3. Final entry gate: {gate_step}",
+        ]
+    elif setup_type == "SUPPORT_RESISTANCE_REACTION":
+        steps = [
+            (
+                f"1. Price tested the zone at {price_text(retest_level)} within "
+                f"±{price_text(retest_tolerance)} (detected)."
+            ),
+            f"2. Confirmation: {confirmation_rule}",
+            f"3. Final entry gate: {gate_step}",
+        ]
+    else:
+        steps = [
+            f"1. Setup level: {price_text(retest_level)}.",
+            f"2. Confirmation: {confirmation_rule}",
+            f"3. Final entry gate: {gate_step}",
+        ]
+
+    result.update(
+        direction=direction,
+        setup_type=setup_type,
+        breakout_level=breakout_level,
+        retest_level=retest_level,
+        retest_tolerance=retest_tolerance,
+        confirmation_level=confirmation_level,
+        confirmation_rule=confirmation_rule,
+        breakout_required=setup_type in breakout_setups,
+        steps=steps,
+        entry_status=entry_status,
+        next_action=next_action,
+    )
+    return result
+
+
 def _category_for_score(
     score: int,
     breakdown: dict,
@@ -438,6 +718,18 @@ def analyze_weighted_market(
             "A validated reference spread was screened; broker-specific commission "
             "and slippage are unavailable."
         )
+    entry_confirmation_levels = _build_entry_confirmation_levels(
+        candidate=chosen,
+        setup_data=setup_data,
+        price=price,
+        atr=atr_value,
+        profile=config.profile,
+        breakout_lookback=config.breakout_lookback,
+        category=category,
+        action=action,
+        rejection_reasons=rejection_reasons,
+        data_is_valid=required_data_valid,
+    )
 
     return {
         "mode": config.mode,
@@ -554,6 +846,7 @@ def analyze_weighted_market(
         "data_quality": data_quality,
         "is_simulated": data_is_simulated,
         "required_data_valid": required_data_valid,
+        "entry_confirmation_levels": entry_confirmation_levels,
         "execution_note": execution_note,
         "major_conflict": major_conflict,
     }
