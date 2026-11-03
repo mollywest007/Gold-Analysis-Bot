@@ -996,7 +996,7 @@ class AnalysisIntegrityTests(unittest.TestCase):
             card = formatting.analysis_card(analysis)
 
         self.assertIn("WHAT TO DO", card)
-        self.assertIn("Entry status  : 🟡 WAIT · potential SELL", card)
+        self.assertIn("Entry status : 🟡 WAIT · potential SELL", " ".join(card.split()))
         self.assertIn("&lt;confirmation&gt; required", card)
         self.assertIn("Entry trigger :", card)
         self.assertIn("SKIPPED SETUP", card)

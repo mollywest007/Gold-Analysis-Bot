@@ -1379,8 +1379,8 @@ class NotificationPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TP3 1:3.00", scalp_card)
         self.assertIn("Price distance", scalp_card)
         self.assertIn("SL 10.00 (1.00 ATR)", scalp_card)
-        self.assertRegex(scalp_card, r"TP1\s+10\.00 \(1\.00 ATR\)")
-        self.assertIn("Spread-adjusted R:R: Unavailable", scalp_card)
+        self.assertRegex(scalp_card, r"TP1\s+10\.00\s+\(1\.00 ATR\)")
+        self.assertIn("Spread-adjusted R:R: Unavailable", " ".join(scalp_card.split()))
         self.assertIn("two-sided quote", scalp_card)
 
     async def test_entry_alert_can_identify_its_stream(self):

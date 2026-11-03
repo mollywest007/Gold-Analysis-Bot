@@ -2362,20 +2362,24 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     def add_row(label: str, value: object) -> None:
         prefix = f"  {label:<14}: "
         text = " ".join(str(value or "—").split())
-        wrapped = textwrap.wrap(
-            text,
-            width=max(20, 44 - len(prefix)),
-            break_long_words=False,
-            break_on_hyphens=False,
-        ) or ["—"]
-        lines.append(prefix + wrapped[0])
-        lines.extend(
-            " " * len(prefix) + continuation
-            for continuation in wrapped[1:]
-        )
+        if len(prefix) + len(text) <= 40:
+            lines.append(prefix + text)
+        else:
+            # Long explanations should use the whole card width rather than
+            # wrapping into a narrow, heavily indented value column.
+            lines.append(f"  {label:<14}:")
+            lines.extend(
+                "    " + part for part in textwrap.wrap(
+                    text, width=36, break_long_words=True,
+                    break_on_hyphens=False,
+                )
+            )
+            lines.append("")
 
+    section_starts = []
     def start_section(title: str) -> None:
-        lines.extend(["", separator, title])
+        section_starts.append((title, len(lines)))
+        lines.extend(["", separator, f"  {title}", ""])
 
     start_section("MARKET SNAPSHOT")
     add_row("Symbol", "XAU/USD")
@@ -2662,6 +2666,22 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
             add_row("Setup type", skipped_type)
             add_row("Reason", skipped_reason)
 
+    # Decision and next action come first, supporting evidence comes last.
+    sections = {
+        title: lines[start:section_starts[index + 1][1]
+                     if index + 1 < len(section_starts) else len(lines)]
+        for index, (title, start) in enumerate(section_starts)
+    }
+    ordered_lines = lines[:section_starts[0][1]]
+    for title in (
+        "MARKET SNAPSHOT", "WHAT TO DO", "ENTRY CONFIRMATION",
+        "TRADE PLAN", "CURRENT CONFIRMATION", "HOW IT IS ANALYZING",
+        "SKIPPED SETUP",
+    ):
+        ordered_lines.extend(sections.pop(title, []))
+    for remaining in sections.values():
+        ordered_lines.extend(remaining)
+    lines = ordered_lines
     lines.extend(["", "  Not financial advice.", "</pre>"])
     escaped_lines = [
         lines[0],
