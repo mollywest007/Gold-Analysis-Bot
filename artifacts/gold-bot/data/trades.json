@@ -2639,7 +2639,7 @@
       "stop_distance_atr": 1.0152,
       "stop_widened_to_atr_floor": true,
       "opened_at": 1793718323.944455,
-      "status": "open",
+      "status": "sl_hit",
       "invalidation_level": 3934.4,
       "minimum_rr": 1.5,
       "risk_fraction": 0.005,
@@ -2647,10 +2647,32 @@
       "reference_spread": 0.6580000000003565,
       "reference_spread_status": "passed",
       "reference_spread_rr": 2.29,
-      "lifecycle_status": "ACTIVE",
+      "lifecycle_status": "STOP LOSS HIT",
       "tp1_hit": false,
       "tp2_hit": false,
-      "tp3_hit": false
+      "tp3_hit": false,
+      "closed_at": 1793718965.9190748,
+      "close_reason": "stop_loss",
+      "exit_evidence": {
+        "source": "live_bid_ask",
+        "symbol": "XAU/USD",
+        "timeframe": "M15",
+        "high": 3931.861,
+        "low": 3931.861,
+        "spot": 3936.800049,
+        "bid": 3931.861,
+        "ask": 3932.519,
+        "spread": 0.658,
+        "observed_candle_high": null,
+        "observed_candle_low": null,
+        "captured_at": 1793718965.9189904
+      },
+      "result_notification_pending": false,
+      "result_notification_sent_at": 1793718967.062003,
+      "cooldown_notification_pending": false,
+      "cooldown_until": 1793720767.066475,
+      "cooldown_duration_seconds": 1800.0,
+      "cooldown_notification_sent_at": 1793718967.320212
     }
   ]
 }
