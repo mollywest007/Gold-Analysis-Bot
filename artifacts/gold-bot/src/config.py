@@ -33,7 +33,7 @@ _raw_user_id = (
     or os.environ.get("ALLOWED_USER_ID", "").strip()
 )
 ALLOWED_USER_ID: int = int(_raw_user_id) if _raw_user_id.isdigit() else 0
-ALLOWED_USERNAME = os.environ.get("ALLOWED_USERNAME", "senpaipl9")
+ALLOWED_USERNAME = os.environ.get("ALLOWED_USERNAME", "Donwannag")
 ALLOWED_USERNAMES = {
     username.strip().lstrip("@").lower()
     for username in os.environ.get(
