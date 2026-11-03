@@ -15,6 +15,7 @@ from src.config import (
     ALLOWED_USERNAMES,
 )
 from src.key_health import validate_keys_on_startup, periodic_key_health_check
+from src.instance_lock import acquire_instance_lock
 from src.handlers import (
     register_command_handlers,
     register_callback_handlers,
@@ -186,6 +187,18 @@ async def _set_commands(app: Application) -> None:
 
 
 def main() -> None:
+    # Keep one local poller/scanner process per bot entrypoint. Workflow
+    # restarts can leave an orphaned child alive; a duplicate would race over
+    # the shared file-backed trade and alert state even before Telegram reports
+    # a getUpdates conflict.
+    instance_lock = acquire_instance_lock(__file__)
+    if instance_lock is None:
+        logger.critical(
+            "Another local Gold Analysis Bot process already owns the polling "
+            "lock; refusing to start a duplicate."
+        )
+        return
+
     # ── Key validation ─────────────────────────────────────────────────────────
     # Runs BEFORE the bot starts polling. Exits immediately if the Telegram
     # token is missing or invalid. Warns (but continues) for GOOGLE_AI_KEY.

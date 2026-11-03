@@ -20,6 +20,42 @@ def _round_away_from_entry(value: float, direction: str) -> float:
     return float(Decimal(str(value)).quantize(_PRICE_QUANTUM, rounding=rounding))
 
 
+def _round_toward_entry(value: float, direction: str) -> float:
+    """Round the maximum permitted stop toward entry so the cap cannot widen."""
+    rounding = ROUND_CEILING if direction == "BUY" else ROUND_FLOOR
+    return float(Decimal(str(value)).quantize(_PRICE_QUANTUM, rounding=rounding))
+
+
+def _stop_limit_fields(
+    entry: float,
+    required_stop: float,
+    direction: str,
+    atr: float,
+    profile,
+) -> dict:
+    published_entry = round(entry, 2)
+    required_stop = _round_toward_invalidation(required_stop, direction)
+    maximum_distance = atr * float(profile.maximum_stop_distance_atr)
+    maximum_stop = _round_toward_entry(
+        entry - maximum_distance if direction == "BUY"
+        else entry + maximum_distance,
+        direction,
+    )
+    required_distance = abs(published_entry - required_stop)
+    allowed_distance = abs(published_entry - maximum_stop)
+    return {
+        "required_stop_loss": required_stop,
+        "maximum_allowed_stop_loss": maximum_stop,
+        "required_stop_distance": round(required_distance, 2),
+        "maximum_allowed_stop_distance": round(allowed_distance, 2),
+        "required_stop_atr": round(required_distance / atr, 4),
+        "maximum_allowed_stop_atr": round(allowed_distance / atr, 4),
+        "configured_maximum_stop_atr": round(
+            float(profile.maximum_stop_distance_atr), 4
+        ),
+    }
+
+
 def _zone_value(zone, key: str):
     if isinstance(zone, dict):
         return zone.get(key)
@@ -105,9 +141,10 @@ def validate_candidate(
             return {"valid": False, "rejection_reasons": ["Reference spread is invalid."]}
         if not math.isfinite(spread_value) or spread_value < 0:
             return {"valid": False, "rejection_reasons": ["Reference spread is invalid."]}
-    buffer = atr * float(profile.stop_buffer_atr)
-    if spread_value is not None:
-        buffer += spread_value / 2.0
+    spread_buffer = spread_value / 2.0 if spread_value is not None else 0.0
+    requested_atr_buffer = atr * float(profile.stop_buffer_atr)
+    minimum_atr_buffer = atr * float(profile.minimum_stop_buffer_atr)
+    buffer = requested_atr_buffer + spread_buffer
     # If the candidate invalidation sits within a nearby support/resistance
     # zone, put the stop beyond the full zone rather than just its midpoint.
     relevant_zones = (
@@ -144,6 +181,9 @@ def validate_candidate(
     risk = abs(price - stop)
     min_risk = atr * float(profile.minimum_stop_distance_atr)
     max_risk = atr * float(profile.maximum_stop_distance_atr)
+    risk_cap_status = "passed"
+    stop_buffer_adjusted = False
+    risk_adjustment_reason = ""
     stop_widened_to_atr_floor = False
     if risk < min_risk:
         # Keep the real invalidation level, but do not publish a stop inside
@@ -162,11 +202,73 @@ def validate_candidate(
                     "Volatility-floor stop does not remain beyond structural invalidation."
                 ],
             }
-    if risk > max_risk:
-        return {
-            "valid": False,
-            "rejection_reasons": ["Structural stop exceeds the mode's configured ATR risk cap."],
-        }
+    minimum_buffer_stop = (
+        invalidation_level - minimum_atr_buffer - spread_buffer
+        if direction == "BUY"
+        else invalidation_level + minimum_atr_buffer + spread_buffer
+    )
+    minimum_volatility_stop = (
+        price - min_risk if direction == "BUY" else price + min_risk
+    )
+    minimum_safe_stop = (
+        min(minimum_buffer_stop, minimum_volatility_stop)
+        if direction == "BUY"
+        else max(minimum_buffer_stop, minimum_volatility_stop)
+    )
+    minimum_safe_risk = abs(price - minimum_safe_stop)
+
+    # Leave a cent of headroom for published-price rounding. If the requested
+    # ATR buffer alone pushes the stop over the cap, reduce only that
+    # discretionary buffer; never move the stop inside structure or below the
+    # configured minimum buffer.
+    publishable_max_risk = max_risk - float(_PRICE_QUANTUM)
+    if risk > publishable_max_risk + 1e-9:
+        if minimum_safe_risk > publishable_max_risk + 1e-9:
+            risk_fields = _stop_limit_fields(
+                price, minimum_safe_stop, direction, atr, profile
+            )
+            reason = (
+                "No safe ATR-buffer adjustment fits this mode's risk cap: "
+                f"required SL {risk_fields['required_stop_loss']:.2f} "
+                f"({risk_fields['required_stop_distance']:.2f} price units, "
+                f"{risk_fields['required_stop_atr']:.2f} ATR) exceeds maximum "
+                f"allowed SL {risk_fields['maximum_allowed_stop_loss']:.2f} "
+                f"({risk_fields['maximum_allowed_stop_distance']:.2f} price units, "
+                f"{risk_fields['configured_maximum_stop_atr']:.2f} ATR). "
+                "Trade skipped; structural invalidation and the minimum buffer "
+                "were not tightened."
+            )
+            return {
+                "valid": False,
+                "rejection_reasons": [reason],
+                "risk_cap_status": "rejected",
+                "risk_adjustment_reason": (
+                    "The nearest stop preserving structural invalidation, the "
+                    "minimum ATR buffer, and the volatility floor still exceeds "
+                    "the configured cap."
+                ),
+                **risk_fields,
+            }
+
+        adjusted_risk = publishable_max_risk
+        stop = price - adjusted_risk if direction == "BUY" else price + adjusted_risk
+        risk = abs(price - stop)
+        stop_buffer_adjusted = True
+        risk_cap_status = "adjusted"
+        stop_buffer_atr_used = max(
+            0.0,
+            (abs(stop - invalidation_level) - spread_buffer) / atr,
+        )
+        risk_adjustment_reason = (
+            f"ATR buffer reduced from {float(profile.stop_buffer_atr):.2f} "
+            f"to {stop_buffer_atr_used:.2f} ATR; the stop remains beyond "
+            "structural invalidation and the configured minimum buffer."
+        )
+    else:
+        stop_buffer_atr_used = max(
+            0.0,
+            (abs(stop - invalidation_level) - spread_buffer) / atr,
+        )
 
     opposing_levels = _opposing_levels(structure, direction, price)
     if not opposing_levels:
@@ -251,11 +353,22 @@ def validate_candidate(
             ],
         }
     if published_risk > maximum_published_risk + 1e-9:
+        risk_fields = _stop_limit_fields(
+            price, stop, direction, atr, profile
+        )
+        reason = (
+            f"After cent rounding, required SL {risk_fields['required_stop_loss']:.2f} "
+            f"exceeds maximum allowed SL {risk_fields['maximum_allowed_stop_loss']:.2f}; "
+            "no safe adjustment remains. Trade skipped."
+        )
         return {
             "valid": False,
             "rejection_reasons": [
-                "Rounded structural stop exceeds the mode's configured ATR risk cap."
+                reason
             ],
+            "risk_cap_status": "rejected",
+            "risk_adjustment_reason": reason,
+            **risk_fields,
         }
     entry_decimal = Decimal(str(published_entry))
     risk_decimal = published_risk_decimal
@@ -499,6 +612,11 @@ def validate_candidate(
     }
     return {
         "valid": True,
+        "risk_cap_status": risk_cap_status,
+        "risk_adjustment_reason": risk_adjustment_reason,
+        "stop_buffer_adjusted": stop_buffer_adjusted,
+        "stop_buffer_atr_requested": round(float(profile.stop_buffer_atr), 4),
+        "stop_buffer_atr_used": round(stop_buffer_atr_used, 4),
         "entry": published_entry,
         "entry_zone_low": round(price - zone_half_width, 2),
         "entry_zone_high": round(price + zone_half_width, 2),
@@ -511,6 +629,9 @@ def validate_candidate(
         "tp2": published_targets["TP2"],
         "tp3": published_targets["TP3"],
         "risk": round(published_risk, 5),
+        **_stop_limit_fields(
+            published_entry, published_stop, direction, atr, profile
+        ),
         "reward": round(abs(published_targets["TP1"] - published_entry), 5),
         "stop_widened_to_atr_floor": stop_widened_to_atr_floor,
         "stop_distance_atr": round(published_risk / atr, 4),

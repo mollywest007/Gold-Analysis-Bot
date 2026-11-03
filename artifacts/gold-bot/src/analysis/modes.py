@@ -56,6 +56,9 @@ class MomentumPullbackProfile:
     preferred_target_rr: float = 2.0
     atr_period: int = 14
     breakout_enabled: bool = True
+    # When a full configured stop buffer would exceed the mode cap, this is
+    # the smallest allowed ATR buffer beyond structural invalidation.
+    minimum_stop_buffer_atr: float = 0.05
     # Maximum validated reference-market spread relative to ATR14. These are
     # conservative policy caps, not values optimized from historical results.
     maximum_spread_atr: float = 0.20
@@ -98,6 +101,7 @@ class MomentumPullbackProfile:
             "buy_rsi_veto_below",
             "sell_rsi_veto_above",
             "stop_buffer_atr",
+            "minimum_stop_buffer_atr",
             "target_buffer_atr",
             "entry_zone_atr",
             "confirmation_break_atr",
@@ -155,6 +159,10 @@ class MomentumPullbackProfile:
             raise ValueError("Minimum pullback depth cannot exceed maximum depth.")
         if self.minimum_stop_distance_atr >= self.maximum_stop_distance_atr:
             raise ValueError("Maximum stop distance must exceed the minimum stop distance.")
+        if self.minimum_stop_buffer_atr > self.stop_buffer_atr:
+            raise ValueError(
+                "Minimum stop buffer cannot exceed the configured stop buffer."
+            )
         if self.preferred_target_rr < self.minimum_target_rr:
             raise ValueError("Preferred target R:R cannot be below the mode minimum.")
         if self.commission_rate is not None and (
@@ -698,6 +706,7 @@ def resolve_momentum_pullback_profile(
     prefix = f"XAU_{mode.upper()}_"
     numeric_overrides = {
         "stop_buffer_atr": "STOP_BUFFER_ATR",
+        "minimum_stop_buffer_atr": "MINIMUM_STOP_BUFFER_ATR",
         "minimum_stop_distance_atr": "MINIMUM_STOP_ATR",
         "maximum_stop_distance_atr": "MAXIMUM_STOP_ATR",
         "minimum_target_rr": "MINIMUM_TARGET_RR",
