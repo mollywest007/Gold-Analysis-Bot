@@ -81,6 +81,13 @@ chart-photo paths; recompute target R:R from the final published stop.
 
 Analysis must show numerical entry stages from live spot data and completed setup candles, while preserving the active setup type's real confirmation rule. Recalculate on each Analysis refresh. If a setup uses pattern confirmation without a fixed price threshold, say so instead of inventing one. Keep WAIT and EARLY provisional until the weighted context, score, and risk gates pass; an analysis confirmation is not a broker fill.
 
+Keep the Entry Confirmation section short: only the current setup, current price,
+next required price movement and signal condition. Do not show competing BUY/SELL
+watches, completed stages or lengthy explanations.
+
+**Why:** The user explicitly requested a compact numerical presentation instead
+of the detailed Entry Confirmation Levels section.
+
 **Why:** The user explicitly asked for exact, step-by-step live price levels and required that entries never be labeled confirmed before the strategy conditions are met.
 
 **How to apply:** Separate the buffered initial breakout trigger from post-retest confirmation, preserve direct-breakout paths where retests are optional, and show an explicit unavailable/WAIT state when verified live data or a numeric trigger is missing.

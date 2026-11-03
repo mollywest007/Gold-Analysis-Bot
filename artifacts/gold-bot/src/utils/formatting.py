@@ -1984,6 +1984,65 @@ def _entry_confirmation_price(value) -> str:
 
 
 def _entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
+    """Only the selected live setup and its next price requirement."""
+    report = getattr(a, "institutional_report", {}) or {}
+    levels = (
+        getattr(a, "entry_confirmation_levels", None)
+        or report.get("entry_confirmation_levels", {}) or {}
+    )
+    if not isinstance(levels, dict) or not levels.get("available"):
+        return [
+            ("Setup", "WAIT — live levels unavailable"),
+            ("Waiting for", "Verified live market data"),
+            ("Signal", "None"),
+        ]
+    price = _entry_confirmation_price(levels.get("current_price"))
+    direction = str(levels.get("direction", "WAIT")).upper()
+    if direction not in ("BUY", "SELL"):
+        return [
+            ("Setup", "WAIT — no current setup"),
+            ("Current Price", price),
+            ("Waiting for", "A confirmed directional setup"),
+            ("Signal", "None"),
+        ]
+    confirmed = (
+        getattr(a, "action", "WAIT") == direction
+        and levels.get("entry_status") == f"ENTRY CONFIRMED — {direction}"
+    )
+    side = "above" if direction == "BUY" else "below"
+    move = "Rise" if direction == "BUY" else "Drop"
+    candle = "bullish" if direction == "BUY" else "bearish"
+    level = _entry_confirmation_price(levels.get("confirmation_level"))
+    retest = _entry_confirmation_price(levels.get("retest_level"))
+    if confirmed:
+        waiting = "None — confirmation complete"
+    elif level != "Not available":
+        # Candidate detection already established any required sweep/retest.
+        # Do not instruct the user to replay completed stages.
+        beyond = (
+            float(levels["current_price"]) > float(levels["confirmation_level"])
+            if direction == "BUY" else
+            float(levels["current_price"]) < float(levels["confirmation_level"])
+        )
+        waiting = (
+            f"Hold {side} {level} → {candle} candle confirmation"
+            if beyond else
+            f"{move} {side} {level} → {candle} candle confirmation"
+        )
+    elif retest != "Not available":
+        waiting = f"{candle.capitalize()} rejection at {retest}"
+    else:
+        waiting = f"{candle.capitalize()} candle confirmation"
+    return [
+        ("Setup", f"{direction} — {'Confirmed' if confirmed else 'Waiting for Confirmation'}"),
+        ("Current Price", price),
+        ("Waiting for", waiting),
+        ("Signal", f"{direction} confirmed" if confirmed else
+         f"{direction} only after {candle} confirmation + all entry checks"),
+    ]
+
+
+def _legacy_entry_confirmation_level_rows(a: MarketAnalysis) -> list[tuple[str, str]]:
     """Render live numeric watch levels without inventing missing triggers."""
     report = getattr(a, "institutional_report", {}) or {}
     levels = (
@@ -2565,7 +2624,7 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     add_row("Entry trigger", trigger)
     add_row("Invalidation", invalidation)
 
-    start_section("ENTRY CONFIRMATION LEVELS")
+    start_section("ENTRY CONFIRMATION")
     for label, value in _entry_confirmation_level_rows(a):
         if label:
             add_row(label, value)
