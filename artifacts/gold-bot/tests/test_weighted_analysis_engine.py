@@ -770,6 +770,55 @@ class IndicatorAndSetupTests(unittest.TestCase):
 
 
 class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
+    def test_safe_buffer_adjustment_preserves_structure_in_every_mode(self):
+        for mode in ("scalp", "intraday", "swing", "position"):
+            for direction in ("BUY", "SELL"):
+                with self.subTest(mode=mode, direction=direction):
+                    sign = 1 if direction == "BUY" else -1
+                    profile = replace(
+                        MODES[mode].momentum_pullback,
+                        stop_buffer_atr=0.30,
+                        minimum_stop_buffer_atr=0.05,
+                        maximum_stop_distance_atr=2.0,
+                    )
+                    invalidation = 100.0 - sign * 1.8
+                    candidate = SetupCandidate(
+                        direction, "TREND_PULLBACK", 100.0, invalidation,
+                        0.8, 0.9, 0.8, 0.2, ("confirmed rejection",),
+                    )
+                    plan = validate_candidate(
+                        candidate, price=100.0, atr=1.0,
+                        structure=_structure(
+                            direction=direction,
+                            swing_highs=((10, 110.0),),
+                            swing_lows=((10, 90.0),),
+                        ),
+                        profile=profile, spread=0.02,
+                    )
+                    self.assertTrue(plan["valid"], plan.get("rejection_reasons"))
+                    self.assertEqual(plan["risk_cap_status"], "adjusted")
+                    self.assertLessEqual(plan["risk"], 2.0)
+                    self.assertGreaterEqual(
+                        sign * (invalidation - plan["stop_loss"]),
+                        profile.minimum_stop_buffer_atr + 0.01 - 1e-9,
+                    )
+                    self.assertGreaterEqual(plan["rr"], profile.minimum_target_rr)
+
+    def test_unsafe_stop_is_rejected_with_required_and_allowed_levels(self):
+        candidate = SetupCandidate(
+            "BUY", "TREND_PULLBACK", 100.0, 97.0,
+            0.8, 0.9, 0.8, 0.2, ("confirmed rejection",),
+        )
+        plan = validate_candidate(
+            candidate, price=100.0, atr=1.0, structure=_structure(),
+            profile=MODES["scalp"].momentum_pullback, spread=None,
+        )
+        self.assertFalse(plan["valid"])
+        self.assertEqual(plan["risk_cap_status"], "rejected")
+        self.assertLess(plan["required_stop_loss"], plan["maximum_allowed_stop_loss"])
+        self.assertIn("No safe", plan["rejection_reasons"][0])
+        self.assertNotIn("entry", plan)
+
     def test_early_moderate_strong_and_conflict_categories_obey_thresholds(self):
         config = resolve_analysis_config(MODES["swing"])
         candidate = SetupCandidate(
@@ -1031,6 +1080,20 @@ class ValidationAndPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SELL WATCH", card)
         self.assertIn("MOVEMENT", card)
         self.assertNotIn("Not backtested", card)
+        result.institutional_report["decision_summary"]["stop_risk"] = {
+            "required_stop_loss": 2390.0,
+            "maximum_allowed_stop_loss": 2395.0,
+            "required_stop_distance": 10.0,
+            "maximum_allowed_stop_distance": 5.0,
+            "required_stop_atr": 2.0,
+            "maximum_allowed_stop_atr": 1.0,
+            "risk_cap_status": "rejected",
+            "risk_adjustment_reason": "No safe adjustment; structure must remain protected.",
+        }
+        risk_card = "\n".join(transparent_analysis_cards(result))
+        self.assertIn("Required SL", risk_card)
+        self.assertIn("Maximum allowed SL", risk_card)
+        self.assertIn("No safe adjustment", risk_card)
         self.assertEqual(
             {role: report["timeframe"] for role, report in result.analysis_timeframes.items()},
             {"context": "M15", "setup": "M5", "refinement": "M1"},

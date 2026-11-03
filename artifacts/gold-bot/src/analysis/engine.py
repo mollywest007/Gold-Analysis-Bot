@@ -3011,6 +3011,7 @@ def _weighted_result_to_analysis(result: dict, mode_cfg, raw_data: dict) -> Mark
                 "stop_widened_to_atr_floor", False
             ),
             "stop_distance_atr": result.get("stop_distance_atr"),
+            "stop_risk": result.get("stop_risk", {}),
             "level_rationale": result.get("level_rationale", {}),
             "spread_filter_status": result.get("spread_status", "unavailable"),
             "observed_market_spread": result.get("spread"),

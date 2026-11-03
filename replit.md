@@ -81,13 +81,21 @@ modes/timeframes fail rather than silently inheriting a different profile.
 TP/SL settings can be overridden independently by mode with environment
 variables. Use `XAU_SCALP_`, `XAU_INTRADAY_`, `XAU_SWING_`, or
 `XAU_POSITION_` followed by `ATR_PERIOD`, `STOP_BUFFER_ATR`,
-`MINIMUM_STOP_ATR`, `MAXIMUM_STOP_ATR`, `MINIMUM_TARGET_RR`, or
+`MINIMUM_STOP_BUFFER_ATR`, `MINIMUM_STOP_ATR`, `MAXIMUM_STOP_ATR`, `MINIMUM_TARGET_RR`, or
 `PREFERRED_TARGET_RR`. Defaults enforce at least 1.5R; the Scalp minimum is
 1.5R and its preferred target is 2R. Overrides must be positive, finite, and
 cannot reduce the minimum below the effective mode floor; preferred R:R must
-remain at or above that minimum. Scalp's base stop floor is 0.70 ATR; timeframe
+remain at or above that minimum. Scalp's base stop floor is 1.00 ATR; timeframe
 scaling and actual structural invalidation may require more room.
 No dollar TP/SL amount is hardcoded.
+
+If the structure-plus-buffer stop exceeds the cap, only the discretionary
+buffer may be reduced, never structural invalidation or the volatility floor.
+The minimum buffer defaults to 0.05 ATR plus available half-spread, cannot exceed
+the regular buffer, and is configurable independently per mode. Cent rounding
+is revalidated. If even that minimum safe stop cannot fit, remain WAIT and show
+the required stop, maximum allowed stop, and rejection reason. Targets continue
+to require actual opposing structure and the mode's minimum cost-adjusted R:R.
 
 Optional execution-cost inputs are mode-specific:
 `XAU_SCALP_COMMISSION_RATE` / `XAU_SCALP_SLIPPAGE_PER_OZ` (and the matching

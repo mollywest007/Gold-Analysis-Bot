@@ -2359,6 +2359,23 @@ def _simple_analysis_card(a: MarketAnalysis, alert_label: str = "") -> str:
     add_row("Evidence", evidence)
 
     start_section("TRADE PLAN")
+    stop_risk = decision.get("stop_risk", {}) or {}
+    if stop_risk.get("required_stop_loss") is not None:
+        add_row(
+            "Required SL",
+            f"{fmt_price(stop_risk['required_stop_loss'])} · "
+            f"{stop_risk['required_stop_distance']:.2f} USD/oz · "
+            f"{stop_risk['required_stop_atr']:.2f} ATR",
+        )
+        add_row(
+            "Maximum allowed SL",
+            f"{fmt_price(stop_risk['maximum_allowed_stop_loss'])} · "
+            f"{stop_risk['maximum_allowed_stop_distance']:.2f} USD/oz · "
+            f"{stop_risk['maximum_allowed_stop_atr']:.2f} ATR",
+        )
+        add_row("Risk cap", str(stop_risk.get("risk_cap_status") or "checked"))
+        if stop_risk.get("risk_adjustment_reason"):
+            add_row("SL decision", str(stop_risk["risk_adjustment_reason"]))
     entry = float(getattr(a, "entry", 0.0) or 0.0)
     stop = float(getattr(a, "stop_loss", 0.0) or 0.0)
     targets = [

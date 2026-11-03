@@ -162,6 +162,8 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
             {
                 "XAU_SCALP_ATR_PERIOD": "20",
                 "XAU_SCALP_MINIMUM_STOP_ATR": "0.8",
+                "XAU_SCALP_MAXIMUM_STOP_ATR": "2.1",
+                "XAU_SCALP_MINIMUM_STOP_BUFFER_ATR": "0.04",
                 "XAU_SCALP_MINIMUM_TARGET_RR": "1.7",
                 "XAU_SCALP_PREFERRED_TARGET_RR": "2.4",
             },
@@ -169,6 +171,8 @@ class RiskPolicyEconomicsTests(unittest.TestCase):
             overridden = resolve_momentum_pullback_profile(MODES["scalp"], "M5")
         self.assertEqual(overridden.atr_period, 20)
         self.assertEqual(overridden.minimum_stop_distance_atr, 0.8)
+        self.assertEqual(overridden.maximum_stop_distance_atr, 2.1)
+        self.assertEqual(overridden.minimum_stop_buffer_atr, 0.04)
         self.assertEqual(overridden.minimum_target_rr, 1.7)
         self.assertEqual(overridden.preferred_target_rr, 2.4)
 

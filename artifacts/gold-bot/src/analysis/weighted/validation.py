@@ -109,6 +109,27 @@ def validate_candidate(
     spread: float | None,
     preferred_rr: float | None = None,
 ) -> dict:
+    """Keep stop diagnostics even when a later target or cost gate rejects."""
+    risk_details = {}
+    result = _validate_candidate(
+        candidate, price=price, atr=atr, structure=structure,
+        profile=profile, spread=spread, preferred_rr=preferred_rr,
+        risk_details=risk_details,
+    )
+    return {**risk_details, **result}
+
+
+def _validate_candidate(
+    candidate,
+    *,
+    price: float,
+    atr: float,
+    structure,
+    profile,
+    spread: float | None,
+    preferred_rr: float | None = None,
+    risk_details: dict,
+) -> dict:
     direction = candidate.direction
     if direction not in ("BUY", "SELL"):
         return {"valid": False, "rejection_reasons": ["Candidate direction is invalid."]}
@@ -270,6 +291,13 @@ def validate_candidate(
             (abs(stop - invalidation_level) - spread_buffer) / atr,
         )
 
+    risk_details.update(_stop_limit_fields(price, stop, direction, atr, profile))
+    risk_details.update({
+        "risk_cap_status": risk_cap_status,
+        "risk_adjustment_reason": risk_adjustment_reason,
+        "stop_buffer_adjusted": stop_buffer_adjusted,
+        "stop_buffer_atr_used": round(stop_buffer_atr_used, 4),
+    })
     opposing_levels = _opposing_levels(structure, direction, price)
     if not opposing_levels:
         return {
@@ -610,6 +638,8 @@ def validate_candidate(
         ),
         "available_room": round(target_room, 2),
     }
+    if stop_buffer_adjusted:
+        level_rationale["stop"] = risk_adjustment_reason
     return {
         "valid": True,
         "risk_cap_status": risk_cap_status,

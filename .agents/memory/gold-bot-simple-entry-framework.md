@@ -63,6 +63,20 @@ Keep mode-specific ATR stop floors and buffers, increasing with the intended hol
 
 **How to apply:** Use base minimum stop distances of 1.0 ATR (Scalp), 1.1 ATR (Intraday), 1.25 ATR (Swing), and 1.5 ATR (Position), then apply timeframe scaling. Keep structural invalidation and mode caps authoritative; reject setups without enough opposing target room. Legacy `sl_mult_override` values are not used by normal live weighted analysis.
 
+## Structure-first risk-cap adjustments
+
+Preserve structural invalidation, the minimum ATR buffer and the volatility
+floor when assessing an over-cap stop. Only discretionary buffer room may be
+reduced. Otherwise skip the setup and display the required SL, maximum allowed
+SL and rejection reason. All modes retain independently configurable limits;
+an adjusted risk plan never substitutes for entry confirmation.
+
+**Why:** The user repeatedly requested these constraints, specifically rejecting
+both forced tight stops and automatic rejection without checking safe adjustment.
+
+**How to apply:** Keep the same deterministic validation in live, replay and
+chart-photo paths; recompute target R:R from the final published stop.
+
 ## Entry confirmation levels
 
 Analysis must show numerical entry stages from live spot data and completed setup candles, while preserving the active setup type's real confirmation rule. Recalculate on each Analysis refresh. If a setup uses pattern confirmation without a fixed price threshold, say so instead of inventing one. Keep WAIT and EARLY provisional until the weighted context, score, and risk gates pass; an analysis confirmation is not a broker fill.

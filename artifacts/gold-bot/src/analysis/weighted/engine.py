@@ -787,6 +787,16 @@ def analyze_weighted_market(
             "stop_widened_to_atr_floor", False
         ),
         "stop_distance_atr": plan.get("stop_distance_atr"),
+        "stop_risk": {
+            key: validation.get(key)
+            for key in (
+                "required_stop_loss", "maximum_allowed_stop_loss",
+                "required_stop_distance", "maximum_allowed_stop_distance",
+                "required_stop_atr", "maximum_allowed_stop_atr",
+                "risk_cap_status", "risk_adjustment_reason",
+                "stop_buffer_adjusted", "stop_buffer_atr_used",
+            )
+        },
         "take_profit": plan.get("take_profit", 0.0),
         "tp2": plan.get("tp2"),
         "tp3": plan.get("tp3"),

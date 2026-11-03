@@ -90,6 +90,7 @@ class MomentumPullbackProfile:
             "preferred_target_rr",
             "maximum_spread_atr",
             "maximum_live_entry_distance_atr",
+            "minimum_stop_buffer_atr",
         )
         nonnegative_fields = (
             "swing_change_atr",
@@ -101,7 +102,6 @@ class MomentumPullbackProfile:
             "buy_rsi_veto_below",
             "sell_rsi_veto_above",
             "stop_buffer_atr",
-            "minimum_stop_buffer_atr",
             "target_buffer_atr",
             "entry_zone_atr",
             "confirmation_break_atr",
