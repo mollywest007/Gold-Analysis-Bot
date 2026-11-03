@@ -14,5 +14,9 @@
   "123": {
     "mode": "scalp",
     "timeframe": "M15"
+  },
+  "7885575565": {
+    "mode": "scalp",
+    "timeframe": "M15"
   }
 }
