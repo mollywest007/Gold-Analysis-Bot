@@ -15,11 +15,11 @@ Workflow restarts or workflow reconfiguration can leave an older bot process ali
 
 **How to apply:** After a restart or workflow change, verify that only one bot process tree remains. If conflicts continue after removing local duplicates, check other Repls, deployments, and computers using the same token.
 
-HTTP client debug logs must remain below INFO because Telegram bot tokens and Google API keys may be included in request URLs.
+HTTP client and httpcore logs must remain at WARNING or stricter because INFO request logs include Telegram bot tokens and Google API keys in URLs. Standalone validation scripts must use the bot's logging setup too.
 
-**Why:** Request URLs are emitted in verbose HTTP logs, which can expose credentials in workflow output.
+**Why:** A standalone key check configured with `logging.basicConfig(level=INFO)` emitted full credential-bearing request URLs, even though the bot entry point already suppresses those loggers.
 
-**How to apply:** Keep `httpx` and `httpcore` at WARNING or stricter in bot workflows.
+**How to apply:** Keep `httpx` and `httpcore` at WARNING or stricter in bot workflows and diagnostic commands; never validate keys with raw INFO-level HTTP logging.
 
 Reminder timing must be based on each trade's own candle timeframe, not a global
 interval. The first missed-entry reminder should wait until at least one full
